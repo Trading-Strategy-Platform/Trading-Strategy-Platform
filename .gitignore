@@ -1,0 +1,32 @@
+# Go binaries and dependencies
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+bin/
+vendor/
+
+# Go modules
+go.work
+
+# Database volumes
+*-data/
+
+# Environment variables
+.env
+
+# Logs
+*.log
+
+# IDE files
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS specific
+.DS_Store
+Thumbs.db
