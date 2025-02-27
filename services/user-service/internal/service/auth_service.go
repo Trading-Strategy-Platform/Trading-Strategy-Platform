@@ -5,10 +5,11 @@ import (
 	"errors"
 	"time"
 
+	"services/user-service/internal/config"
+	"services/user-service/internal/model"
+	"services/user-service/internal/repository"
+
 	"github.com/golang-jwt/jwt/v4"
-	"github.com/yourusername/trading-platform/services/user-service/internal/config"
-	"github.com/yourusername/trading-platform/services/user-service/internal/model"
-	"github.com/yourusername/trading-platform/services/user-service/internal/repository"
 	"go.uber.org/zap"
 	"golang.org/x/crypto/bcrypt"
 )

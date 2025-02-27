@@ -10,17 +10,19 @@ import (
 	"syscall"
 	"time"
 
+	"services/user-service/internal/config"
+	"services/user-service/internal/handler"
+	"services/user-service/internal/middleware"
+	"services/user-service/internal/repository"
+	"services/user-service/internal/service"
+
 	"github.com/gin-gonic/gin"
 	_ "github.com/jackc/pgx/v4/stdlib"
 	"github.com/jmoiron/sqlx"
-	"github.com/yourusername/trading-platform/services/user-service/internal/config"
-	"github.com/yourusername/trading-platform/services/user-service/internal/handler"
-	"github.com/yourusername/trading-platform/services/user-service/internal/middleware"
-	"github.com/yourusername/trading-platform/services/user-service/internal/repository"
-	"github.com/yourusername/trading-platform/services/user-service/internal/service"
 	"go.uber.org/zap"
 )
 
+// Rest of the code remains unchanged
 func main() {
 	// Load configuration
 	cfg, err := config.LoadConfig("config/config.yaml")

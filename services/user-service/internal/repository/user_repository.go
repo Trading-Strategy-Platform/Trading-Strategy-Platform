@@ -6,8 +6,9 @@ import (
 	"errors"
 	"time"
 
+	"services/user-service/internal/model"
+
 	"github.com/jmoiron/sqlx"
-	"github.com/yourusername/trading-platform/services/user-service/internal/model"
 	"go.uber.org/zap"
 )
 

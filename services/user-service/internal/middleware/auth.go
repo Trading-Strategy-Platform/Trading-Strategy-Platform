@@ -4,8 +4,9 @@ import (
 	"net/http"
 	"strings"
 
+	"services/user-service/internal/service"
+
 	"github.com/gin-gonic/gin"
-	"github.com/yourusername/trading-platform/services/user-service/internal/service"
 	"go.uber.org/zap"
 )
 
