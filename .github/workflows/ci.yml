@@ -22,9 +22,25 @@ jobs:
         run: |
           curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(go env GOPATH)/bin v1.55.2
 
-      - name: Install dependencies
+      - name: Install dependencies for User Service
         run: |
+          cd services/user-service
           go mod download
+
+      - name: Install dependencies for Strategy Service
+        run: |
+          cd services/strategy-service
+          go mod download || true
+
+      - name: Install dependencies for Historical Data Service
+        run: |
+          cd services/historical-data-service
+          go mod download || true
+
+      - name: Install dependencies for API Gateway
+        run: |
+          cd services/api-gateway
+          go mod download || true
 
       - name: Lint User Service
         run: |
