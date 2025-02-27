@@ -1,4 +1,4 @@
-.PHONY: all build clean test run help start stop
+.PHONY: all build clean test run help start stop lint setup-lint
 
 all: build
 
@@ -35,12 +35,16 @@ infra-up:
 	@echo "Starting infrastructure only..."
 	@docker-compose up -d user-db strategy-db historical-db kafka zookeeper redis
 
-lint:
+setup-lint:
+	@echo "Setting up golangci-lint v1.55.2..."
+	@curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(shell go env GOPATH)/bin v1.55.2
+
+lint: setup-lint
 	@echo "Linting Go code..."
-	@cd services/user-service && golangci-lint run
-	@cd services/strategy-service && golangci-lint run
-	@cd services/historical-data-service && golangci-lint run
-	@cd services/api-gateway && golangci-lint run
+	@cd services/user-service && $(shell go env GOPATH)/bin/golangci-lint run
+	@cd services/strategy-service && $(shell go env GOPATH)/bin/golangci-lint run
+	@cd services/historical-data-service && $(shell go env GOPATH)/bin/golangci-lint run
+	@cd services/api-gateway && $(shell go env GOPATH)/bin/golangci-lint run
 
 help:
 	@echo "Available commands:"
@@ -50,4 +54,5 @@ help:
 	@echo "  make start       - Start all services with Docker Compose"
 	@echo "  make stop        - Stop all services"
 	@echo "  make infra-up    - Start only infrastructure services"
+	@echo "  make setup-lint  - Install golangci-lint v1.55.2"
 	@echo "  make lint        - Run linters"

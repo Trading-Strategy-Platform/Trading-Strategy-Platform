@@ -18,15 +18,18 @@ jobs:
           go-version: '1.21'
           cache: true
 
+      - name: Install specific golangci-lint version
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(go env GOPATH)/bin v1.55.2
+
       - name: Install dependencies
         run: |
-          go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
           go mod download
 
       - name: Lint User Service
         run: |
           cd services/user-service
-          golangci-lint run ./...
+          $(go env GOPATH)/bin/golangci-lint run ./...
 
       - name: Test User Service
         run: |
@@ -36,7 +39,7 @@ jobs:
       - name: Lint Strategy Service
         run: |
           cd services/strategy-service
-          golangci-lint run ./... || echo "Skipping due to incomplete implementation"
+          $(go env GOPATH)/bin/golangci-lint run ./... || echo "Skipping due to incomplete implementation"
 
       - name: Test Strategy Service
         run: |
@@ -46,7 +49,7 @@ jobs:
       - name: Lint Historical Data Service
         run: |
           cd services/historical-data-service
-          golangci-lint run ./... || echo "Skipping due to incomplete implementation"
+          $(go env GOPATH)/bin/golangci-lint run ./... || echo "Skipping due to incomplete implementation"
 
       - name: Test Historical Data Service
         run: |
@@ -56,7 +59,7 @@ jobs:
       - name: Lint API Gateway
         run: |
           cd services/api-gateway
-          golangci-lint run ./... || echo "Skipping due to incomplete implementation"
+          $(go env GOPATH)/bin/golangci-lint run ./... || echo "Skipping due to incomplete implementation"
 
       - name: Test API Gateway
         run: |
