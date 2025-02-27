@@ -1,0 +1,207 @@
+version: '3.8'
+
+services:
+  # DATABASES
+  user-db:
+    image: postgres:14
+    container_name: user-service-db
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: user_service
+      POSTGRES_USER: user_service_user
+      POSTGRES_PASSWORD: user_service_password
+    volumes:
+      - user-db-data:/var/lib/postgresql/data
+      - ./services/user-service/init-scripts:/docker-entrypoint-initdb.d
+      - ./infrastructure/postgres/postgres.conf:/etc/postgresql/postgresql.conf
+    networks:
+      - user-service-network
+  
+  strategy-db:
+    image: postgres:14
+    container_name: strategy-service-db
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_DB: strategy_service
+      POSTGRES_USER: strategy_service_user
+      POSTGRES_PASSWORD: strategy_service_password
+    volumes:
+      - strategy-db-data:/var/lib/postgresql/data
+      - ./services/strategy-service/init-scripts:/docker-entrypoint-initdb.d
+      - ./infrastructure/postgres/postgres.conf:/etc/postgresql/postgresql.conf
+    networks:
+      - strategy-service-network
+  
+  historical-db:
+    image: timescale/timescaledb:latest-pg14
+    container_name: historical-service-db
+    ports:
+      - "5434:5432"
+    environment:
+      POSTGRES_DB: historical_service
+      POSTGRES_USER: historical_service_user
+      POSTGRES_PASSWORD: historical_service_password
+    volumes:
+      - historical-db-data:/var/lib/postgresql/data
+      - ./services/historical-data-service/init-scripts:/docker-entrypoint-initdb.d
+      - ./infrastructure/timescaledb/timescaledb.conf:/etc/postgresql/postgresql.conf
+    networks:
+      - historical-service-network
+  
+  # SERVICES
+  user-service:
+    build:
+      context: ./services/user-service
+      dockerfile: Dockerfile
+    container_name: user-service
+    depends_on:
+      - user-db
+      - kafka
+      - redis
+    ports:
+      - "8081:8080"
+    environment:
+      DB_HOST: user-db
+      DB_PORT: 5432
+      DB_USER: user_service_user
+      DB_PASSWORD: user_service_password
+      DB_NAME: user_service
+      JWT_SECRET: your_jwt_secret_key
+      KAFKA_BROKERS: kafka:9092
+      REDIS_URL: redis:6379
+    networks:
+      - user-service-network
+      - kafka-network
+      - redis-network
+      - api-gateway-network
+  
+  strategy-service:
+    build:
+      context: ./services/strategy-service
+      dockerfile: Dockerfile
+    container_name: strategy-service
+    depends_on:
+      - strategy-db
+      - kafka
+      - redis
+    ports:
+      - "8082:8080"
+    environment:
+      DB_HOST: strategy-db
+      DB_PORT: 5432
+      DB_USER: strategy_service_user
+      DB_PASSWORD: strategy_service_password
+      DB_NAME: strategy_service
+      USER_SERVICE_URL: http://user-service:8080
+      KAFKA_BROKERS: kafka:9092
+      REDIS_URL: redis:6379
+    networks:
+      - strategy-service-network
+      - kafka-network
+      - redis-network
+      - api-gateway-network
+  
+  historical-service:
+    build:
+      context: ./services/historical-data-service
+      dockerfile: Dockerfile
+    container_name: historical-service
+    depends_on:
+      - historical-db
+      - kafka
+    ports:
+      - "8083:8080"
+    environment:
+      DB_HOST: historical-db
+      DB_PORT: 5432
+      DB_USER: historical_service_user
+      DB_PASSWORD: historical_service_password
+      DB_NAME: historical_service
+      STRATEGY_SERVICE_URL: http://strategy-service:8080
+      USER_SERVICE_URL: http://user-service:8080
+      KAFKA_BROKERS: kafka:9092
+    networks:
+      - historical-service-network
+      - kafka-network
+      - api-gateway-network
+  
+  api-gateway:
+    build:
+      context: ./services/api-gateway
+      dockerfile: Dockerfile
+    container_name: api-gateway
+    ports:
+      - "8080:8080"
+    environment:
+      USER_SERVICE_URL: http://user-service:8080
+      STRATEGY_SERVICE_URL: http://strategy-service:8080
+      HISTORICAL_SERVICE_URL: http://historical-service:8080
+    networks:
+      - api-gateway-network
+    depends_on:
+      - user-service
+      - strategy-service
+      - historical-service
+  
+  # INFRASTRUCTURE
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.3.0
+    container_name: zookeeper
+    ports:
+      - "2181:2181"
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+    volumes:
+      - zookeeper-data:/var/lib/zookeeper/data
+      - zookeeper-log:/var/lib/zookeeper/log
+    networks:
+      - kafka-network
+  
+  kafka:
+    image: confluentinc/cp-kafka:7.3.0
+    container_name: kafka
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+      - ./infrastructure/kafka/config:/etc/kafka/config
+    networks:
+      - kafka-network
+    depends_on:
+      - zookeeper
+  
+  redis:
+    image: redis:7
+    container_name: redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+      - ./infrastructure/redis/redis.conf:/usr/local/etc/redis/redis.conf
+    command: ["redis-server", "/usr/local/etc/redis/redis.conf"]
+    networks:
+      - redis-network
+
+volumes:
+  user-db-data:
+  strategy-db-data:
+  historical-db-data:
+  kafka-data:
+  zookeeper-data:
+  zookeeper-log:
+  redis-data:
+
+networks:
+  user-service-network:
+  strategy-service-network:
+  historical-service-network:
+  kafka-network:
+  redis-network:
+  api-gateway-network:
