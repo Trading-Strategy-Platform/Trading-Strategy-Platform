@@ -1,0 +1,27 @@
+server:
+  port: 8080
+  readTimeout: 10s
+  writeTimeout: 10s
+  idleTimeout: 120s
+
+userService:
+  url: http://user-service:8080
+  timeout: 10s
+
+strategyService:
+  url: http://strategy-service:8080
+  timeout: 10s
+
+historicalService:
+  url: http://historical-service:8080
+  timeout: 30s
+
+rateLimit:
+  enabled: true
+  requestsPerMinute: 60
+  burstSize: 10
+  clientIPHeaderName: X-Real-IP
+
+logging:
+  level: debug
+  format: json
