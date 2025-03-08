@@ -28,7 +28,7 @@ kafka:
 
 redis:
   url: redis:6379
-  sessionPrefix: user-session:
+  sessionPrefix: "user-session:"
   sessionDuration: 24h
 
 logging:
