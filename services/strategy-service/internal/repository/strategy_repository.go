@@ -11,6 +11,7 @@ import (
 	"services/strategy-service/internal/model"
 
 	"github.com/jmoiron/sqlx"
+	sharedErrors "github.com/yourorg/trading-platform/shared/go/errors"
 	"go.uber.org/zap"
 )
 
@@ -40,7 +41,7 @@ func (r *StrategyRepository) Create(ctx context.Context, tx *sqlx.Tx, strategy *
 	structureBytes, err := json.Marshal(strategy.Structure)
 	if err != nil {
 		r.logger.Error("Failed to marshal strategy structure", zap.Error(err))
-		return 0, err
+		return 0, sharedErrors.NewInternalError("Failed to process strategy structure", err)
 	}
 
 	var id int
@@ -68,7 +69,7 @@ func (r *StrategyRepository) Create(ctx context.Context, tx *sqlx.Tx, strategy *
 
 	if err != nil {
 		r.logger.Error("Failed to create strategy", zap.Error(err))
-		return 0, err
+		return 0, sharedErrors.NewDatabaseError("creating strategy", err)
 	}
 
 	return id, nil
@@ -103,13 +104,13 @@ func (r *StrategyRepository) GetByID(ctx context.Context, id int) (*model.Strate
 			return nil, nil
 		}
 		r.logger.Error("Failed to get strategy by ID", zap.Error(err), zap.Int("strategy_id", id))
-		return nil, err
+		return nil, sharedErrors.NewDatabaseError("retrieving strategy", err)
 	}
 
 	// Unmarshal the strategy structure
 	if err := json.Unmarshal(structureBytes, &strategy.Structure); err != nil {
 		r.logger.Error("Failed to unmarshal strategy structure", zap.Error(err))
-		return nil, err
+		return nil, sharedErrors.NewInternalError("Failed to process strategy data", err)
 	}
 
 	// Get tags for the strategy
@@ -321,73 +322,39 @@ func (r *StrategyRepository) GetPublicStrategies(ctx context.Context, tagID *int
 	return strategies, total, nil
 }
 
-// Update updates a strategy's details
+// Update updates a strategy
 func (r *StrategyRepository) Update(ctx context.Context, tx *sqlx.Tx, id int, update *model.StrategyUpdate) error {
-	query := `
-		UPDATE strategies
-		SET
-	`
-
+	// Build dynamic SQL for updates
+	query := "UPDATE strategies SET updated_at = NOW()"
 	params := []interface{}{}
 	paramCount := 1
-	setValues := []string{}
 
+	// Add fields only if they're provided
 	if update.Name != nil {
-		setValues = append(setValues, fmt.Sprintf("name = $%d", paramCount))
+		query += fmt.Sprintf(", name = $%d", paramCount)
 		params = append(params, *update.Name)
 		paramCount++
 	}
 
 	if update.Description != nil {
-		setValues = append(setValues, fmt.Sprintf("description = $%d", paramCount))
+		query += fmt.Sprintf(", description = $%d", paramCount)
 		params = append(params, *update.Description)
 		paramCount++
 	}
 
-	if update.Structure != nil {
-		structureBytes, err := json.Marshal(*update.Structure)
-		if err != nil {
-			r.logger.Error("Failed to marshal strategy structure", zap.Error(err))
-			return err
-		}
-
-		setValues = append(setValues, fmt.Sprintf("structure = $%d", paramCount))
-		params = append(params, structureBytes)
-		paramCount++
-
-		// Increment version when structure changes
-		setValues = append(setValues, fmt.Sprintf("version = version + 1"))
-	}
-
 	if update.IsPublic != nil {
-		setValues = append(setValues, fmt.Sprintf("is_public = $%d", paramCount))
+		query += fmt.Sprintf(", is_public = $%d", paramCount)
 		params = append(params, *update.IsPublic)
 		paramCount++
 	}
 
-	// Always update the updated_at timestamp
-	setValues = append(setValues, fmt.Sprintf("updated_at = $%d", paramCount))
-	params = append(params, time.Now())
-	paramCount++
-
-	// If no fields were provided for update, return
-	if len(setValues) == 1 { // Only updated_at
-		return nil
-	}
-
-	// Combine SET clauses
-	for i, setValue := range setValues {
-		if i == 0 {
-			query += setValue
-		} else {
-			query += ", " + setValue
-		}
-	}
+	// Structure is handled separately through version management, not here
 
 	// Add WHERE clause
 	query += fmt.Sprintf(" WHERE id = $%d", paramCount)
 	params = append(params, id)
 
+	// Determine execution context
 	var execContext interface {
 		ExecContext(ctx context.Context, query string, args ...interface{}) (sql.Result, error)
 	}
@@ -401,7 +368,7 @@ func (r *StrategyRepository) Update(ctx context.Context, tx *sqlx.Tx, id int, up
 	_, err := execContext.ExecContext(ctx, query, params...)
 	if err != nil {
 		r.logger.Error("Failed to update strategy", zap.Error(err), zap.Int("id", id))
-		return err
+		return sharedErrors.NewDatabaseError("updating strategy", err)
 	}
 
 	return nil
@@ -737,6 +704,26 @@ func (r *TagRepository) Delete(ctx context.Context, id int) error {
 	return nil
 }
 
+// GetForStrategy retrieves tags associated with a strategy
+func (r *TagRepository) GetForStrategy(ctx context.Context, strategyID int) ([]model.Tag, error) {
+	query := `
+		SELECT t.id, t.name
+		FROM tags t
+		JOIN strategy_tags st ON t.id = st.tag_id
+		WHERE st.strategy_id = $1
+		ORDER BY t.name
+	`
+
+	var tags []model.Tag
+	err := r.db.SelectContext(ctx, &tags, query, strategyID)
+	if err != nil {
+		r.logger.Error("Failed to get tags for strategy", zap.Error(err), zap.Int("strategy_id", strategyID))
+		return nil, err
+	}
+
+	return tags, nil
+}
+
 // IndicatorRepository handles database operations for technical indicators
 type IndicatorRepository struct {
 	db     *sqlx.DB
@@ -1059,254 +1046,105 @@ func (r *MarketplaceRepository) Delete(ctx context.Context, id int) error {
 	return nil
 }
 
-// PurchaseRepository handles database operations for strategy purchases
-type PurchaseRepository struct {
-	db     *sqlx.DB
-	logger *zap.Logger
-}
-
-// NewPurchaseRepository creates a new purchase repository
-func NewPurchaseRepository(db *sqlx.DB, logger *zap.Logger) *PurchaseRepository {
-	return &PurchaseRepository{
-		db:     db,
-		logger: logger,
-	}
-}
-
-// Create adds a new purchase record
-func (r *PurchaseRepository) Create(ctx context.Context, marketplaceID int, buyerID int, price float64, subscriptionEnd *time.Time) (int, error) {
-	query := `
-		INSERT INTO strategy_purchases (marketplace_id, buyer_id, purchase_price, subscription_end, created_at)
-		VALUES ($1, $2, $3, $4, $5)
-		RETURNING id
+// ListByUserID retrieves strategies belonging to a specific user with pagination and filtering
+func (r *StrategyRepository) ListByUserID(ctx context.Context, userID int, nameFilter string, limit, offset int) ([]model.Strategy, int, error) {
+	// Base query with filtering
+	baseQuery := `
+		FROM strategies
+		WHERE user_id = $1
 	`
+	params := []interface{}{userID}
+	paramCount := 2
 
-	var id int
-	err := r.db.QueryRowContext(
-		ctx,
-		query,
-		marketplaceID,
-		buyerID,
-		price,
-		subscriptionEnd,
-		time.Now(),
-	).Scan(&id)
-
-	if err != nil {
-		r.logger.Error("Failed to create purchase", zap.Error(err))
-		return 0, err
+	// Add name filter if provided
+	if nameFilter != "" {
+		baseQuery += fmt.Sprintf(" AND name ILIKE $%d", paramCount)
+		params = append(params, "%"+nameFilter+"%")
+		paramCount++
 	}
 
-	return id, nil
-}
-
-// GetByUser retrieves purchases for a user
-func (r *PurchaseRepository) GetByUser(ctx context.Context, userID int, page, limit int) ([]model.StrategyPurchase, int, error) {
-	query := `
-		SELECT id, marketplace_id, buyer_id, purchase_price, subscription_end, created_at
-		FROM strategy_purchases
-		WHERE buyer_id = $1
-		ORDER BY created_at DESC
-		LIMIT $2 OFFSET $3
-	`
-
-	countQuery := `
-		SELECT COUNT(*)
-		FROM strategy_purchases
-		WHERE buyer_id = $1
-	`
-
-	// Get total count
+	// Count total results
+	countQuery := "SELECT COUNT(*) " + baseQuery
 	var total int
-	err := r.db.GetContext(ctx, &total, countQuery, userID)
+	err := r.db.GetContext(ctx, &total, countQuery, params...)
 	if err != nil {
-		r.logger.Error("Failed to count purchases", zap.Error(err))
+		r.logger.Error("Failed to count strategies", zap.Error(err), zap.Int("user_id", userID))
 		return nil, 0, err
 	}
 
-	// Calculate offset
-	offset := (page - 1) * limit
+	// Query for paginated results
+	query := `
+		SELECT id, name, user_id, description, structure, is_public, version, created_at, updated_at
+	` + baseQuery + `
+		ORDER BY created_at DESC
+		LIMIT $` + fmt.Sprintf("%d", paramCount) + ` OFFSET $` + fmt.Sprintf("%d", paramCount+1)
 
-	// Execute main query
-	var purchases []model.StrategyPurchase
-	err = r.db.SelectContext(ctx, &purchases, query, userID, limit, offset)
+	params = append(params, limit, offset)
+
+	var strategies []model.Strategy
+	rows, err := r.db.QueryContext(ctx, query, params...)
 	if err != nil {
-		r.logger.Error("Failed to get purchases", zap.Error(err))
+		r.logger.Error("Failed to list strategies", zap.Error(err), zap.Int("user_id", userID))
+		return nil, 0, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var strategy model.Strategy
+		var structureBytes []byte
+
+		err := rows.Scan(
+			&strategy.ID,
+			&strategy.Name,
+			&strategy.UserID,
+			&strategy.Description,
+			&structureBytes,
+			&strategy.IsPublic,
+			&strategy.Version,
+			&strategy.CreatedAt,
+			&strategy.UpdatedAt,
+		)
+		if err != nil {
+			r.logger.Error("Failed to scan strategy row", zap.Error(err))
+			return nil, 0, err
+		}
+
+		// Unmarshal the strategy structure
+		if err := json.Unmarshal(structureBytes, &strategy.Structure); err != nil {
+			r.logger.Error("Failed to unmarshal strategy structure", zap.Error(err))
+			return nil, 0, err
+		}
+
+		strategies = append(strategies, strategy)
+	}
+
+	if err = rows.Err(); err != nil {
+		r.logger.Error("Error iterating strategy rows", zap.Error(err))
 		return nil, 0, err
 	}
 
-	return purchases, total, nil
+	return strategies, total, nil
 }
 
-// HasPurchased checks if a user has purchased a specific strategy
-func (r *PurchaseRepository) HasPurchased(ctx context.Context, userID int, strategyID int) (bool, error) {
-	query := `
-		SELECT COUNT(*)
-		FROM strategy_purchases p
-		JOIN strategy_marketplace m ON p.marketplace_id = m.id
-		WHERE p.buyer_id = $1 AND m.strategy_id = $2
-		AND (p.subscription_end IS NULL OR p.subscription_end > NOW())
-	`
+// UpdateStrategyVersion updates the version number of a strategy
+func (r *StrategyRepository) UpdateStrategyVersion(ctx context.Context, tx *sqlx.Tx, id int, version int) error {
+	query := `UPDATE strategies SET version = $1, updated_at = NOW() WHERE id = $2`
 
-	var count int
-	err := r.db.GetContext(ctx, &count, query, userID, strategyID)
-	if err != nil {
-		r.logger.Error("Failed to check purchase status", zap.Error(err))
-		return false, err
+	var execContext interface {
+		ExecContext(ctx context.Context, query string, args ...interface{}) (sql.Result, error)
 	}
 
-	return count > 0, nil
-}
-
-// ReviewRepository handles database operations for strategy reviews
-type ReviewRepository struct {
-	db     *sqlx.DB
-	logger *zap.Logger
-}
-
-// NewReviewRepository creates a new review repository
-func NewReviewRepository(db *sqlx.DB, logger *zap.Logger) *ReviewRepository {
-	return &ReviewRepository{
-		db:     db,
-		logger: logger,
-	}
-}
-
-// Create adds a new review
-func (r *ReviewRepository) Create(ctx context.Context, review *model.ReviewCreate, userID int) (int, error) {
-	query := `
-		INSERT INTO strategy_reviews (marketplace_id, user_id, rating, comment, created_at)
-		VALUES ($1, $2, $3, $4, $5)
-		RETURNING id
-	`
-
-	var id int
-	err := r.db.QueryRowContext(
-		ctx,
-		query,
-		review.MarketplaceID,
-		userID,
-		review.Rating,
-		review.Comment,
-		time.Now(),
-	).Scan(&id)
-
-	if err != nil {
-		r.logger.Error("Failed to create review", zap.Error(err))
-		return 0, err
+	if tx != nil {
+		execContext = tx
+	} else {
+		execContext = r.db
 	}
 
-	return id, nil
-}
-
-// Update updates a review
-func (r *ReviewRepository) Update(ctx context.Context, id int, rating int, comment string) error {
-	query := `
-		UPDATE strategy_reviews
-		SET rating = $1, comment = $2, updated_at = $3
-		WHERE id = $4
-	`
-
-	_, err := r.db.ExecContext(
-		ctx,
-		query,
-		rating,
-		comment,
-		time.Now(),
-		id,
-	)
-
+	_, err := execContext.ExecContext(ctx, query, version, id)
 	if err != nil {
-		r.logger.Error("Failed to update review", zap.Error(err))
-		return err
+		r.logger.Error("Failed to update strategy version", zap.Error(err), zap.Int("id", id), zap.Int("version", version))
+		return sharedErrors.NewDatabaseError("updating strategy version", err)
 	}
 
 	return nil
-}
-
-// Delete deletes a review
-func (r *ReviewRepository) Delete(ctx context.Context, id int) error {
-	query := `DELETE FROM strategy_reviews WHERE id = $1`
-
-	_, err := r.db.ExecContext(ctx, query, id)
-	if err != nil {
-		r.logger.Error("Failed to delete review", zap.Error(err))
-		return err
-	}
-
-	return nil
-}
-
-// GetByMarketplaceID retrieves reviews for a marketplace listing
-func (r *ReviewRepository) GetByMarketplaceID(ctx context.Context, marketplaceID int, page, limit int) ([]model.StrategyReview, int, error) {
-	query := `
-		SELECT id, marketplace_id, user_id, rating, comment, created_at, updated_at
-		FROM strategy_reviews
-		WHERE marketplace_id = $1
-		ORDER BY created_at DESC
-		LIMIT $2 OFFSET $3
-	`
-
-	countQuery := `
-		SELECT COUNT(*)
-		FROM strategy_reviews
-		WHERE marketplace_id = $1
-	`
-
-	// Get total count
-	var total int
-	err := r.db.GetContext(ctx, &total, countQuery, marketplaceID)
-	if err != nil {
-		r.logger.Error("Failed to count reviews", zap.Error(err))
-		return nil, 0, err
-	}
-
-	// Calculate offset
-	offset := (page - 1) * limit
-
-	// Execute main query
-	var reviews []model.StrategyReview
-	err = r.db.SelectContext(ctx, &reviews, query, marketplaceID, limit, offset)
-	if err != nil {
-		r.logger.Error("Failed to get reviews", zap.Error(err))
-		return nil, 0, err
-	}
-
-	return reviews, total, nil
-}
-
-// GetAverageRating calculates the average rating for a marketplace listing
-func (r *ReviewRepository) GetAverageRating(ctx context.Context, marketplaceID int) (float64, error) {
-	query := `
-		SELECT COALESCE(AVG(rating), 0) 
-		FROM strategy_reviews
-		WHERE marketplace_id = $1
-	`
-
-	var avgRating float64
-	err := r.db.GetContext(ctx, &avgRating, query, marketplaceID)
-	if err != nil {
-		r.logger.Error("Failed to get average rating", zap.Error(err))
-		return 0, err
-	}
-
-	return avgRating, nil
-}
-
-// HasReviewed checks if a user has already reviewed a marketplace listing
-func (r *ReviewRepository) HasReviewed(ctx context.Context, userID int, marketplaceID int) (bool, error) {
-	query := `
-		SELECT COUNT(*)
-		FROM strategy_reviews
-		WHERE user_id = $1 AND marketplace_id = $2
-	`
-
-	var count int
-	err := r.db.GetContext(ctx, &count, query, userID, marketplaceID)
-	if err != nil {
-		r.logger.Error("Failed to check review status", zap.Error(err))
-		return false, err
-	}
-
-	return count > 0, nil
 }

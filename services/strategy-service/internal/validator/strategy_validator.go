@@ -7,26 +7,28 @@ import (
 	"strconv"
 
 	"services/strategy-service/internal/model"
+
+	sharedErrors "github.com/yourorg/trading-platform/shared/go/errors"
 )
 
 // ValidateStrategyStructure validates the structure of a strategy
 func ValidateStrategyStructure(structure *model.Structure) error {
 	if len(structure.BuyRules) == 0 {
-		return errors.New("buy rules cannot be empty")
+		return sharedErrors.NewValidationError("buy rules cannot be empty")
 	}
 
 	if len(structure.SellRules) == 0 {
-		return errors.New("sell rules cannot be empty")
+		return sharedErrors.NewValidationError("sell rules cannot be empty")
 	}
 
 	// Validate buy rules
 	if err := validateRules(structure.BuyRules); err != nil {
-		return fmt.Errorf("invalid buy rules: %w", err)
+		return sharedErrors.NewValidationError(fmt.Sprintf("buy rules: %s", err.Error()))
 	}
 
 	// Validate sell rules
 	if err := validateRules(structure.SellRules); err != nil {
-		return fmt.Errorf("invalid sell rules: %w", err)
+		return sharedErrors.NewValidationError(fmt.Sprintf("sell rules: %s", err.Error()))
 	}
 
 	return nil

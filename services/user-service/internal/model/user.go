@@ -19,9 +19,9 @@ type User struct {
 
 // UserCreate represents data needed to create a new user
 type UserCreate struct {
-	Username string `json:"username" binding:"required,min=3,max=50"`
+	Username string `json:"username" binding:"required,min=3,max=50,alphanum_dash"`
 	Email    string `json:"email" binding:"required,email"`
-	Password string `json:"password" binding:"required,min=8"`
+	Password string `json:"password" binding:"required,strong_password"`
 	Role     string `json:"role"`
 }
 
@@ -31,17 +31,18 @@ type UserLogin struct {
 	Password string `json:"password" binding:"required"`
 }
 
-// UserUpdate represents data for updating user
+// UserUpdate represents user update data
 type UserUpdate struct {
-	Username *string `json:"username"`
-	Email    *string `json:"email"`
-	IsActive *bool   `json:"is_active"`
+	Username *string `json:"username,omitempty"`
+	Email    *string `json:"email,omitempty"`
+	IsActive *bool   `json:"is_active,omitempty"`
+	Role     *string `json:"role,omitempty"`
 }
 
 // UserChangePassword represents data for changing password
 type UserChangePassword struct {
 	CurrentPassword string `json:"current_password" binding:"required"`
-	NewPassword     string `json:"new_password" binding:"required,min=8"`
+	NewPassword     string `json:"new_password" binding:"required,strong_password"`
 }
 
 // UserPreference represents user preferences

@@ -53,9 +53,10 @@ func main() {
 	// Initialize clients
 	userClient := client.NewUserClient(cfg.UserService.URL, logger)
 	strategyClient := client.NewStrategyClient(cfg.StrategyService.URL, logger)
+	validatorClient := client.NewValidatorClient()
 
 	// Initialize services
-	marketDataService := service.NewMarketDataService(marketDataRepo, logger)
+	marketDataService := service.NewMarketDataService(marketDataRepo, validatorClient, logger)
 	backtestService := service.NewBacktestService(
 		backtestRepo,
 		marketDataRepo,
@@ -64,6 +65,29 @@ func main() {
 	)
 	symbolService := service.NewSymbolService(symbolRepo, logger)
 	timeframeService := service.NewTimeframeService(timeframeRepo, logger)
+
+	// Create context
+	ctx := context.Background()
+
+	// Initialize Kafka service
+	kafkaService, err := service.NewKafkaService(
+		cfg.Kafka.Brokers,
+		cfg.Kafka.Topics,
+		backtestService,
+		logger,
+	)
+	if err != nil {
+		logger.Fatal("Failed to create Kafka service", zap.Error(err))
+	}
+	defer kafkaService.Close()
+
+	// Update the backtest service to use Kafka
+	backtestService.SetKafkaService(kafkaService)
+
+	// Start Kafka consumers
+	if err := kafkaService.Start(ctx); err != nil {
+		logger.Fatal("Failed to start Kafka service", zap.Error(err))
+	}
 
 	// Initialize handlers
 	marketDataHandler := handler.NewMarketDataHandler(marketDataService, logger)
@@ -197,7 +221,7 @@ func setupRouter(
 
 		// Authentication required routes
 		auth := v1.Group("/")
-		auth.Use(middleware.AuthMiddleware(userClient, logger))
+		auth.Use(middleware.AuthMiddleware(userClient, logger, cfg.Auth.JWTSecret))
 		{
 			// Market data routes
 			auth.GET("/market-data/:symbol_id/:timeframe_id", marketDataHandler.GetMarketData)

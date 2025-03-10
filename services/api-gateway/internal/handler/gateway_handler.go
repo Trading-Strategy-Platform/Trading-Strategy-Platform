@@ -95,3 +95,102 @@ func getProxyPath(originalPath, prefix string) string {
 	// If the path doesn't start with the prefix, return the original path
 	return originalPath
 }
+
+// Add RegisterRoutes method to GatewayHandler
+func (h *GatewayHandler) RegisterRoutes(router *gin.Engine) {
+	// API v1 routes group
+	v1 := router.Group("/api/v1")
+
+	// Auth service routes
+	auth := v1.Group("/auth")
+	{
+		auth.POST("/login", h.ProxyUserService)
+		auth.POST("/register", h.ProxyUserService)
+		auth.POST("/refresh-token", h.ProxyUserService)
+		auth.POST("/validate", h.ProxyUserService)
+	}
+
+	// User management routes
+	users := v1.Group("/users")
+	{
+		users.GET("/me", h.ProxyUserService)
+		users.PUT("/me", h.ProxyUserService)
+		users.PUT("/me/password", h.ProxyUserService)
+	}
+
+	// Admin routes
+	admin := v1.Group("/admin")
+	{
+		admin.GET("/users", h.ProxyUserService)
+		admin.GET("/users/:id", h.ProxyUserService)
+		admin.PUT("/users/:id", h.ProxyUserService)
+	}
+
+	// Strategy routes
+	strategy := v1.Group("/strategies")
+	{
+		strategy.GET("", h.ProxyStrategyService)
+		strategy.POST("", h.ProxyStrategyService)
+		strategy.GET("/public", h.ProxyStrategyService)
+		strategy.GET("/:id", h.ProxyStrategyService)
+		strategy.PUT("/:id", h.ProxyStrategyService)
+		strategy.DELETE("/:id", h.ProxyStrategyService)
+		strategy.POST("/:id/versions", h.ProxyStrategyService)
+		strategy.GET("/:id/versions", h.ProxyStrategyService)
+		strategy.GET("/:id/versions/:version", h.ProxyStrategyService)
+		strategy.POST("/:id/versions/:version/restore", h.ProxyStrategyService)
+		strategy.POST("/:id/clone", h.ProxyStrategyService)
+		strategy.POST("/:id/backtest", h.ProxyStrategyService)
+	}
+
+	// Market data routes
+	market := v1.Group("/market")
+	{
+		market.GET("/symbols", h.ProxyHistoricalService)
+		market.GET("/timeframes", h.ProxyHistoricalService)
+		market.GET("/data/:symbol_id/:timeframe_id", h.ProxyHistoricalService)
+		market.POST("/data/import", h.ProxyHistoricalService)
+	}
+
+	// Backtest routes
+	backtests := v1.Group("/backtests")
+	{
+		backtests.POST("", h.ProxyHistoricalService)
+		backtests.GET("", h.ProxyHistoricalService)
+		backtests.GET("/:id", h.ProxyHistoricalService)
+		backtests.DELETE("/:id", h.ProxyHistoricalService)
+	}
+
+	// Marketplace routes
+	marketplace := v1.Group("/marketplace")
+	{
+		marketplace.GET("", h.ProxyStrategyService)
+		marketplace.POST("", h.ProxyStrategyService)
+		marketplace.GET("/:id", h.ProxyStrategyService)
+		marketplace.PUT("/:id", h.ProxyStrategyService)
+		marketplace.DELETE("/:id", h.ProxyStrategyService)
+		marketplace.POST("/:id/purchase", h.ProxyStrategyService)
+		marketplace.GET("/:id/reviews", h.ProxyStrategyService)
+		marketplace.POST("/:id/reviews", h.ProxyStrategyService)
+	}
+
+	// Purchases routes
+	purchases := v1.Group("/purchases")
+	{
+		purchases.GET("", h.ProxyStrategyService)
+	}
+
+	// Tags routes
+	tags := v1.Group("/tags")
+	{
+		tags.GET("", h.ProxyStrategyService)
+		tags.POST("", h.ProxyStrategyService)
+	}
+
+	// Indicators routes
+	indicators := v1.Group("/indicators")
+	{
+		indicators.GET("", h.ProxyStrategyService)
+		indicators.GET("/:id", h.ProxyStrategyService)
+	}
+}

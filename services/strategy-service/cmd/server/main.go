@@ -57,6 +57,14 @@ func main() {
 	// Initialize clients
 	userClient := client.NewUserClient(cfg.UserService.URL, logger)
 	historicalClient := client.NewHistoricalClient(cfg.HistoricalService.URL, logger)
+	validatorClient := client.NewValidatorClient()
+
+	// Initialize Kafka service
+	kafkaService, err := service.NewKafkaService(cfg, logger)
+	if err != nil {
+		logger.Error("Failed to initialize Kafka service", zap.Error(err))
+		// Continue without Kafka
+	}
 
 	// Initialize services
 	strategyService := service.NewStrategyService(
@@ -66,6 +74,8 @@ func main() {
 		tagRepo,
 		userClient,
 		historicalClient,
+		validatorClient,
+		kafkaService,
 		logger,
 	)
 
@@ -78,6 +88,7 @@ func main() {
 		purchaseRepo,
 		reviewRepo,
 		userClient,
+		kafkaService,
 		logger,
 	)
 
@@ -95,6 +106,7 @@ func main() {
 		marketplaceHandler,
 		userClient,
 		logger,
+		cfg.Auth.JWTSecret,
 	)
 
 	srv := &http.Server{
@@ -190,12 +202,16 @@ func setupRouter(
 	marketplaceHandler *handler.MarketplaceHandler,
 	userClient *client.UserClient,
 	logger *zap.Logger,
+	jwtSecret string,
 ) *gin.Engine {
 	router := gin.New()
 
 	// Use middlewares
 	router.Use(gin.Recovery())
-	router.Use(middleware.Logger(logger))
+	router.Use(middleware.LoggerMiddleware(logger))
+	router.Use(middleware.ClientInfoMiddleware())
+	router.Use(middleware.RecoveryMiddleware(logger))
+	router.Use(middleware.CORSMiddleware())
 
 	// Health check
 	router.GET("/health", func(c *gin.Context) {
@@ -216,7 +232,7 @@ func setupRouter(
 
 		// Authentication required routes
 		auth := v1.Group("/")
-		auth.Use(middleware.AuthMiddleware(userClient, logger))
+		auth.Use(middleware.AuthMiddleware(userClient, logger, jwtSecret))
 		{
 			// Strategy routes
 			auth.POST("/strategies", strategyHandler.CreateStrategy)

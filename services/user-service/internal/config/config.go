@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/spf13/viper"
+	sharedConfig "github.com/yourorg/trading-platform/shared/go/config"
 )
 
 // Config holds all configuration for the service
@@ -38,11 +39,11 @@ type DatabaseConfig struct {
 	ConnMaxLifetime time.Duration
 }
 
-// AuthConfig holds authentication specific configuration
+// AuthConfig contains authentication configuration
 type AuthConfig struct {
-	JWTSecret            string
-	AccessTokenDuration  time.Duration
-	RefreshTokenDuration time.Duration
+	JWTSecret       string `yaml:"jwt_secret"`
+	AccessTokenTTL  int    `yaml:"access_token_ttl"`  // TTL in hours
+	RefreshTokenTTL int    `yaml:"refresh_token_ttl"` // TTL in hours
 }
 
 // KafkaConfig holds Kafka specific configuration
@@ -66,19 +67,14 @@ type LoggingConfig struct {
 
 // LoadConfig loads the configuration from file and environment variables
 func LoadConfig(path string) (*Config, error) {
-	v := viper.New()
-
-	// Set defaults
-	setDefaults(v)
-
-	// Read config file
-	v.SetConfigFile(path)
-	if err := v.ReadInConfig(); err != nil {
-		return nil, fmt.Errorf("failed to read config file: %w", err)
+	// Use shared config loader
+	v, err := sharedConfig.Load(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load config: %w", err)
 	}
 
-	// Read from environment variables
-	v.AutomaticEnv()
+	// Add service specific defaults
+	setServiceDefaults(v)
 
 	var cfg Config
 	if err := v.Unmarshal(&cfg); err != nil {
@@ -88,33 +84,11 @@ func LoadConfig(path string) (*Config, error) {
 	return &cfg, nil
 }
 
-// setDefaults sets default values for configuration
-func setDefaults(v *viper.Viper) {
-	// Server defaults
-	v.SetDefault("server.port", "8080")
-	v.SetDefault("server.readTimeout", "10s")
-	v.SetDefault("server.writeTimeout", "10s")
-	v.SetDefault("server.idleTimeout", "120s")
-
-	// Database defaults
-	v.SetDefault("database.sslmode", "disable")
-	v.SetDefault("database.maxOpenConns", 25)
-	v.SetDefault("database.maxIdleConns", 5)
-	v.SetDefault("database.connMaxLifetime", "30m")
-
-	// Auth defaults
-	v.SetDefault("auth.accessTokenDuration", "15m")
-	v.SetDefault("auth.refreshTokenDuration", "7d")
-
-	// Kafka topic defaults
+// setServiceDefaults sets service-specific default values
+func setServiceDefaults(v *viper.Viper) {
+	// Only set service-specific defaults that aren't in the shared defaults
 	v.SetDefault("kafka.topics.notifications", "user-notifications")
 	v.SetDefault("kafka.topics.events", "user-events")
-
-	// Redis defaults
 	v.SetDefault("redis.sessionPrefix", "user-session:")
 	v.SetDefault("redis.sessionDuration", "24h")
-
-	// Logging defaults
-	v.SetDefault("logging.level", "info")
-	v.SetDefault("logging.format", "json")
 }

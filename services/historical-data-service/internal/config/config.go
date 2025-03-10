@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/spf13/viper"
+	sharedConfig "github.com/yourorg/trading-platform/shared/go/config"
 )
 
 // Config holds all configuration for the service
@@ -16,6 +17,9 @@ type Config struct {
 	Kafka           KafkaConfig
 	ServiceKey      string
 	Logging         LoggingConfig
+	Auth            struct {
+		JWTSecret string `yaml:"jwt_secret"`
+	} `yaml:"auth"`
 }
 
 // ServerConfig holds server specific configuration
@@ -60,19 +64,14 @@ type LoggingConfig struct {
 
 // LoadConfig loads the configuration from file and environment variables
 func LoadConfig(path string) (*Config, error) {
-	v := viper.New()
-
-	// Set defaults
-	setDefaults(v)
-
-	// Read config file
-	v.SetConfigFile(path)
-	if err := v.ReadInConfig(); err != nil {
-		return nil, fmt.Errorf("failed to read config file: %w", err)
+	// Use shared config loader
+	v, err := sharedConfig.Load(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load config: %w", err)
 	}
 
-	// Environment variables override
-	v.AutomaticEnv()
+	// Add service specific defaults
+	setServiceDefaults(v)
 
 	var cfg Config
 	if err := v.Unmarshal(&cfg); err != nil {
@@ -82,20 +81,8 @@ func LoadConfig(path string) (*Config, error) {
 	return &cfg, nil
 }
 
-// setDefaults sets default values for configuration
-func setDefaults(v *viper.Viper) {
-	// Server defaults
-	v.SetDefault("server.port", "8080")
-	v.SetDefault("server.readTimeout", "10s")
-	v.SetDefault("server.writeTimeout", "10s")
-	v.SetDefault("server.idleTimeout", "120s")
-
-	// Database defaults
-	v.SetDefault("database.sslmode", "disable")
-	v.SetDefault("database.maxOpenConns", 25)
-	v.SetDefault("database.maxIdleConns", 5)
-	v.SetDefault("database.connMaxLifetime", "30m")
-
+// setServiceDefaults sets service-specific default values
+func setServiceDefaults(v *viper.Viper) {
 	// User Service defaults
 	v.SetDefault("userService.timeout", "5s")
 	v.SetDefault("userService.serviceKey", "historical-service-key")
@@ -110,8 +97,4 @@ func setDefaults(v *viper.Viper) {
 
 	// Service key for authentication
 	v.SetDefault("serviceKey", "historical-service-key")
-
-	// Logging defaults
-	v.SetDefault("logging.level", "info")
-	v.SetDefault("logging.format", "json")
 }

@@ -2,11 +2,12 @@ package service
 
 import (
 	"context"
-	"errors"
+	"fmt"
 
 	"services/historical-data-service/internal/model"
 	"services/historical-data-service/internal/repository"
 
+	sharedErrors "github.com/yourorg/trading-platform/shared/go/errors"
 	"go.uber.org/zap"
 )
 
@@ -37,7 +38,7 @@ func (s *SymbolService) GetSymbolByID(ctx context.Context, id int) (*model.Symbo
 	}
 
 	if symbol == nil {
-		return nil, errors.New("symbol not found")
+		return nil, sharedErrors.NewNotFoundError("Symbol", fmt.Sprintf("%d", id))
 	}
 
 	return symbol, nil
@@ -47,7 +48,7 @@ func (s *SymbolService) GetSymbolByID(ctx context.Context, id int) (*model.Symbo
 func (s *SymbolService) CreateSymbol(ctx context.Context, symbol *model.Symbol) (int, error) {
 	// Validate symbol
 	if symbol.Symbol == "" || symbol.Name == "" || symbol.Exchange == "" {
-		return 0, errors.New("symbol, name, and exchange are required")
+		return 0, sharedErrors.NewValidationError("symbol, name, and exchange are required")
 	}
 
 	// Create symbol
@@ -81,7 +82,7 @@ func (s *TimeframeService) GetTimeframeByID(ctx context.Context, id int) (*model
 	}
 
 	if timeframe == nil {
-		return nil, errors.New("timeframe not found")
+		return nil, sharedErrors.NewNotFoundError("Timeframe", fmt.Sprintf("%d", id))
 	}
 
 	return timeframe, nil
@@ -91,7 +92,7 @@ func (s *TimeframeService) GetTimeframeByID(ctx context.Context, id int) (*model
 func (s *TimeframeService) CreateTimeframe(ctx context.Context, timeframe *model.Timeframe) (int, error) {
 	// Validate timeframe
 	if timeframe.Name == "" || timeframe.DisplayName == "" || timeframe.Minutes <= 0 {
-		return 0, errors.New("name, display name, and valid minutes are required")
+		return 0, sharedErrors.NewValidationError("name, display name, and valid minutes are required")
 	}
 
 	// Create timeframe

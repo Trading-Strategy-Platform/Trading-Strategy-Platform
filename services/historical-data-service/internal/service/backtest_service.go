@@ -11,6 +11,7 @@ import (
 	"services/historical-data-service/internal/model"
 	"services/historical-data-service/internal/repository"
 
+	sharedErrors "github.com/yourorg/trading-platform/shared/go/errors"
 	"go.uber.org/zap"
 )
 
@@ -20,6 +21,7 @@ type BacktestService struct {
 	marketDataRepo *repository.MarketDataRepository
 	strategyClient *client.StrategyClient
 	logger         *zap.Logger
+	kafkaService   *KafkaService
 }
 
 // NewBacktestService creates a new backtest service
@@ -46,7 +48,7 @@ func (s *BacktestService) CreateBacktest(
 ) (int, error) {
 	// Validate date range
 	if request.EndDate.Before(request.StartDate) {
-		return 0, errors.New("end date must be after start date")
+		return 0, sharedErrors.NewValidationError("end date must be after start date")
 	}
 
 	// Check if there's data available for the requested symbol and timeframe
@@ -56,7 +58,7 @@ func (s *BacktestService) CreateBacktest(
 	}
 
 	if !hasData {
-		return 0, errors.New("no market data available for the requested symbol and timeframe")
+		return 0, sharedErrors.NewNotFoundError("MarketData", fmt.Sprintf("symbol: %d, timeframe: %d", request.SymbolID, request.TimeframeID))
 	}
 
 	// Check if data range is available
@@ -120,12 +122,22 @@ func (s *BacktestService) runBacktest(
 	ctx := context.Background()
 
 	// Mark backtest as running
-	err := s.backtestRepo.UpdateBacktestStatus(ctx, backtestID, model.BacktestStatusRunning)
-	if err != nil {
-		s.logger.Error("Failed to update backtest status",
-			zap.Error(err),
-			zap.Int("backtestID", backtestID))
-		return
+	if s.kafkaService != nil {
+		err := s.UpdateBacktestStatusWithKafka(ctx, backtestID, model.BacktestStatusRunning, "", s.kafkaService)
+		if err != nil {
+			s.logger.Error("Failed to update backtest status",
+				zap.Error(err),
+				zap.Int("backtestID", backtestID))
+			return
+		}
+	} else {
+		err := s.backtestRepo.UpdateBacktestStatus(ctx, backtestID, model.BacktestStatusRunning)
+		if err != nil {
+			s.logger.Error("Failed to update backtest status",
+				zap.Error(err),
+				zap.Int("backtestID", backtestID))
+			return
+		}
 	}
 
 	// Get strategy structure (either latest or specific version)
@@ -269,32 +281,43 @@ func (s *BacktestService) GetBacktest(ctx context.Context, id int, userID int) (
 	}
 
 	if backtest == nil {
-		return nil, errors.New("backtest not found")
+		return nil, sharedErrors.NewNotFoundError("Backtest", fmt.Sprintf("%d", id))
 	}
 
 	// Check user access
 	if backtest.UserID != userID {
-		return nil, errors.New("access denied")
+		return nil, sharedErrors.NewValidationError("access denied")
+	}
+
+	if backtest.Status != "completed" {
+		return nil, sharedErrors.NewValidationError("backtest is not completed yet")
 	}
 
 	return backtest, nil
 }
 
-// ListBacktests lists backtests for a user
+// ListBacktests lists backtests for a user with pagination
 func (s *BacktestService) ListBacktests(
 	ctx context.Context,
 	userID int,
 	page int,
 	limit int,
 ) ([]model.Backtest, int, error) {
-	if page < 1 {
-		page = 1
-	}
-	if limit < 1 || limit > 100 {
-		limit = 10
+	offset := (page - 1) * limit
+
+	backtests, total, err := s.backtestRepo.ListBacktests(ctx, userID, limit, offset)
+	if err != nil {
+		return nil, 0, err
 	}
 
-	return s.backtestRepo.GetBacktestsByUser(ctx, userID, page, limit)
+	// Enhance backtests with additional data if needed
+	for range backtests {
+		// Add symbol and timeframe names, etc. if needed
+		// This is an example of how you might enrich the data
+		// before returning it to the client
+	}
+
+	return backtests, total, nil
 }
 
 // DeleteBacktest deletes a backtest
@@ -371,4 +394,77 @@ func (s *BacktestService) RunBacktest(ctx context.Context, backtest *model.Backt
 
 	// ... rest of the implementation
 	return nil
+}
+
+// UpdateBacktestStatus updates a backtest's status and publishes the update to Kafka
+func (s *BacktestService) UpdateBacktestStatusWithKafka(
+	ctx context.Context,
+	backtestID int,
+	status model.BacktestStatus,
+	errorMessage string,
+	kafkaService *KafkaService,
+) error {
+	// Get the backtest to retrieve associated data
+	backtest, err := s.backtestRepo.GetBacktestByID(ctx, backtestID)
+	if err != nil {
+		return err
+	}
+
+	if backtest == nil {
+		return sharedErrors.NewNotFoundError("Backtest", fmt.Sprintf("%d", backtestID))
+	}
+
+	// Update status in database
+	err = s.backtestRepo.UpdateBacktestStatus(ctx, backtestID, status)
+	if err != nil {
+		return err
+	}
+
+	// If failed status, also update error message
+	if status == model.BacktestStatusFailed && errorMessage != "" {
+		err = s.backtestRepo.UpdateBacktestErrorMessage(ctx, backtestID, errorMessage)
+		if err != nil {
+			s.logger.Error("Failed to update backtest error message",
+				zap.Error(err),
+				zap.Int("backtestID", backtestID))
+		}
+	}
+
+	// Mark as completed if appropriate
+	if status == model.BacktestStatusCompleted || status == model.BacktestStatusFailed {
+		err = s.backtestRepo.MarkBacktestCompleted(ctx, backtestID)
+		if err != nil {
+			s.logger.Error("Failed to mark backtest as completed",
+				zap.Error(err),
+				zap.Int("backtestID", backtestID))
+		}
+
+		// Notify strategy service about completion if needed
+		// This could be done via Kafka now
+	}
+
+	// Publish status update to Kafka if service is provided
+	if kafkaService != nil {
+		err = kafkaService.PublishBacktestStatus(
+			ctx,
+			backtestID,
+			backtest.UserID,
+			backtest.StrategyID,
+			status,
+			errorMessage,
+		)
+		if err != nil {
+			s.logger.Error("Failed to publish backtest status to Kafka",
+				zap.Error(err),
+				zap.Int("backtestID", backtestID),
+				zap.String("status", string(status)))
+		}
+	}
+
+	return nil
+}
+
+// SetKafkaService sets the Kafka service for the backtest service
+func (s *BacktestService) SetKafkaService(kafkaService *KafkaService) {
+	s.kafkaService = kafkaService
 }

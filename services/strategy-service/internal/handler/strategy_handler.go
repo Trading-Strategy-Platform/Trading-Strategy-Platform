@@ -8,6 +8,10 @@ import (
 	"services/strategy-service/internal/model"
 	"services/strategy-service/internal/service"
 
+	sharedErrors "github.com/yourorg/trading-platform/shared/go/errors"
+	sharedModel "github.com/yourorg/trading-platform/shared/go/model"
+	"github.com/yourorg/trading-platform/shared/go/response"
+
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 )
@@ -28,51 +32,91 @@ func NewStrategyHandler(strategyService *service.StrategyService, logger *zap.Lo
 
 // CreateStrategy handles creating a new strategy
 func (h *StrategyHandler) CreateStrategy(c *gin.Context) {
-	var request model.StrategyCreate
-	if err := c.ShouldBindJSON(&request); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
+	// Get user ID from context
 	userID, exists := c.Get("userID")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		response.Unauthorized(c, "User not authenticated")
 		return
 	}
 
-	strategy, err := h.strategyService.CreateStrategy(c.Request.Context(), &request, userID.(int))
+	// Parse request body
+	var createReq model.StrategyCreate
+	if err := c.ShouldBindJSON(&createReq); err != nil {
+		response.BadRequest(c, "Invalid request format: "+err.Error())
+		return
+	}
+
+	// Create strategy
+	strategy, err := h.strategyService.CreateStrategy(c.Request.Context(), &createReq, userID.(int))
 	if err != nil {
-		h.logger.Error("Failed to create strategy", zap.Error(err))
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		h.handleError(c, err, "Failed to create strategy")
 		return
 	}
 
-	c.JSON(http.StatusCreated, strategy)
+	response.Created(c, strategy)
 }
 
 // GetStrategy handles retrieving a strategy by ID
 func (h *StrategyHandler) GetStrategy(c *gin.Context) {
+	// Get user ID from context
+	userID, exists := c.Get("userID")
+	if !exists {
+		response.Unauthorized(c, "User not authenticated")
+		return
+	}
+
+	// Get strategy ID from path
 	idStr := c.Param("id")
 	id, err := strconv.Atoi(idStr)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid strategy ID"})
+		response.BadRequest(c, "Invalid strategy ID format")
 		return
 	}
 
-	userID, exists := c.Get("userID")
-	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
-		return
-	}
-
+	// Get strategy
 	strategy, err := h.strategyService.GetStrategy(c.Request.Context(), id, userID.(int))
 	if err != nil {
-		h.logger.Error("Failed to get strategy", zap.Error(err), zap.Int("id", id))
-		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		h.handleError(c, err, "Failed to retrieve strategy")
 		return
 	}
 
-	c.JSON(http.StatusOK, strategy)
+	response.Success(c, strategy)
+}
+
+// handleError processes service errors and returns appropriate responses
+func (h *StrategyHandler) handleError(c *gin.Context, err error, defaultMsg string) {
+	h.logger.Error(defaultMsg, zap.Error(err))
+
+	// Type assertion to check if this is one of our custom error types
+	if apiErr, ok := err.(*sharedErrors.APIError); ok {
+		switch apiErr.Type {
+		case sharedErrors.ErrorTypeValidation:
+			response.BadRequest(c, apiErr.Message)
+		case sharedErrors.ErrorTypeNotFound:
+			response.NotFound(c, apiErr.Message)
+		case sharedErrors.ErrorTypePermission:
+			response.Forbidden(c, apiErr.Message)
+		case sharedErrors.ErrorTypeAuth:
+			response.Unauthorized(c, apiErr.Message)
+		case sharedErrors.ErrorTypeExternal:
+			response.ServiceUnavailable(c, apiErr.Message)
+		case sharedErrors.ErrorTypeDuplicate:
+			response.Conflict(c, apiErr.Message)
+		default:
+			response.InternalError(c, defaultMsg)
+		}
+		return
+	}
+
+	// Default to internal server error for unknown error types
+	response.InternalError(c, defaultMsg)
+}
+
+// Helper function to parse validation errors
+func parseValidationErrors(err error) *sharedModel.ValidationErrors {
+	// Implementation will depend on what validation library is used
+	// This is a placeholder implementation
+	return nil
 }
 
 // ListUserStrategies handles listing strategies for a user
@@ -172,30 +216,40 @@ func (h *StrategyHandler) UpdateStrategy(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.Atoi(idStr)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid strategy ID"})
+		response.BadRequest(c, "Invalid strategy ID")
 		return
 	}
 
 	userID, exists := c.Get("userID")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		response.Unauthorized(c, "User not authenticated")
 		return
 	}
 
 	var request model.StrategyUpdate
 	if err := c.ShouldBindJSON(&request); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		validationErrors := parseValidationErrors(err)
+		if validationErrors != nil {
+			c.JSON(http.StatusBadRequest, validationErrors)
+		} else {
+			response.BadRequest(c, err.Error())
+		}
 		return
 	}
 
 	strategy, err := h.strategyService.UpdateStrategy(c.Request.Context(), id, &request, userID.(int))
 	if err != nil {
 		h.logger.Error("Failed to update strategy", zap.Error(err), zap.Int("id", id))
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		response.Error(c, err)
 		return
 	}
 
-	c.JSON(http.StatusOK, strategy)
+	if strategy == nil {
+		response.NotFound(c, "Strategy not found")
+		return
+	}
+
+	response.Success(c, strategy)
 }
 
 // DeleteStrategy handles deleting a strategy
@@ -203,24 +257,24 @@ func (h *StrategyHandler) DeleteStrategy(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.Atoi(idStr)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid strategy ID"})
+		response.BadRequest(c, "Invalid strategy ID")
 		return
 	}
 
 	userID, exists := c.Get("userID")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		response.Unauthorized(c, "User not authenticated")
 		return
 	}
 
 	err = h.strategyService.DeleteStrategy(c.Request.Context(), id, userID.(int))
 	if err != nil {
 		h.logger.Error("Failed to delete strategy", zap.Error(err), zap.Int("id", id))
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		response.Error(c, err)
 		return
 	}
 
-	c.Status(http.StatusNoContent)
+	response.NoContent(c)
 }
 
 // CreateVersion handles creating a new version of a strategy
@@ -773,33 +827,101 @@ func (h *MarketplaceHandler) GetReviews(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.Atoi(idStr)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid listing ID"})
+		c.JSON(http.StatusBadRequest, standardError("invalid_input", "Invalid listing ID"))
 		return
 	}
 
-	// Parse request parameters
-	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "10"))
+	// Parse pagination parameters
+	var pagination sharedModel.Pagination
 
-	reviews, total, err := h.marketplaceService.GetReviews(
+	if pageStr := c.Query("page"); pageStr != "" {
+		if page, err := strconv.Atoi(pageStr); err == nil && page > 0 {
+			pagination.Page = page
+		}
+	}
+
+	if perPageStr := c.Query("per_page"); perPageStr != "" {
+		if perPage, err := strconv.Atoi(perPageStr); err == nil && perPage > 0 {
+			pagination.PerPage = perPage
+		}
+	}
+
+	// Set defaults if not provided
+	if pagination.Page == 0 {
+		pagination.Page = sharedModel.PaginationDefaults.Page
+	}
+
+	if pagination.PerPage == 0 {
+		pagination.PerPage = sharedModel.PaginationDefaults.PerPage
+	}
+
+	reviews, meta, err := h.marketplaceService.GetReviews(
 		c.Request.Context(),
 		id,
-		page,
-		limit,
+		&pagination,
 	)
 
 	if err != nil {
 		h.logger.Error("Failed to get reviews", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch reviews"})
+		c.JSON(http.StatusInternalServerError, standardError("internal_server_error", "Failed to fetch reviews"))
 		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"reviews": reviews,
-		"meta": gin.H{
-			"total": total,
-			"page":  page,
-			"limit": limit,
-		},
+		"meta":    meta,
+	})
+}
+
+// Helper function to create standard error responses
+func standardError(code, message string) sharedModel.ErrorResponse {
+	errorResponse := sharedModel.ErrorResponse{}
+	errorResponse.Error.Type = "https://example.com/errors/" + code
+	errorResponse.Error.Code = code
+	errorResponse.Error.Message = message
+	return errorResponse
+}
+
+// ListStrategies handles listing strategies
+func (h *StrategyHandler) ListStrategies(c *gin.Context) {
+	userID, _ := c.Get("userID")
+
+	// Parse pagination parameters
+	var pagination sharedModel.Pagination
+
+	if pageStr := c.Query("page"); pageStr != "" {
+		if page, err := strconv.Atoi(pageStr); err == nil && page > 0 {
+			pagination.Page = page
+		}
+	}
+
+	if perPageStr := c.Query("per_page"); perPageStr != "" {
+		if perPage, err := strconv.Atoi(perPageStr); err == nil && perPage > 0 {
+			pagination.PerPage = perPage
+		}
+	}
+
+	// Set defaults if not provided
+	if pagination.Page == 0 {
+		pagination.Page = sharedModel.PaginationDefaults.Page
+	}
+
+	if pagination.PerPage == 0 {
+		pagination.PerPage = sharedModel.PaginationDefaults.PerPage
+	}
+
+	// Filter by name if provided
+	nameFilter := c.Query("name")
+
+	strategies, meta, err := h.strategyService.ListStrategies(c.Request.Context(), userID.(int), nameFilter, &pagination)
+	if err != nil {
+		h.logger.Error("Failed to list strategies", zap.Error(err))
+		response.Error(c, err)
+		return
+	}
+
+	response.Success(c, gin.H{
+		"strategies": strategies,
+		"meta":       meta,
 	})
 }

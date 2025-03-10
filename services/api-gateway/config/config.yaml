@@ -25,3 +25,17 @@ rateLimit:
 logging:
   level: debug
   format: json
+
+execution_service:
+  url: "http://execution-service:8084"
+
+notification_service:
+  url: "http://notification-service:8085"
+
+kafka:
+  enabled: true
+  brokers: kafka:9092
+  topics:
+    userEvents: user-events
+    apiMetrics: api-metrics
+    systemEvents: system-events

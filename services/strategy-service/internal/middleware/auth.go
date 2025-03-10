@@ -3,13 +3,11 @@ package middleware
 
 import (
 	"context"
-	"encoding/base64"
-	"encoding/json"
-	"fmt"
 	"net/http"
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/yourorg/trading-platform/shared/go/auth"
 	"go.uber.org/zap"
 )
 
@@ -19,7 +17,16 @@ type UserClient interface {
 }
 
 // AuthMiddleware authenticates requests against the user service
-func AuthMiddleware(userClient UserClient, logger *zap.Logger) gin.HandlerFunc {
+func AuthMiddleware(userClient UserClient, logger *zap.Logger, jwtSecret string) gin.HandlerFunc {
+	// Use the shared auth middleware if JWT secret is provided
+	if jwtSecret != "" {
+		return auth.Middleware(auth.Config{
+			JWTSecret: jwtSecret,
+			Logger:    logger,
+		})
+	}
+
+	// Fall back to the user service validation if no JWT secret
 	return func(c *gin.Context) {
 		// Get the Authorization header
 		authHeader := c.GetHeader("Authorization")
@@ -40,8 +47,8 @@ func AuthMiddleware(userClient UserClient, logger *zap.Logger) gin.HandlerFunc {
 		// Extract token
 		token := headerParts[1]
 
-		// Parse token to get user ID (JWT validation happens in user service)
-		userId, err := extractUserIdFromToken(token)
+		// Parse token to get user ID
+		claims, err := auth.ValidateToken(token, jwtSecret)
 		if err != nil {
 			logger.Debug("Failed to extract user ID from token", zap.Error(err))
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid token"})
@@ -49,8 +56,8 @@ func AuthMiddleware(userClient UserClient, logger *zap.Logger) gin.HandlerFunc {
 			return
 		}
 
-		// Validate token with user service
-		valid, err := userClient.ValidateUserAccess(c.Request.Context(), userId, token)
+		// Validate token with user service as a double-check
+		valid, err := userClient.ValidateUserAccess(c.Request.Context(), claims.UserID, token)
 		if err != nil {
 			logger.Error("Failed to validate token", zap.Error(err))
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Authentication service unavailable"})
@@ -64,43 +71,14 @@ func AuthMiddleware(userClient UserClient, logger *zap.Logger) gin.HandlerFunc {
 			return
 		}
 
-		// Set user ID in context
-		c.Set("userID", userId)
+		// Set user ID and role in context
+		c.Set("userID", claims.UserID)
+		c.Set("userRole", claims.Role)
 		c.Next()
 	}
 }
 
-// extractUserIdFromToken extracts the user ID from a JWT token
-func extractUserIdFromToken(token string) (int, error) {
-	// For this example, we'll use a simplified method that doesn't validate the token
-	// In a real implementation, you would use a JWT library to verify and parse the token
-
-	// Split the token into its parts (header.payload.signature)
-	parts := strings.Split(token, ".")
-	if len(parts) != 3 {
-		return 0, fmt.Errorf("invalid token format")
-	}
-
-	// Decode the payload (the middle part)
-	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
-	if err != nil {
-		return 0, err
-	}
-
-	// Parse the JSON payload
-	var claims struct {
-		Sub  int    `json:"sub"`
-		Type string `json:"type"`
-	}
-
-	if err := json.Unmarshal(payload, &claims); err != nil {
-		return 0, err
-	}
-
-	// Check if this is an access token
-	if claims.Type != "access" {
-		return 0, fmt.Errorf("not an access token")
-	}
-
-	return claims.Sub, nil
+// RequireRole middleware checks if the user has the required role
+func RequireRole(requiredRoles ...string) gin.HandlerFunc {
+	return auth.RequireRole(requiredRoles...)
 }

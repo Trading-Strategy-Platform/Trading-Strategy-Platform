@@ -150,3 +150,53 @@ func InternalError(c *gin.Context, message string) {
 		},
 	})
 }
+
+// Accepted sends a HTTP 202 Accepted response with the given data
+func Accepted(c *gin.Context, data interface{}) {
+	c.JSON(http.StatusAccepted, gin.H{
+		"status": "accepted",
+		"data":   data,
+	})
+}
+
+// ServiceUnavailable sends a HTTP 503 Service Unavailable response
+func ServiceUnavailable(c *gin.Context, message string) {
+	if message == "" {
+		message = "Service temporarily unavailable"
+	}
+	c.JSON(http.StatusServiceUnavailable, Response{
+		Error: &ErrorInfo{
+			Type:    string(errors.ErrorTypeExternal),
+			Code:    "service_unavailable",
+			Message: message,
+		},
+	})
+}
+
+// TooManyRequests sends a HTTP 429 Too Many Requests response
+func TooManyRequests(c *gin.Context, message string) {
+	if message == "" {
+		message = "Rate limit exceeded"
+	}
+	c.JSON(http.StatusTooManyRequests, Response{
+		Error: &ErrorInfo{
+			Type:    "rate_limit_error",
+			Code:    "too_many_requests",
+			Message: message,
+		},
+	})
+}
+
+// Conflict creates a 409 Conflict response
+func Conflict(c *gin.Context, message string) {
+	if message == "" {
+		message = "Resource already exists"
+	}
+	c.JSON(http.StatusConflict, Response{
+		Error: &ErrorInfo{
+			Type:    "conflict_error",
+			Code:    "resource_conflict",
+			Message: message,
+		},
+	})
+}

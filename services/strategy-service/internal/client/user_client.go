@@ -3,108 +3,72 @@ package client
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
 	"fmt"
-	"net/http"
 	"time"
 
+	"github.com/yourorg/trading-platform/shared/go/httpclient"
 	"go.uber.org/zap"
 )
 
-// UserClient handles communication with the User Service
+// UserClient implements the service.UserClient interface
 type UserClient struct {
-	baseURL    string
-	httpClient *http.Client
-	logger     *zap.Logger
+	client *httpclient.Client
+	logger *zap.Logger
 }
 
-// NewUserClient creates a new User Service client
+// NewUserClient creates a new user service client
 func NewUserClient(baseURL string, logger *zap.Logger) *UserClient {
+	client := httpclient.New(httpclient.Config{
+		BaseURL:    baseURL,
+		Timeout:    10 * time.Second,
+		ServiceKey: "strategy-service-key",
+	}, logger)
+
 	return &UserClient{
-		baseURL: baseURL,
-		httpClient: &http.Client{
-			Timeout: 10 * time.Second,
-		},
+		client: client,
 		logger: logger,
 	}
 }
 
-// GetUserByID retrieves a user's username by ID
+// GetUserByID retrieves a username by user ID
 func (c *UserClient) GetUserByID(ctx context.Context, userID int) (string, error) {
-	url := fmt.Sprintf("%s/api/v1/admin/users/%d", c.baseURL, userID)
+	path := fmt.Sprintf("/api/v1/users/%d", userID)
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	var response struct {
+		Data struct {
+			Username string `json:"username"`
+		} `json:"data"`
+	}
+
+	err := c.client.Get(ctx, path, &response)
 	if err != nil {
+		c.logger.Error("Failed to retrieve user by ID",
+			zap.Int("userID", userID),
+			zap.Error(err))
 		return "", err
 	}
 
-	// Add service authentication header (this would be replaced with actual service auth)
-	req.Header.Set("X-Service-Key", "strategy-service-key")
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		c.logger.Error("Failed to get user from User Service", zap.Error(err))
-		return "", err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("user service returned status code %d", resp.StatusCode)
-	}
-
-	var user struct {
-		ID       int    `json:"id"`
-		Username string `json:"username"`
-	}
-
-	err = json.NewDecoder(resp.Body).Decode(&user)
-	if err != nil {
-		c.logger.Error("Failed to decode user response", zap.Error(err))
-		return "", err
-	}
-
-	return user.Username, nil
+	return response.Data.Username, nil
 }
 
-// ValidateUserAccess validates a user's access token
+// ValidateUserAccess validates user access token
 func (c *UserClient) ValidateUserAccess(ctx context.Context, userID int, token string) (bool, error) {
-	url := fmt.Sprintf("%s/api/v1/auth/validate", c.baseURL)
+	// Create a context with the auth token
+	tokenCtx := context.WithValue(ctx, "auth_token", token)
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
+	path := fmt.Sprintf("/api/v1/auth/validate/%d", userID)
+
+	var response struct {
+		Valid bool `json:"valid"`
+	}
+
+	err := c.client.Get(tokenCtx, path, &response)
 	if err != nil {
+		c.logger.Error("Failed to validate user access",
+			zap.Int("userID", userID),
+			zap.Error(err))
 		return false, err
 	}
 
-	// Add the token to be validated
-	req.Header.Set("Authorization", "Bearer "+token)
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		c.logger.Error("Failed to validate token with User Service", zap.Error(err))
-		return false, err
-	}
-	defer resp.Body.Close()
-
-	// 200 = valid, 401 = invalid
-	if resp.StatusCode == http.StatusOK {
-		var response struct {
-			UserID int `json:"user_id"`
-		}
-
-		err = json.NewDecoder(resp.Body).Decode(&response)
-		if err != nil {
-			c.logger.Error("Failed to decode validation response", zap.Error(err))
-			return false, err
-		}
-
-		// Verify the token belongs to the expected user
-		return response.UserID == userID, nil
-	}
-
-	if resp.StatusCode == http.StatusUnauthorized {
-		return false, nil
-	}
-
-	return false, errors.New("unexpected response from user service")
+	return response.Valid, nil
 }

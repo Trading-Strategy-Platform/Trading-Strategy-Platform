@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"services/user-service/internal/client"
 	"services/user-service/internal/config"
 	"services/user-service/internal/handler"
 	"services/user-service/internal/middleware"
@@ -44,15 +45,29 @@ func main() {
 	}
 	defer db.Close()
 
+	// Initialize validator client
+	validatorClient := client.NewValidatorClient()
+
 	// Create repositories
 	userRepo := repository.NewUserRepository(db, logger)
 
+	// Initialize Kafka service
+	kafkaService, err := service.NewKafkaService(cfg, logger)
+	if err != nil {
+		logger.Fatal("Failed to initialize Kafka service", zap.Error(err))
+	}
+	defer kafkaService.Close()
+
 	// Create services
-	authService := service.NewAuthService(userRepo, cfg, logger)
-	userService := service.NewUserService(userRepo, logger)
+	authService := service.NewAuthService(userRepo, cfg, kafkaService, logger)
+	userService := service.NewUserService(userRepo, kafkaService, logger)
+
+	// Create handlers with validator client
+	authHandler := handler.NewAuthHandler(authService, validatorClient, logger)
+	userHandler := handler.NewUserHandler(userService, validatorClient, logger)
 
 	// Create HTTP server
-	router := setupRouter(authService, userService, logger)
+	router := setupRouter(authHandler, userHandler, cfg, logger)
 
 	srv := &http.Server{
 		Addr:         ":" + cfg.Server.Port,
@@ -140,51 +155,39 @@ func connectToDB(dbConfig config.DatabaseConfig) (*sqlx.DB, error) {
 	return db, nil
 }
 
-func setupRouter(authService *service.AuthService, userService *service.UserService, logger *zap.Logger) *gin.Engine {
+func setupRouter(authHandler *handler.AuthHandler, userHandler *handler.UserHandler, cfg *config.Config, logger *zap.Logger) *gin.Engine {
 	router := gin.New()
-
-	// Use middlewares
 	router.Use(gin.Recovery())
 	router.Use(middleware.Logger(logger))
+	router.Use(middleware.ErrorHandler())
 
-	// Health check
-	router.GET("/health", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{"status": "healthy"})
-	})
-
-	// API routes
-	v1 := router.Group("/api/v1")
+	// Public routes that don't require authentication
+	publicRoutes := router.Group("/api")
 	{
-		// Auth routes
-		auth := v1.Group("/auth")
+		auth := publicRoutes.Group("/auth")
 		{
-			authHandler := handler.NewAuthHandler(authService, logger)
 			auth.POST("/register", authHandler.Register)
 			auth.POST("/login", authHandler.Login)
-			auth.POST("/refresh-token", authHandler.RefreshToken)
+			auth.POST("/refresh", authHandler.RefreshToken)
 		}
+	}
 
-		// User routes (protected)
-		user := v1.Group("/users")
+	// Protected routes that require authentication
+	protectedRoutes := router.Group("/api")
+	protectedRoutes.Use(middleware.Auth(cfg.Auth.JWTSecret, logger))
+	{
+		users := protectedRoutes.Group("/users")
 		{
-			userHandler := handler.NewUserHandler(userService, logger)
-			user.Use(middleware.AuthMiddleware(authService, logger))
+			users.GET("/me", userHandler.GetCurrentUser)
+			users.PUT("/me", userHandler.UpdateUser)
+			users.POST("/change-password", userHandler.ChangePassword)
 
-			user.GET("/me", userHandler.GetCurrentUser)
-			user.PUT("/me", userHandler.UpdateCurrentUser)
-			user.PUT("/me/password", userHandler.ChangePassword)
-		}
-
-		// Admin routes (protected with role check)
-		admin := v1.Group("/admin")
-		{
-			admin.Use(middleware.AuthMiddleware(authService, logger))
-			admin.Use(middleware.RequireRole(userService, "admin"))
-
-			userHandler := handler.NewUserHandler(userService, logger)
-			admin.GET("/users", userHandler.ListUsers)
-			admin.GET("/users/:id", userHandler.GetUserByID)
-			admin.PUT("/users/:id", userHandler.UpdateUser)
+			// Admin only routes
+			adminRoutes := users.Group("/")
+			adminRoutes.Use(middleware.AdminRequired())
+			{
+				adminRoutes.GET("", userHandler.ListUsers)
+			}
 		}
 	}
 

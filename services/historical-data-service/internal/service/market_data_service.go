@@ -2,25 +2,32 @@ package service
 
 import (
 	"context"
-	"errors"
 	"time"
 
+	"services/historical-data-service/internal/client"
 	"services/historical-data-service/internal/model"
 	"services/historical-data-service/internal/repository"
 
+	sharedErrors "github.com/yourorg/trading-platform/shared/go/errors"
 	"go.uber.org/zap"
 )
 
 // MarketDataService handles market data operations
 type MarketDataService struct {
 	marketDataRepo *repository.MarketDataRepository
+	validator      *client.ValidatorClient
 	logger         *zap.Logger
 }
 
 // NewMarketDataService creates a new market data service
-func NewMarketDataService(marketDataRepo *repository.MarketDataRepository, logger *zap.Logger) *MarketDataService {
+func NewMarketDataService(
+	marketDataRepo *repository.MarketDataRepository,
+	validator *client.ValidatorClient,
+	logger *zap.Logger,
+) *MarketDataService {
 	return &MarketDataService{
 		marketDataRepo: marketDataRepo,
+		validator:      validator,
 		logger:         logger,
 	}
 }
@@ -30,9 +37,14 @@ func (s *MarketDataService) GetMarketData(
 	ctx context.Context,
 	query *model.MarketDataQuery,
 ) ([]model.MarketData, error) {
-	// Validate query
+	// Validate query with shared validator
+	if err := s.validator.Validate(query); err != nil {
+		return nil, err
+	}
+
+	// Additional validation
 	if query.SymbolID <= 0 || query.TimeframeID <= 0 {
-		return nil, errors.New("invalid symbol ID or timeframe ID")
+		return nil, sharedErrors.NewValidationError("invalid symbol ID or timeframe ID")
 	}
 
 	// Get market data
@@ -58,11 +70,11 @@ func (s *MarketDataService) ImportMarketData(
 ) error {
 	// Validate request
 	if request.SymbolID <= 0 || request.TimeframeID <= 0 {
-		return errors.New("invalid symbol ID or timeframe ID")
+		return sharedErrors.NewValidationError("invalid symbol ID or timeframe ID")
 	}
 
 	if len(request.Data) == 0 {
-		return errors.New("no data provided")
+		return sharedErrors.NewValidationError("no data provided")
 	}
 
 	// Insert market data

@@ -7,6 +7,9 @@ import (
 	"services/historical-data-service/internal/model"
 	"services/historical-data-service/internal/service"
 
+	sharedModel "github.com/yourorg/trading-platform/shared/go/model"
+	"github.com/yourorg/trading-platform/shared/go/response"
+
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 )
@@ -29,14 +32,19 @@ func NewBacktestHandler(backtestService *service.BacktestService, logger *zap.Lo
 func (h *BacktestHandler) CreateBacktest(c *gin.Context) {
 	var request model.BacktestRequest
 	if err := c.ShouldBindJSON(&request); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		validationErrors := parseValidationErrors(err)
+		if validationErrors != nil {
+			c.JSON(http.StatusBadRequest, validationErrors)
+		} else {
+			response.BadRequest(c, err.Error())
+		}
 		return
 	}
 
 	// Get user ID and token from context
 	userID, exists := c.Get("userID")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		response.Unauthorized(c, "User not authenticated")
 		return
 	}
 
@@ -56,11 +64,11 @@ func (h *BacktestHandler) CreateBacktest(c *gin.Context) {
 			zap.Error(err),
 			zap.Int("userID", userID.(int)),
 			zap.Int("strategyID", request.StrategyID))
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		response.BadRequest(c, err.Error())
 		return
 	}
 
-	c.JSON(http.StatusAccepted, gin.H{
+	response.Accepted(c, gin.H{
 		"backtest_id": backtestID,
 		"message":     "Backtest created and queued for processing",
 	})
@@ -72,14 +80,14 @@ func (h *BacktestHandler) GetBacktest(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.Atoi(idStr)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid backtest ID"})
+		response.BadRequest(c, "Invalid backtest ID")
 		return
 	}
 
 	// Get user ID from context
 	userID, exists := c.Get("userID")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		response.Unauthorized(c, "")
 		return
 	}
 
@@ -90,28 +98,48 @@ func (h *BacktestHandler) GetBacktest(c *gin.Context) {
 			zap.Error(err),
 			zap.Int("id", id),
 			zap.Int("userID", userID.(int)))
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		response.Error(c, err)
 		return
 	}
 
 	if backtest == nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Backtest not found"})
+		response.NotFound(c, "Backtest not found")
 		return
 	}
 
-	c.JSON(http.StatusOK, backtest)
+	response.Success(c, backtest)
 }
 
 // ListBacktests handles listing backtests for a user
 func (h *BacktestHandler) ListBacktests(c *gin.Context) {
-	// Parse query parameters
-	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "10"))
+	// Get pagination from context (assuming this is set by a middleware)
+	pagination, exists := c.Get("pagination")
+	if !exists {
+		// If not set by middleware, extract it manually
+		pagination = &sharedModel.Pagination{
+			Page:    sharedModel.PaginationDefaults.Page,
+			PerPage: sharedModel.PaginationDefaults.PerPage,
+		}
+
+		// Extract page parameter
+		if pageStr := c.Query("page"); pageStr != "" {
+			if page, err := strconv.Atoi(pageStr); err == nil && page > 0 {
+				pagination.(*sharedModel.Pagination).Page = page
+			}
+		}
+
+		// Extract per_page parameter
+		if perPageStr := c.Query("per_page"); perPageStr != "" {
+			if perPage, err := strconv.Atoi(perPageStr); err == nil && perPage > 0 {
+				pagination.(*sharedModel.Pagination).PerPage = perPage
+			}
+		}
+	}
 
 	// Get user ID from context
 	userID, exists := c.Get("userID")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		response.Unauthorized(c, "User not authenticated")
 		return
 	}
 
@@ -119,25 +147,23 @@ func (h *BacktestHandler) ListBacktests(c *gin.Context) {
 	backtests, total, err := h.backtestService.ListBacktests(
 		c.Request.Context(),
 		userID.(int),
-		page,
-		limit,
+		pagination.(*sharedModel.Pagination).Page,
+		pagination.(*sharedModel.Pagination).PerPage,
 	)
 
 	if err != nil {
 		h.logger.Error("Failed to list backtests",
 			zap.Error(err),
 			zap.Int("userID", userID.(int)))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve backtests"})
+		response.Error(c, err)
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
+	meta := sharedModel.NewPaginationMeta(pagination.(*sharedModel.Pagination), total)
+
+	response.Success(c, gin.H{
 		"backtests": backtests,
-		"meta": gin.H{
-			"total": total,
-			"page":  page,
-			"limit": limit,
-		},
+		"meta":      meta,
 	})
 }
 
@@ -147,14 +173,14 @@ func (h *BacktestHandler) DeleteBacktest(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.Atoi(idStr)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid backtest ID"})
+		response.BadRequest(c, "Invalid backtest ID")
 		return
 	}
 
 	// Get user ID from context
 	userID, exists := c.Get("userID")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		response.Unauthorized(c, "")
 		return
 	}
 
@@ -165,9 +191,17 @@ func (h *BacktestHandler) DeleteBacktest(c *gin.Context) {
 			zap.Error(err),
 			zap.Int("id", id),
 			zap.Int("userID", userID.(int)))
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		response.Error(c, err)
 		return
 	}
 
-	c.Status(http.StatusNoContent)
+	response.NoContent(c)
+}
+
+// Helper function to parse validation errors from binding errors
+func parseValidationErrors(err error) *sharedModel.ValidationErrors {
+	// Implementation depends on the validation library used
+	// For gin's default validator, you would extract field errors
+	// This is a simplified example
+	return nil
 }

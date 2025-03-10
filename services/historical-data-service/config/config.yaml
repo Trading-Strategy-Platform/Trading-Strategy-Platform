@@ -38,3 +38,6 @@ serviceKey: historical-service-key
 logging:
   level: debug
   format: json
+
+auth:
+  jwt_secret: "your-jwt-secret-here"

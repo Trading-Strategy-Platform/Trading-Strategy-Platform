@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/yourorg/trading-platform/shared/go/logging"
 	"go.uber.org/zap"
 )
 
@@ -28,4 +29,9 @@ func Logger(logger *zap.Logger) gin.HandlerFunc {
 			zap.String("user_agent", c.Request.UserAgent()),
 		)
 	}
+}
+
+// NewLogger creates a new logger for the User Service
+func NewLogger(config *logging.Config) (*zap.Logger, error) {
+	return logging.NewLogger(config)
 }

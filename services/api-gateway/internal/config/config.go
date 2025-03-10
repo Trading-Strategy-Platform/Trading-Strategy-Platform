@@ -5,16 +5,21 @@ import (
 	"time"
 
 	"github.com/spf13/viper"
+	sharedConfig "github.com/yourorg/trading-platform/shared/go/config"
 )
 
 // Config holds all configuration for the API Gateway
 type Config struct {
-	Server            ServerConfig
-	UserService       ServiceConfig
-	StrategyService   ServiceConfig
-	HistoricalService ServiceConfig
-	RateLimit         RateLimitConfig
-	Logging           LoggingConfig
+	Server              ServerConfig
+	UserService         ServiceConfig
+	StrategyService     ServiceConfig
+	HistoricalService   ServiceConfig
+	RateLimit           RateLimitConfig
+	Logging             LoggingConfig
+	Auth                AuthConfig
+	ExecutionService    ServiceConfig
+	NotificationService ServiceConfig
+	Kafka               KafkaConfig
 }
 
 // ServerConfig holds server specific configuration
@@ -45,21 +50,32 @@ type LoggingConfig struct {
 	Format string
 }
 
+// AuthConfig contains authentication configuration
+type AuthConfig struct {
+	Enabled            bool     `yaml:"enabled"`
+	JWTSecret          string   `yaml:"jwt_secret"`
+	ExcludedPaths      []string `yaml:"excluded_paths"`
+	PublicPaths        []string `yaml:"public_paths"`
+	AdminRequiredPaths []string `yaml:"admin_required_paths"`
+}
+
+// KafkaConfig holds configuration for Kafka
+type KafkaConfig struct {
+	Brokers string
+	Topics  map[string]string
+	Enabled bool
+}
+
 // LoadConfig loads the configuration from file and environment variables
 func LoadConfig(path string) (*Config, error) {
-	v := viper.New()
-
-	// Set defaults
-	setDefaults(v)
-
-	// Read config file
-	v.SetConfigFile(path)
-	if err := v.ReadInConfig(); err != nil {
-		return nil, fmt.Errorf("failed to read config file: %w", err)
+	// Use shared config loader
+	v, err := sharedConfig.Load(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load config: %w", err)
 	}
 
-	// Environment variables override
-	v.AutomaticEnv()
+	// Add service specific defaults
+	setServiceDefaults(v)
 
 	var cfg Config
 	if err := v.Unmarshal(&cfg); err != nil {
@@ -69,17 +85,16 @@ func LoadConfig(path string) (*Config, error) {
 	return &cfg, nil
 }
 
-// setDefaults sets default values for configuration
-func setDefaults(v *viper.Viper) {
-	// Server defaults
-	v.SetDefault("server.port", "8080")
-	v.SetDefault("server.readTimeout", "10s")
-	v.SetDefault("server.writeTimeout", "10s")
-	v.SetDefault("server.idleTimeout", "120s")
-
+// setServiceDefaults sets service-specific default values
+func setServiceDefaults(v *viper.Viper) {
 	// Service defaults
+	v.SetDefault("userService.url", "http://user-service:8080")
 	v.SetDefault("userService.timeout", "10s")
+
+	v.SetDefault("strategyService.url", "http://strategy-service:8080")
 	v.SetDefault("strategyService.timeout", "10s")
+
+	v.SetDefault("historicalService.url", "http://historical-data-service:8080")
 	v.SetDefault("historicalService.timeout", "30s")
 
 	// Rate limit defaults
@@ -88,7 +103,13 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("rateLimit.burstSize", 10)
 	v.SetDefault("rateLimit.clientIPHeaderName", "X-Real-IP")
 
-	// Logging defaults
-	v.SetDefault("logging.level", "info")
-	v.SetDefault("logging.format", "json")
+	// Auth defaults
+	v.SetDefault("auth.enabled", true)
+
+	// Kafka defaults
+	v.SetDefault("kafka.enabled", true)
+	v.SetDefault("kafka.brokers", "kafka:9092")
+	v.SetDefault("kafka.topics.userEvents", "user-events")
+	v.SetDefault("kafka.topics.apiMetrics", "api-metrics")
+	v.SetDefault("kafka.topics.systemEvents", "system-events")
 }

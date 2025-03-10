@@ -294,3 +294,103 @@ func (r *BacktestRepository) GetQueuedBacktests(
 
 	return backtests, nil
 }
+
+// ListBacktests lists backtests for a user with pagination
+func (r *BacktestRepository) ListBacktests(
+	ctx context.Context,
+	userID int,
+	limit int,
+	offset int,
+) ([]model.Backtest, int, error) {
+	query := `
+		SELECT 
+			id, user_id, strategy_id, strategy_name, strategy_version,
+			symbol_id, timeframe_id, start_date, end_date, initial_capital,
+			status, results, error_message, created_at, updated_at, completed_at
+		FROM backtests
+		WHERE user_id = $1
+		ORDER BY created_at DESC
+		LIMIT $2 OFFSET $3
+	`
+
+	countQuery := `
+		SELECT COUNT(*)
+		FROM backtests
+		WHERE user_id = $1
+	`
+
+	// Get total count
+	var total int
+	err := r.db.GetContext(ctx, &total, countQuery, userID)
+	if err != nil {
+		r.logger.Error("Failed to count backtests",
+			zap.Error(err),
+			zap.Int("userID", userID))
+		return nil, 0, err
+	}
+
+	// Execute main query
+	var backtests []model.Backtest
+	err = r.db.SelectContext(ctx, &backtests, query, userID, limit, offset)
+	if err != nil {
+		r.logger.Error("Failed to list backtests",
+			zap.Error(err),
+			zap.Int("userID", userID))
+		return nil, 0, err
+	}
+
+	return backtests, total, nil
+}
+
+// GetBacktestByID retrieves a backtest by its ID
+func (r *BacktestRepository) GetBacktestByID(ctx context.Context, id int) (*model.Backtest, error) {
+	query := `
+		SELECT id, user_id, strategy_id, strategy_version, symbol_id, timeframe_id, 
+		       start_date, end_date, status, results, error_message, created_at, completed_at
+		FROM backtests
+		WHERE id = $1
+	`
+
+	var backtest model.Backtest
+	err := r.db.GetContext(ctx, &backtest, query, id)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		r.logger.Error("Failed to get backtest by ID", zap.Error(err), zap.Int("id", id))
+		return nil, err
+	}
+
+	return &backtest, nil
+}
+
+// UpdateBacktestErrorMessage updates a backtest's error message
+func (r *BacktestRepository) UpdateBacktestErrorMessage(ctx context.Context, id int, errorMessage string) error {
+	query := `UPDATE backtests SET error_message = $1 WHERE id = $2`
+
+	_, err := r.db.ExecContext(ctx, query, errorMessage, id)
+	if err != nil {
+		r.logger.Error("Failed to update backtest error message",
+			zap.Error(err),
+			zap.Int("id", id),
+			zap.String("error_message", errorMessage))
+		return err
+	}
+
+	return nil
+}
+
+// MarkBacktestCompleted marks a backtest as completed by setting the completed_at timestamp
+func (r *BacktestRepository) MarkBacktestCompleted(ctx context.Context, id int) error {
+	query := `UPDATE backtests SET completed_at = NOW() WHERE id = $2`
+
+	_, err := r.db.ExecContext(ctx, query, id)
+	if err != nil {
+		r.logger.Error("Failed to mark backtest as completed",
+			zap.Error(err),
+			zap.Int("id", id))
+		return err
+	}
+
+	return nil
+}

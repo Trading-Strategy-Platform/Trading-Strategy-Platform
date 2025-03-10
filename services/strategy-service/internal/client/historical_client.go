@@ -2,40 +2,39 @@
 package client
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"time"
 
 	"services/strategy-service/internal/model"
 
+	"github.com/yourorg/trading-platform/shared/go/httpclient"
 	"go.uber.org/zap"
 )
 
 // HistoricalClient handles communication with the Historical Data Service
 type HistoricalClient struct {
-	baseURL    string
-	httpClient *http.Client
-	logger     *zap.Logger
+	client *httpclient.Client
+	logger *zap.Logger
 }
 
 // NewHistoricalClient creates a new Historical Data Service client
 func NewHistoricalClient(baseURL string, logger *zap.Logger) *HistoricalClient {
+	client := httpclient.New(httpclient.Config{
+		BaseURL:    baseURL,
+		Timeout:    30 * time.Second,
+		ServiceKey: "strategy-service-key",
+	}, logger)
+
 	return &HistoricalClient{
-		baseURL: baseURL,
-		httpClient: &http.Client{
-			Timeout: 10 * time.Second,
-		},
+		client: client,
 		logger: logger,
 	}
 }
 
 // CreateBacktest sends a backtest request to the Historical Data Service
 func (c *HistoricalClient) CreateBacktest(ctx context.Context, request *model.BacktestRequest, userID int) (int, error) {
-	url := fmt.Sprintf("%s/api/v1/backtests", c.baseURL)
-
 	// Create the request payload
 	payload := struct {
 		StrategyID      int             `json:"strategy_id"`
@@ -46,7 +45,7 @@ func (c *HistoricalClient) CreateBacktest(ctx context.Context, request *model.Ba
 		EndDate         time.Time       `json:"end_date"`
 		InitialCapital  float64         `json:"initial_capital"`
 		UserID          int             `json:"user_id"`
-		Strategy        json.RawMessage `json:"strategy"`
+		Strategy        json.RawMessage `json:"strategy,omitempty"`
 	}{
 		StrategyID:      request.StrategyID,
 		StrategyVersion: 1, // Default to latest version
@@ -56,54 +55,61 @@ func (c *HistoricalClient) CreateBacktest(ctx context.Context, request *model.Ba
 		EndDate:         request.EndDate,
 		InitialCapital:  request.InitialCapital,
 		UserID:          userID,
-		// Strategy structure would be set later
 	}
 
-	// Serialize the payload
-	payloadBytes, err := json.Marshal(payload)
-	if err != nil {
-		c.logger.Error("Failed to marshal backtest request", zap.Error(err))
-		return 0, err
-	}
+	// Add service key to context
+	serviceCtx := context.WithValue(ctx, "service_key", "strategy-service-key")
 
-	// Create the HTTP request
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewBuffer(payloadBytes))
-	if err != nil {
-		return 0, err
-	}
-
-	// Add headers
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Service-Key", "strategy-service-key")
-
-	// Send the request
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		c.logger.Error("Failed to send backtest request", zap.Error(err))
-		return 0, err
-	}
-	defer resp.Body.Close()
-
-	// Check response status
-	if resp.StatusCode != http.StatusAccepted {
-		c.logger.Error("Historical service returned unexpected status",
-			zap.Int("status_code", resp.StatusCode))
-		return 0, fmt.Errorf("historical service returned status code %d", resp.StatusCode)
-	}
-
-	// Parse response
 	var response struct {
-		BacktestID int    `json:"backtest_id"`
-		Message    string `json:"message"`
+		ID int `json:"id"`
 	}
 
-	err = json.NewDecoder(resp.Body).Decode(&response)
+	err := c.client.Post(serviceCtx, "/api/v1/backtests", payload, &response)
 	if err != nil {
-		c.logger.Error("Failed to decode backtest response", zap.Error(err))
+		c.logger.Error("Failed to create backtest request",
+			zap.Int("strategyID", request.StrategyID),
+			zap.Int("userID", userID),
+			zap.Error(err))
 		return 0, err
 	}
 
-	return response.BacktestID, nil
+	return response.ID, nil
+}
+
+// GetBacktestStatus retrieves the status of a backtest
+func (c *HistoricalClient) GetBacktestStatus(ctx context.Context, backtestID int) (string, error) {
+	path := fmt.Sprintf("/api/v1/backtests/%d/status", backtestID)
+
+	var response struct {
+		Status string `json:"status"`
+	}
+
+	err := c.client.Get(ctx, path, &response)
+	if err != nil {
+		c.logger.Error("Failed to get backtest status",
+			zap.Int("backtestID", backtestID),
+			zap.Error(err))
+		return "", err
+	}
+
+	return response.Status, nil
+}
+
+// GetBacktestResults retrieves the results of a completed backtest
+func (c *HistoricalClient) GetBacktestResults(ctx context.Context, backtestID int) (*model.BacktestResult, error) {
+	path := fmt.Sprintf("/api/v1/backtests/%d/results", backtestID)
+
+	var result model.BacktestResult
+
+	err := c.client.Get(ctx, path, &result)
+	if err != nil {
+		c.logger.Error("Failed to get backtest results",
+			zap.Int("backtestID", backtestID),
+			zap.Error(err))
+		return nil, err
+	}
+
+	return &result, nil
 }
 
 // GetSymbols retrieves available trading symbols
@@ -113,25 +119,7 @@ func (c *HistoricalClient) GetSymbols(ctx context.Context) ([]struct {
 	Name     string `json:"name"`
 	Exchange string `json:"exchange"`
 }, error) {
-	url := fmt.Sprintf("%s/api/v1/symbols", c.baseURL)
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	req.Header.Set("X-Service-Key", "strategy-service-key")
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		c.logger.Error("Failed to get symbols", zap.Error(err))
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("historical service returned status code %d", resp.StatusCode)
-	}
+	path := "/api/v1/symbols"
 
 	var symbols []struct {
 		ID       int    `json:"id"`
@@ -140,9 +128,9 @@ func (c *HistoricalClient) GetSymbols(ctx context.Context) ([]struct {
 		Exchange string `json:"exchange"`
 	}
 
-	err = json.NewDecoder(resp.Body).Decode(&symbols)
+	err := c.client.Get(ctx, path, &symbols)
 	if err != nil {
-		c.logger.Error("Failed to decode symbols response", zap.Error(err))
+		c.logger.Error("Failed to get symbols", zap.Error(err))
 		return nil, err
 	}
 
@@ -156,25 +144,7 @@ func (c *HistoricalClient) GetTimeframes(ctx context.Context) ([]struct {
 	Minutes     int    `json:"minutes"`
 	DisplayName string `json:"display_name"`
 }, error) {
-	url := fmt.Sprintf("%s/api/v1/timeframes", c.baseURL)
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	req.Header.Set("X-Service-Key", "strategy-service-key")
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		c.logger.Error("Failed to get timeframes", zap.Error(err))
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("historical service returned status code %d", resp.StatusCode)
-	}
+	path := "/api/v1/timeframes"
 
 	var timeframes []struct {
 		ID          int    `json:"id"`
@@ -183,9 +153,9 @@ func (c *HistoricalClient) GetTimeframes(ctx context.Context) ([]struct {
 		DisplayName string `json:"display_name"`
 	}
 
-	err = json.NewDecoder(resp.Body).Decode(&timeframes)
+	err := c.client.Get(ctx, path, &timeframes)
 	if err != nil {
-		c.logger.Error("Failed to decode timeframes response", zap.Error(err))
+		c.logger.Error("Failed to get timeframes", zap.Error(err))
 		return nil, err
 	}
 

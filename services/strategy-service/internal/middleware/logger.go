@@ -5,49 +5,34 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/yourorg/trading-platform/shared/go/logging"
 	"go.uber.org/zap"
 )
 
-// Logger creates a middleware for logging HTTP requests
-func Logger(logger *zap.Logger) gin.HandlerFunc {
+// LoggerMiddleware logs request information
+func LoggerMiddleware(logger *zap.Logger) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		start := time.Now()
 		path := c.Request.URL.Path
-		query := c.Request.URL.RawQuery
+		method := c.Request.Method
 
-		// Process request
 		c.Next()
 
-		// Log after the request is processed
-		latency := time.Since(start)
-		status := c.Writer.Status()
-		clientIP := c.ClientIP()
-		method := c.Request.Method
-		userID, _ := c.Get("userID")
+		end := time.Now()
+		latency := end.Sub(start)
+		statusCode := c.Writer.Status()
 
-		if query != "" {
-			path = path + "?" + query
-		}
-
-		fields := []zap.Field{
-			zap.Int("status", status),
-			zap.String("method", method),
+		logger.Info("Request processed",
 			zap.String("path", path),
-			zap.String("client_ip", clientIP),
+			zap.String("method", method),
+			zap.Int("status", statusCode),
 			zap.Duration("latency", latency),
-		}
-
-		if userID != nil {
-			fields = append(fields, zap.Int("user_id", userID.(int)))
-		}
-
-		// Log with appropriate level based on status code
-		if status >= 500 {
-			logger.Error("Server error", fields...)
-		} else if status >= 400 {
-			logger.Warn("Client error", fields...)
-		} else {
-			logger.Info("Request completed", fields...)
-		}
+			zap.String("ip", c.ClientIP()),
+		)
 	}
+}
+
+// NewLogger creates a new logger for the Strategy Service
+func NewLogger(config *logging.Config) (*zap.Logger, error) {
+	return logging.NewLogger(config)
 }

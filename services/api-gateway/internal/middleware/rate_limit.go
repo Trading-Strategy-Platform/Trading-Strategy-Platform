@@ -1,11 +1,12 @@
 package middleware
 
 import (
-	"net/http"
 	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	sharedErrors "github.com/yourorg/trading-platform/shared/go/errors"
+	"github.com/yourorg/trading-platform/shared/go/response"
 )
 
 // RateLimiter implements a token bucket rate limiting algorithm
@@ -79,9 +80,9 @@ func RateLimit(requestsPerMinute, burstSize int) gin.HandlerFunc {
 
 		// Check if request is allowed
 		if !limiter.Allow(clientIP) {
-			c.JSON(http.StatusTooManyRequests, gin.H{
-				"error": "Rate limit exceeded. Try again later.",
-			})
+			// Use validation error since there's no dedicated rate limit error
+			c.Error(sharedErrors.NewValidationError("Rate limit exceeded"))
+			response.TooManyRequests(c, "Rate limit exceeded. Try again later.")
 			c.Abort()
 			return
 		}

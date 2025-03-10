@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/yourorg/trading-platform/shared/go/logging"
 	"go.uber.org/zap"
 )
 
@@ -47,4 +48,9 @@ func Logger(logger *zap.Logger) gin.HandlerFunc {
 			logger.Info("Request completed", fields...)
 		}
 	}
+}
+
+// NewLogger creates a new logger for the API Gateway service
+func NewLogger(config *logging.Config) (*zap.Logger, error) {
+	return logging.NewLogger(config)
 }

@@ -1,13 +1,13 @@
 package handler
 
 import (
-	"net/http"
 	"strconv"
 
 	"services/historical-data-service/internal/model"
 	"services/historical-data-service/internal/service"
 
 	"github.com/gin-gonic/gin"
+	"github.com/yourorg/trading-platform/shared/go/response"
 	"go.uber.org/zap"
 )
 
@@ -25,64 +25,66 @@ func NewSymbolHandler(symbolService *service.SymbolService, logger *zap.Logger) 
 	}
 }
 
-// GetAllSymbols handles retrieving all symbols
+// GetAllSymbols handles fetching all symbols
 func (h *SymbolHandler) GetAllSymbols(c *gin.Context) {
 	symbols, err := h.symbolService.GetAllSymbols(c.Request.Context())
 	if err != nil {
-		h.logger.Error("Failed to get all symbols", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve symbols"})
+		h.logger.Error("Failed to get symbols", zap.Error(err))
+		response.Error(c, err)
 		return
 	}
 
-	c.JSON(http.StatusOK, symbols)
+	response.Success(c, symbols)
 }
 
-// GetSymbol handles retrieving a symbol by ID
-func (h *SymbolHandler) GetSymbol(c *gin.Context) {
-	// Parse path parameter
+// GetSymbolByID handles fetching a symbol by ID
+func (h *SymbolHandler) GetSymbolByID(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.Atoi(idStr)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid symbol ID"})
+		response.BadRequest(c, "Invalid symbol ID")
 		return
 	}
 
-	// Get symbol
 	symbol, err := h.symbolService.GetSymbolByID(c.Request.Context(), id)
 	if err != nil {
 		h.logger.Error("Failed to get symbol", zap.Error(err), zap.Int("id", id))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve symbol"})
+		response.Error(c, err)
 		return
 	}
 
 	if symbol == nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Symbol not found"})
+		response.NotFound(c, "Symbol not found")
 		return
 	}
 
-	c.JSON(http.StatusOK, symbol)
+	response.Success(c, symbol)
 }
 
 // CreateSymbol handles creating a new symbol
 func (h *SymbolHandler) CreateSymbol(c *gin.Context) {
 	var symbol model.Symbol
 	if err := c.ShouldBindJSON(&symbol); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		response.BadRequest(c, err.Error())
 		return
 	}
 
-	// Create symbol
+	// Only admin users should be able to create symbols
+	userRole, exists := c.Get("userRole")
+	if !exists || userRole.(string) != "admin" {
+		response.Forbidden(c, "Admin access required")
+		return
+	}
+
 	id, err := h.symbolService.CreateSymbol(c.Request.Context(), &symbol)
 	if err != nil {
 		h.logger.Error("Failed to create symbol", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create symbol: " + err.Error()})
+		response.Error(c, err)
 		return
 	}
 
-	// Set the ID in the response
 	symbol.ID = id
-
-	c.JSON(http.StatusCreated, symbol)
+	response.Created(c, symbol)
 }
 
 // TimeframeHandler handles timeframe HTTP requests
@@ -99,62 +101,64 @@ func NewTimeframeHandler(timeframeService *service.TimeframeService, logger *zap
 	}
 }
 
-// GetAllTimeframes handles retrieving all timeframes
+// GetAllTimeframes handles fetching all timeframes
 func (h *TimeframeHandler) GetAllTimeframes(c *gin.Context) {
 	timeframes, err := h.timeframeService.GetAllTimeframes(c.Request.Context())
 	if err != nil {
-		h.logger.Error("Failed to get all timeframes", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve timeframes"})
+		h.logger.Error("Failed to get timeframes", zap.Error(err))
+		response.Error(c, err)
 		return
 	}
 
-	c.JSON(http.StatusOK, timeframes)
+	response.Success(c, timeframes)
 }
 
-// GetTimeframe handles retrieving a timeframe by ID
-func (h *TimeframeHandler) GetTimeframe(c *gin.Context) {
-	// Parse path parameter
+// GetTimeframeByID handles fetching a timeframe by ID
+func (h *TimeframeHandler) GetTimeframeByID(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.Atoi(idStr)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid timeframe ID"})
+		response.BadRequest(c, "Invalid timeframe ID")
 		return
 	}
 
-	// Get timeframe
 	timeframe, err := h.timeframeService.GetTimeframeByID(c.Request.Context(), id)
 	if err != nil {
 		h.logger.Error("Failed to get timeframe", zap.Error(err), zap.Int("id", id))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve timeframe"})
+		response.Error(c, err)
 		return
 	}
 
 	if timeframe == nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Timeframe not found"})
+		response.NotFound(c, "Timeframe not found")
 		return
 	}
 
-	c.JSON(http.StatusOK, timeframe)
+	response.Success(c, timeframe)
 }
 
 // CreateTimeframe handles creating a new timeframe
 func (h *TimeframeHandler) CreateTimeframe(c *gin.Context) {
 	var timeframe model.Timeframe
 	if err := c.ShouldBindJSON(&timeframe); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		response.BadRequest(c, err.Error())
 		return
 	}
 
-	// Create timeframe
+	// Only admin users should be able to create timeframes
+	userRole, exists := c.Get("userRole")
+	if !exists || userRole.(string) != "admin" {
+		response.Forbidden(c, "Admin access required")
+		return
+	}
+
 	id, err := h.timeframeService.CreateTimeframe(c.Request.Context(), &timeframe)
 	if err != nil {
 		h.logger.Error("Failed to create timeframe", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create timeframe: " + err.Error()})
+		response.Error(c, err)
 		return
 	}
 
-	// Set the ID in the response
 	timeframe.ID = id
-
-	c.JSON(http.StatusCreated, timeframe)
+	response.Created(c, timeframe)
 }

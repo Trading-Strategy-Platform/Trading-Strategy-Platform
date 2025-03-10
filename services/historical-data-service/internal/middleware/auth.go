@@ -7,11 +7,21 @@ import (
 	"services/historical-data-service/internal/client"
 
 	"github.com/gin-gonic/gin"
+	"github.com/yourorg/trading-platform/shared/go/auth"
 	"go.uber.org/zap"
 )
 
 // AuthMiddleware creates middleware to authenticate users
-func AuthMiddleware(userClient *client.UserClient, logger *zap.Logger) gin.HandlerFunc {
+func AuthMiddleware(userClient *client.UserClient, logger *zap.Logger, jwtSecret string) gin.HandlerFunc {
+	// Use the shared auth middleware if JWT secret is provided
+	if jwtSecret != "" {
+		return auth.Middleware(auth.Config{
+			JWTSecret: jwtSecret,
+			Logger:    logger,
+		})
+	}
+
+	// Fall back to the user service validation if no JWT secret
 	return func(c *gin.Context) {
 		// Get token from Authorization header
 		authHeader := c.GetHeader("Authorization")
@@ -44,6 +54,11 @@ func AuthMiddleware(userClient *client.UserClient, logger *zap.Logger) gin.Handl
 		c.Set("token", token)
 		c.Next()
 	}
+}
+
+// RequireRole middleware checks if the user has the required role
+func RequireRole(userClient *client.UserClient, requiredRoles ...string) gin.HandlerFunc {
+	return auth.RequireRole(requiredRoles...)
 }
 
 // ServiceAuthMiddleware creates middleware to authenticate service-to-service calls

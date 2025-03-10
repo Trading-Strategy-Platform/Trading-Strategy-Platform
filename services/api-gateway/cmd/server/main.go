@@ -9,10 +9,12 @@ import (
 	"syscall"
 	"time"
 
+	"services/api-gateway/internal/client"
 	"services/api-gateway/internal/config"
 	"services/api-gateway/internal/handler"
 	"services/api-gateway/internal/middleware"
 	"services/api-gateway/internal/proxy"
+	"services/api-gateway/internal/service"
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -32,10 +34,23 @@ func main() {
 	}
 	defer logger.Sync()
 
+	// Create service client manager with temporary values for missing services
+	clientManager := client.NewServiceClientManager(
+		cfg.UserService.URL,
+		cfg.StrategyService.URL,
+		cfg.HistoricalService.URL,
+		"http://execution-service:8084",    // Temporary hardcoded value
+		"http://notification-service:8085", // Temporary hardcoded value
+		logger,
+	)
+
+	// Create service factory
+	serviceFactory := proxy.NewServiceFactory(clientManager, logger)
+
 	// Create service proxies
-	userServiceProxy := proxy.NewServiceProxy(cfg.UserService.URL, logger)
-	strategyServiceProxy := proxy.NewServiceProxy(cfg.StrategyService.URL, logger)
-	historicalServiceProxy := proxy.NewServiceProxy(cfg.HistoricalService.URL, logger)
+	userServiceProxy := serviceFactory.CreateUserServiceProxy()
+	strategyServiceProxy := serviceFactory.CreateStrategyServiceProxy()
+	historicalServiceProxy := serviceFactory.CreateHistoricalServiceProxy()
 
 	// Create the API gateway handler
 	gatewayHandler := handler.NewGatewayHandler(
@@ -45,8 +60,25 @@ func main() {
 		logger,
 	)
 
+	// Initialize Kafka service
+	kafkaService, err := service.NewKafkaService(
+		cfg.Kafka.Brokers,
+		cfg.Kafka.Topics,
+		cfg.Kafka.Enabled,
+		logger,
+	)
+	if err != nil {
+		logger.Fatal("Failed to create Kafka service", zap.Error(err))
+	}
+	defer kafkaService.Close()
+
 	// Set up HTTP server with Gin
 	router := setupRouter(gatewayHandler, cfg, logger)
+
+	// When setting up the router, add the metrics middleware
+	if cfg.Kafka.Enabled {
+		router.Use(middleware.MetricsMiddleware(kafkaService, logger))
+	}
 
 	srv := &http.Server{
 		Addr:         ":" + cfg.Server.Port,
@@ -122,6 +154,49 @@ func setupRouter(
 	router.Use(gin.Recovery())
 	router.Use(middleware.Logger(logger))
 	router.Use(middleware.CORS())
+	router.Use(middleware.ErrorHandler())
+
+	// Apply authentication middleware if enabled
+	if cfg.Auth.Enabled {
+		// Default paths that don't require authentication if not specified
+		excludedPaths := cfg.Auth.ExcludedPaths
+		if len(excludedPaths) == 0 {
+			excludedPaths = []string{
+				"/api/v1/auth/register",
+				"/api/v1/auth/login",
+				"/api/v1/health",
+				"/metrics",
+			}
+		}
+
+		// Default public paths (authenticated but no specific role required)
+		publicPaths := cfg.Auth.PublicPaths
+		if len(publicPaths) == 0 {
+			publicPaths = []string{
+				"/api/v1/user/profile",
+				"/api/v1/symbols",
+				"/api/v1/timeframes",
+			}
+		}
+
+		// Default paths that require admin role
+		adminRequiredPaths := cfg.Auth.AdminRequiredPaths
+		if len(adminRequiredPaths) == 0 {
+			adminRequiredPaths = []string{
+				"/api/v1/admin/*",
+				"/api/v1/users",
+			}
+		}
+
+		authConfig := middleware.AuthConfig{
+			JWTSecret:            cfg.Auth.JWTSecret,
+			ExcludedPaths:        excludedPaths,
+			PublicPaths:          publicPaths,
+			AdminRequiredPaths:   adminRequiredPaths,
+			EnableAuthentication: cfg.Auth.Enabled,
+		}
+		router.Use(middleware.AuthMiddleware(authConfig, logger))
+	}
 
 	// Rate limiting middleware (optional)
 	if cfg.RateLimit.Enabled {
@@ -136,39 +211,8 @@ func setupRouter(
 		c.JSON(http.StatusOK, gin.H{"status": "healthy"})
 	})
 
-	// API routes
-	api := router.Group("/api")
-	{
-		// User service routes
-		api.Any("/v1/auth/*path", gatewayHandler.ProxyUserService)
-		api.Any("/v1/users/*path", gatewayHandler.ProxyUserService)
-		api.Any("/v1/admin/*path", gatewayHandler.ProxyUserService)
-
-		// Strategy service routes
-		api.Any("/v1/strategies/*path", gatewayHandler.ProxyStrategyService)
-		api.Any("/v1/tags/*path", gatewayHandler.ProxyStrategyService)
-		api.Any("/v1/indicators/*path", gatewayHandler.ProxyStrategyService)
-		api.Any("/v1/marketplace/*path", gatewayHandler.ProxyStrategyService)
-
-		// Historical data service routes
-		api.Any("/v1/market-data/*path", gatewayHandler.ProxyHistoricalService)
-		api.Any("/v1/backtests/*path", gatewayHandler.ProxyHistoricalService)
-		api.Any("/v1/symbols/*path", gatewayHandler.ProxyHistoricalService)
-		api.Any("/v1/timeframes/*path", gatewayHandler.ProxyHistoricalService)
-
-		// Add version without trailing path
-		api.Any("/v1/auth", gatewayHandler.ProxyUserService)
-		api.Any("/v1/users", gatewayHandler.ProxyUserService)
-		api.Any("/v1/admin", gatewayHandler.ProxyUserService)
-		api.Any("/v1/strategies", gatewayHandler.ProxyStrategyService)
-		api.Any("/v1/tags", gatewayHandler.ProxyStrategyService)
-		api.Any("/v1/indicators", gatewayHandler.ProxyStrategyService)
-		api.Any("/v1/marketplace", gatewayHandler.ProxyStrategyService)
-		api.Any("/v1/market-data", gatewayHandler.ProxyHistoricalService)
-		api.Any("/v1/backtests", gatewayHandler.ProxyHistoricalService)
-		api.Any("/v1/symbols", gatewayHandler.ProxyHistoricalService)
-		api.Any("/v1/timeframes", gatewayHandler.ProxyHistoricalService)
-	}
+	// Register routes
+	gatewayHandler.RegisterRoutes(router)
 
 	return router
 }

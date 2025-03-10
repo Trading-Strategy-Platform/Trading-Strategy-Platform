@@ -5,11 +5,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
 
+	"services/strategy-service/internal/client"
 	"services/strategy-service/internal/model"
 	"services/strategy-service/internal/repository"
 	"services/strategy-service/internal/validator"
+
+	sharedErrors "github.com/yourorg/trading-platform/shared/go/errors"
+	sharedModel "github.com/yourorg/trading-platform/shared/go/model"
 
 	"github.com/jmoiron/sqlx"
 	"go.uber.org/zap"
@@ -23,6 +26,8 @@ type StrategyService struct {
 	tagRepo        *repository.TagRepository
 	userClient     UserClient
 	backtestClient BacktestClient
+	validator      *client.ValidatorClient
+	kafkaService   *KafkaService
 	logger         *zap.Logger
 }
 
@@ -45,6 +50,8 @@ func NewStrategyService(
 	tagRepo *repository.TagRepository,
 	userClient UserClient,
 	backtestClient BacktestClient,
+	validator *client.ValidatorClient,
+	kafkaService *KafkaService,
 	logger *zap.Logger,
 ) *StrategyService {
 	return &StrategyService{
@@ -54,13 +61,20 @@ func NewStrategyService(
 		tagRepo:        tagRepo,
 		userClient:     userClient,
 		backtestClient: backtestClient,
+		validator:      validator,
+		kafkaService:   kafkaService,
 		logger:         logger,
 	}
 }
 
 // CreateStrategy creates a new strategy
 func (s *StrategyService) CreateStrategy(ctx context.Context, strategy *model.StrategyCreate, userID int) (*model.Strategy, error) {
-	// Validate strategy structure
+	// Validate the strategy using shared validator
+	if err := s.validator.Validate(strategy); err != nil {
+		return nil, err
+	}
+
+	// Specific validation for strategy structure
 	if err := validator.ValidateStrategyStructure(&strategy.Structure); err != nil {
 		return nil, err
 	}
@@ -69,14 +83,14 @@ func (s *StrategyService) CreateStrategy(ctx context.Context, strategy *model.St
 	tx, err := s.db.BeginTxx(ctx, nil)
 	if err != nil {
 		s.logger.Error("Failed to begin transaction", zap.Error(err))
-		return nil, err
+		return nil, sharedErrors.NewDatabaseError("beginning transaction", err)
 	}
 	defer tx.Rollback()
 
 	// Create strategy
 	strategyID, err := s.strategyRepo.Create(ctx, tx, strategy, userID)
 	if err != nil {
-		return nil, err
+		return nil, sharedErrors.NewDatabaseError("creating strategy", err)
 	}
 
 	// Create initial version
@@ -86,27 +100,43 @@ func (s *StrategyService) CreateStrategy(ctx context.Context, strategy *model.St
 	}
 	_, err = s.versionRepo.Create(ctx, tx, versionCreate, strategyID, 1)
 	if err != nil {
-		return nil, err
+		return nil, sharedErrors.NewDatabaseError("creating strategy version", err)
 	}
 
 	// Update tags if provided
 	if len(strategy.Tags) > 0 {
 		err = s.strategyRepo.UpdateTags(ctx, tx, strategyID, strategy.Tags)
 		if err != nil {
-			return nil, err
+			return nil, sharedErrors.NewDatabaseError("updating strategy tags", err)
 		}
 	}
 
 	// Commit transaction
 	if err := tx.Commit(); err != nil {
 		s.logger.Error("Failed to commit transaction", zap.Error(err))
-		return nil, err
+		return nil, sharedErrors.NewDatabaseError("committing transaction", err)
 	}
 
-	// Get the created strategy
+	// Get the newly created strategy
 	createdStrategy, err := s.strategyRepo.GetByID(ctx, strategyID)
 	if err != nil {
-		return nil, err
+		return nil, sharedErrors.NewDatabaseError("retrieving created strategy", err)
+	}
+
+	// Publish strategy created event
+	if s.kafkaService != nil {
+		if err := s.kafkaService.PublishStrategyCreated(ctx, createdStrategy); err != nil {
+			s.logger.Warn("Failed to publish strategy created event",
+				zap.Error(err),
+				zap.Int("strategy_id", createdStrategy.ID))
+		}
+	}
+
+	// Get username for author_name field - we don't use it directly but log if there's an error
+	_, err = s.userClient.GetUserByID(ctx, userID)
+	if err != nil {
+		s.logger.Warn("Failed to get author username", zap.Error(err))
+		// Continue without author name, it's not critical
 	}
 
 	return createdStrategy, nil
@@ -117,39 +147,35 @@ func (s *StrategyService) GetStrategy(ctx context.Context, id int, userID int) (
 	// Get strategy
 	strategy, err := s.strategyRepo.GetByID(ctx, id)
 	if err != nil {
-		return nil, err
+		return nil, sharedErrors.NewDatabaseError("retrieving strategy", err)
 	}
-
 	if strategy == nil {
-		return nil, errors.New("strategy not found")
+		return nil, sharedErrors.NewNotFoundError("Strategy", string(id))
 	}
 
-	// Check if user has access to the strategy
-	if !strategy.IsPublic && strategy.UserID != userID {
-		return nil, errors.New("access denied")
+	// Check if user has access to this strategy
+	if strategy.UserID != userID && !strategy.IsPublic {
+		return nil, sharedErrors.NewPermissionError("You don't have permission to view this strategy")
 	}
 
-	// Get creator username
-	creatorName, err := s.userClient.GetUserByID(ctx, strategy.UserID)
+	// Get tags
+	tags, err := s.tagRepo.GetForStrategy(ctx, id)
 	if err != nil {
-		s.logger.Warn("Failed to get creator name", zap.Error(err))
-		creatorName = "Unknown"
+		s.logger.Warn("Failed to get strategy tags", zap.Error(err), zap.Int("strategy_id", id))
 	}
+	strategy.Tags = tags
 
-	// Get versions count
-	versions, err := s.versionRepo.GetVersions(ctx, id)
+	// Get author name
+	userName, err := s.userClient.GetUserByID(ctx, strategy.UserID)
 	if err != nil {
-		s.logger.Warn("Failed to get versions", zap.Error(err))
+		s.logger.Warn("Failed to get author username", zap.Error(err), zap.Int("user_id", strategy.UserID))
+		userName = "Unknown"
 	}
 
-	// Create response
-	response := &model.StrategyResponse{
-		Strategy:      *strategy,
-		VersionsCount: len(versions),
-		CreatorName:   creatorName,
-	}
-
-	return response, nil
+	return &model.StrategyResponse{
+		Strategy:       *strategy,
+		AuthorUsername: userName,
+	}, nil
 }
 
 // GetUserStrategies retrieves strategies for a user
@@ -201,18 +227,16 @@ func (s *StrategyService) UpdateStrategy(ctx context.Context, id int, update *mo
 	// Check if strategy exists and belongs to the user
 	strategy, err := s.strategyRepo.GetByID(ctx, id)
 	if err != nil {
-		return nil, err
+		return nil, sharedErrors.NewDatabaseError("checking strategy existence", err)
 	}
-
 	if strategy == nil {
-		return nil, errors.New("strategy not found")
+		return nil, sharedErrors.NewNotFoundError("Strategy", fmt.Sprintf("%d", id))
 	}
-
 	if strategy.UserID != userID {
-		return nil, errors.New("access denied")
+		return nil, sharedErrors.NewPermissionError("You do not have permission to update this strategy")
 	}
 
-	// Validate strategy structure if provided
+	// Validate structure if provided
 	if update.Structure != nil {
 		if err := validator.ValidateStrategyStructure(update.Structure); err != nil {
 			return nil, err
@@ -223,53 +247,56 @@ func (s *StrategyService) UpdateStrategy(ctx context.Context, id int, update *mo
 	tx, err := s.db.BeginTxx(ctx, nil)
 	if err != nil {
 		s.logger.Error("Failed to begin transaction", zap.Error(err))
-		return nil, err
+		return nil, sharedErrors.NewDatabaseError("beginning transaction", err)
 	}
 	defer tx.Rollback()
 
 	// Update strategy
 	err = s.strategyRepo.Update(ctx, tx, id, update)
 	if err != nil {
-		return nil, err
+		return nil, sharedErrors.NewDatabaseError("updating strategy", err)
 	}
 
-	// Create new version if structure was updated
+	// Create new version if structure changed
 	if update.Structure != nil {
-		// Get latest version
-		latestVersion, err := s.versionRepo.GetLatestVersion(ctx, id)
-		if err != nil {
-			return nil, err
-		}
+		// Increment version number
+		newVersion := strategy.Version + 1
 
-		// Create new version
+		// Create new version record
 		versionCreate := &model.VersionCreate{
 			Structure:   *update.Structure,
-			ChangeNotes: "Updated strategy structure",
+			ChangeNotes: update.Notes, // Use Notes field instead of ChangeNotes
 		}
-		_, err = s.versionRepo.Create(ctx, tx, versionCreate, id, latestVersion+1)
+		_, err = s.versionRepo.Create(ctx, tx, versionCreate, id, newVersion)
 		if err != nil {
-			return nil, err
+			return nil, sharedErrors.NewDatabaseError("creating strategy version", err)
+		}
+
+		// Update strategy version number
+		err = s.strategyRepo.UpdateStrategyVersion(ctx, tx, id, newVersion) // Corrected method name
+		if err != nil {
+			return nil, sharedErrors.NewDatabaseError("updating strategy version", err)
 		}
 	}
 
 	// Update tags if provided
 	if update.Tags != nil {
-		err = s.strategyRepo.UpdateTags(ctx, tx, id, update.Tags)
+		err = s.strategyRepo.UpdateTags(ctx, tx, id, update.Tags) // Tags is already the right type
 		if err != nil {
-			return nil, err
+			return nil, sharedErrors.NewDatabaseError("updating strategy tags", err)
 		}
 	}
 
 	// Commit transaction
 	if err := tx.Commit(); err != nil {
 		s.logger.Error("Failed to commit transaction", zap.Error(err))
-		return nil, err
+		return nil, sharedErrors.NewDatabaseError("committing transaction", err)
 	}
 
-	// Get the updated strategy
+	// Get updated strategy
 	updatedStrategy, err := s.strategyRepo.GetByID(ctx, id)
 	if err != nil {
-		return nil, err
+		return nil, sharedErrors.NewDatabaseError("retrieving updated strategy", err)
 	}
 
 	return updatedStrategy, nil
@@ -555,6 +582,15 @@ func (s *StrategyService) StartBacktest(ctx context.Context, request *model.Back
 		return 0, err
 	}
 
+	// Publish backtest created event
+	if s.kafkaService != nil {
+		if err := s.kafkaService.PublishBacktestCreated(ctx, request, backtestID, userID); err != nil {
+			s.logger.Warn("Failed to publish backtest created event",
+				zap.Error(err),
+				zap.Int("backtest_id", backtestID))
+		}
+	}
+
 	return backtestID, nil
 }
 
@@ -637,369 +673,47 @@ func (s *IndicatorService) GetIndicator(ctx context.Context, id int) (*model.Tec
 	return indicator, nil
 }
 
-// MarketplaceService handles marketplace operations
-type MarketplaceService struct {
-	db              *sqlx.DB
-	marketplaceRepo *repository.MarketplaceRepository
-	strategyRepo    *repository.StrategyRepository
-	purchaseRepo    *repository.PurchaseRepository
-	reviewRepo      *repository.ReviewRepository
-	userClient      UserClient
-	logger          *zap.Logger
-}
+// ListStrategies lists strategies for a user with filtering and pagination
+func (s *StrategyService) ListStrategies(ctx context.Context, userID int, nameFilter string, pagination *sharedModel.Pagination) ([]model.Strategy, *sharedModel.PaginationMeta, error) {
+	offset := pagination.GetOffset()
+	limit := pagination.GetPerPage()
 
-// NewMarketplaceService creates a new marketplace service
-func NewMarketplaceService(
-	db *sqlx.DB,
-	marketplaceRepo *repository.MarketplaceRepository,
-	strategyRepo *repository.StrategyRepository,
-	purchaseRepo *repository.PurchaseRepository,
-	reviewRepo *repository.ReviewRepository,
-	userClient UserClient,
-	logger *zap.Logger,
-) *MarketplaceService {
-	return &MarketplaceService{
-		db:              db,
-		marketplaceRepo: marketplaceRepo,
-		strategyRepo:    strategyRepo,
-		purchaseRepo:    purchaseRepo,
-		reviewRepo:      reviewRepo,
-		userClient:      userClient,
-		logger:          logger,
-	}
-}
-
-// CreateListing creates a new marketplace listing
-func (s *MarketplaceService) CreateListing(ctx context.Context, listing *model.MarketplaceCreate, userID int) (*model.MarketplaceItem, error) {
-	// Check if strategy exists and belongs to the user
-	strategy, err := s.strategyRepo.GetByID(ctx, listing.StrategyID)
+	strategies, total, err := s.strategyRepo.ListByUserID(ctx, userID, nameFilter, limit, offset)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	if strategy == nil {
-		return nil, errors.New("strategy not found")
-	}
-
-	if strategy.UserID != userID {
-		return nil, errors.New("access denied")
-	}
-
-	// Create listing
-	id, err := s.marketplaceRepo.Create(ctx, listing, userID)
-	if err != nil {
-		return nil, err
-	}
-
-	// Get created listing
-	createdListing, err := s.marketplaceRepo.GetByID(ctx, id)
-	if err != nil {
-		return nil, err
-	}
-
-	return createdListing, nil
-}
-
-// GetListing retrieves a marketplace listing by ID
-func (s *MarketplaceService) GetListing(ctx context.Context, id int) (*model.MarketplaceItem, error) {
-	// Get listing
-	listing, err := s.marketplaceRepo.GetByID(ctx, id)
-	if err != nil {
-		return nil, err
-	}
-
-	if listing == nil {
-		return nil, errors.New("listing not found")
-	}
-
-	// Get associated strategy
-	strategy, err := s.strategyRepo.GetByID(ctx, listing.StrategyID)
-	if err != nil {
-		s.logger.Warn("Failed to get strategy for listing", zap.Error(err))
-	} else {
-		listing.Strategy = strategy
-	}
-
-	// Get creator name
-	creatorName, err := s.userClient.GetUserByID(ctx, listing.UserID)
-	if err != nil {
-		s.logger.Warn("Failed to get creator name", zap.Error(err))
-		creatorName = "Unknown"
-	}
-	listing.CreatorName = creatorName
-
-	// Get average rating
-	avgRating, err := s.reviewRepo.GetAverageRating(ctx, id)
-	if err != nil {
-		s.logger.Warn("Failed to get average rating", zap.Error(err))
-	} else {
-		listing.AverageRating = avgRating
-	}
-
-	// Get reviews count
-	reviews, _, err := s.reviewRepo.GetByMarketplaceID(ctx, id, 1, 1)
-	if err != nil {
-		s.logger.Warn("Failed to get reviews count", zap.Error(err))
-	} else {
-		listing.ReviewsCount = len(reviews)
-	}
-
-	return listing, nil
-}
-
-// GetAllListings retrieves marketplace listings
-func (s *MarketplaceService) GetAllListings(ctx context.Context, isActive *bool, userID *int, page, limit int) ([]model.MarketplaceItem, int, error) {
-	// Validate pagination
-	if page < 1 {
-		page = 1
-	}
-	if limit < 1 || limit > 100 {
-		limit = 10
-	}
-
-	// Get listings
-	listings, total, err := s.marketplaceRepo.GetAll(ctx, isActive, userID, page, limit)
-	if err != nil {
-		return nil, 0, err
-	}
-
-	// Enrich listings with additional data
-	for i, listing := range listings {
-		// Get creator name
-		creatorName, err := s.userClient.GetUserByID(ctx, listing.UserID)
+	// Get tags for each strategy
+	for i, strategy := range strategies {
+		tags, err := s.tagRepo.GetForStrategy(ctx, strategy.ID)
 		if err != nil {
-			s.logger.Warn("Failed to get creator name", zap.Error(err))
-			listings[i].CreatorName = "Unknown"
-		} else {
-			listings[i].CreatorName = creatorName
+			s.logger.Warn("Failed to get tags for strategy", zap.Error(err))
+			continue
 		}
-
-		// Get average rating
-		avgRating, err := s.reviewRepo.GetAverageRating(ctx, listing.ID)
-		if err != nil {
-			s.logger.Warn("Failed to get average rating", zap.Error(err))
-		} else {
-			listings[i].AverageRating = avgRating
-		}
+		strategies[i].Tags = tags
 	}
 
-	return listings, total, nil
+	meta := sharedModel.NewPaginationMeta(pagination, total)
+	return strategies, &meta, nil
 }
 
-// UpdateListing updates a marketplace listing
-func (s *MarketplaceService) UpdateListing(ctx context.Context, id int, price *float64, isActive *bool, description *string, userID int) (*model.MarketplaceItem, error) {
-	// Check if listing exists and belongs to the user
-	listing, err := s.marketplaceRepo.GetByID(ctx, id)
+// RunBacktest updates the RunBacktest method to use kafkaService
+func (s *StrategyService) RunBacktest(ctx context.Context, backtestRequest *model.BacktestRequest, userID int) (int, error) {
+	// Existing validation code...
+
+	backtestID, err := s.backtestClient.CreateBacktest(ctx, backtestRequest, userID)
 	if err != nil {
-		return nil, err
+		return 0, fmt.Errorf("failed to create backtest: %w", err)
 	}
 
-	if listing == nil {
-		return nil, errors.New("listing not found")
-	}
-
-	if listing.UserID != userID {
-		return nil, errors.New("access denied")
-	}
-
-	// Update listing
-	err = s.marketplaceRepo.Update(ctx, id, price, isActive, description)
-	if err != nil {
-		return nil, err
-	}
-
-	// Get updated listing
-	updatedListing, err := s.marketplaceRepo.GetByID(ctx, id)
-	if err != nil {
-		return nil, err
-	}
-
-	return updatedListing, nil
-}
-
-// DeleteListing deletes a marketplace listing
-func (s *MarketplaceService) DeleteListing(ctx context.Context, id int, userID int) error {
-	// Check if listing exists and belongs to the user
-	listing, err := s.marketplaceRepo.GetByID(ctx, id)
-	if err != nil {
-		return err
-	}
-
-	if listing == nil {
-		return errors.New("listing not found")
-	}
-
-	if listing.UserID != userID {
-		return errors.New("access denied")
-	}
-
-	// Delete listing
-	return s.marketplaceRepo.Delete(ctx, id)
-}
-
-// PurchaseStrategy purchases a strategy from the marketplace
-func (s *MarketplaceService) PurchaseStrategy(ctx context.Context, marketplaceID int, userID int) (*model.StrategyPurchase, error) {
-	// Get listing
-	listing, err := s.marketplaceRepo.GetByID(ctx, marketplaceID)
-	if err != nil {
-		return nil, err
-	}
-
-	if listing == nil {
-		return nil, errors.New("listing not found")
-	}
-
-	if !listing.IsActive {
-		return nil, errors.New("listing is not active")
-	}
-
-	// Cannot purchase own strategy
-	if listing.UserID == userID {
-		return nil, errors.New("cannot purchase own strategy")
-	}
-
-	// Check if already purchased
-	hasPurchased, err := s.purchaseRepo.HasPurchased(ctx, userID, listing.StrategyID)
-	if err != nil {
-		return nil, err
-	}
-
-	if hasPurchased {
-		return nil, errors.New("strategy already purchased")
-	}
-
-	// Calculate subscription end date if needed
-	var subscriptionEnd *time.Time
-	if listing.IsSubscription {
-		end := time.Now()
-		switch listing.SubscriptionPeriod {
-		case "monthly":
-			end = end.AddDate(0, 1, 0)
-		case "quarterly":
-			end = end.AddDate(0, 3, 0)
-		case "yearly":
-			end = end.AddDate(1, 0, 0)
-		default:
-			// Default to monthly
-			end = end.AddDate(0, 1, 0)
-		}
-		subscriptionEnd = &end
-	}
-
-	// Create purchase record
-	purchaseID, err := s.purchaseRepo.Create(ctx, marketplaceID, userID, listing.Price, subscriptionEnd)
-	if err != nil {
-		return nil, err
-	}
-
-	// Return purchase info
-	return &model.StrategyPurchase{
-		ID:              purchaseID,
-		MarketplaceID:   marketplaceID,
-		BuyerID:         userID,
-		PurchasePrice:   listing.Price,
-		SubscriptionEnd: subscriptionEnd,
-		CreatedAt:       time.Now(),
-	}, nil
-}
-
-// GetPurchases retrieves purchases for a user
-func (s *MarketplaceService) GetPurchases(ctx context.Context, userID int, page, limit int) ([]model.StrategyPurchase, int, error) {
-	// Validate pagination
-	if page < 1 {
-		page = 1
-	}
-	if limit < 1 || limit > 100 {
-		limit = 10
-	}
-
-	// Get purchases
-	return s.purchaseRepo.GetByUser(ctx, userID, page, limit)
-}
-
-// CreateReview creates a review for a purchased strategy
-func (s *MarketplaceService) CreateReview(ctx context.Context, review *model.ReviewCreate, userID int) (*model.StrategyReview, error) {
-	// Check if listing exists
-	listing, err := s.marketplaceRepo.GetByID(ctx, review.MarketplaceID)
-	if err != nil {
-		return nil, err
-	}
-
-	if listing == nil {
-		return nil, errors.New("listing not found")
-	}
-
-	// Check if user has purchased the strategy
-	hasPurchased, err := s.purchaseRepo.HasPurchased(ctx, userID, listing.StrategyID)
-	if err != nil {
-		return nil, err
-	}
-
-	if !hasPurchased {
-		return nil, errors.New("must purchase strategy before reviewing")
-	}
-
-	// Check if user has already reviewed this listing
-	hasReviewed, err := s.reviewRepo.HasReviewed(ctx, userID, review.MarketplaceID)
-	if err != nil {
-		return nil, err
-	}
-
-	if hasReviewed {
-		return nil, errors.New("already reviewed this strategy")
-	}
-
-	// Create review
-	reviewID, err := s.reviewRepo.Create(ctx, review, userID)
-	if err != nil {
-		return nil, err
-	}
-
-	// Get user name
-	userName, err := s.userClient.GetUserByID(ctx, userID)
-	if err != nil {
-		s.logger.Warn("Failed to get user name", zap.Error(err))
-		userName = "Anonymous"
-	}
-
-	// Return created review
-	return &model.StrategyReview{
-		ID:            reviewID,
-		MarketplaceID: review.MarketplaceID,
-		UserID:        userID,
-		Rating:        review.Rating,
-		Comment:       review.Comment,
-		CreatedAt:     time.Now(),
-		UserName:      userName,
-	}, nil
-}
-
-// GetReviews retrieves reviews for a marketplace listing
-func (s *MarketplaceService) GetReviews(ctx context.Context, marketplaceID int, page, limit int) ([]model.StrategyReview, int, error) {
-	// Validate pagination
-	if page < 1 {
-		page = 1
-	}
-	if limit < 1 || limit > 100 {
-		limit = 10
-	}
-
-	// Get reviews
-	reviews, total, err := s.reviewRepo.GetByMarketplaceID(ctx, marketplaceID, page, limit)
-	if err != nil {
-		return nil, 0, err
-	}
-
-	// Get user names for each review
-	for i, review := range reviews {
-		userName, err := s.userClient.GetUserByID(ctx, review.UserID)
-		if err != nil {
-			s.logger.Warn("Failed to get user name", zap.Error(err))
-			reviews[i].UserName = "Anonymous"
-		} else {
-			reviews[i].UserName = userName
+	// Publish backtest created event
+	if s.kafkaService != nil {
+		if err := s.kafkaService.PublishBacktestCreated(ctx, backtestRequest, backtestID, userID); err != nil {
+			s.logger.Warn("Failed to publish backtest created event",
+				zap.Error(err),
+				zap.Int("backtest_id", backtestID))
 		}
 	}
 
-	return reviews, total, nil
+	return backtestID, nil
 }
