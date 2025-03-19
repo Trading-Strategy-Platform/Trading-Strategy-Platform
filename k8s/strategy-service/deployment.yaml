@@ -1,0 +1,37 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: strategy-service
+  labels:
+    app: strategy-service
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: strategy-service
+  template:
+    metadata:
+      labels:
+        app: strategy-service
+    spec:
+      containers:
+      - name: strategy-service
+        image: yourregistry/strategy-service:latest
+        ports:
+        - containerPort: 8082
+        resources:
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+          requests:
+            memory: "512Mi"
+            cpu: "200m"
+        env:
+        - name: KAFKA_BOOTSTRAP_SERVERS
+          value: "kafka:9092"
+        - name: REDIS_HOST
+          value: "redis"
+        - name: REDIS_PORT
+          value: "6379"
+        - name: HISTORICAL_DATA_SERVICE_URL
+          value: "http://historical-data-service:8081"

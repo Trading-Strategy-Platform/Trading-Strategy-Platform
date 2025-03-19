@@ -22,32 +22,10 @@ jobs:
         run: |
           curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(go env GOPATH)/bin v1.55.2
 
-      - name: Fix User Service dependencies
+      - name: Fix dependencies
         run: |
-          cd services/user-service
-          go get github.com/golang-jwt/jwt/v4
-          go get github.com/gin-gonic/gin
-          go get github.com/jackc/pgx/v4/stdlib
-          go get github.com/jmoiron/sqlx
-          go get go.uber.org/zap
-          go get golang.org/x/crypto/bcrypt
-          go get github.com/spf13/viper
-          go mod tidy
-
-      - name: Fix Strategy Service dependencies
-        run: |
-          cd services/strategy-service
-          go mod tidy || true
-
-      - name: Fix Historical Data Service dependencies
-        run: |
-          cd services/historical-data-service
-          go mod tidy || true
-
-      - name: Fix API Gateway dependencies
-        run: |
-          cd services/api-gateway
-          go mod tidy || true
+          chmod +x ./fix-dependencies.sh
+          ./fix-dependencies.sh
 
       - name: Lint User Service
         run: |
@@ -88,3 +66,63 @@ jobs:
         run: |
           cd services/api-gateway
           go test -v ./... || echo "Skipping due to incomplete implementation"
+
+  infrastructure-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up infrastructure files
+        run: |
+          chmod +x ./setup-infrastructure.sh
+          ./setup-infrastructure.sh
+
+      - name: Validate Kafka configuration
+        run: |
+          if [ ! -f infrastructure/kafka/config/server.properties ]; then
+            echo "Error: Kafka server.properties not found"
+            exit 1
+          fi
+          if [ ! -f infrastructure/kafka/config/topics.sh ]; then
+            echo "Error: Kafka topics.sh not found"
+            exit 1
+          fi
+          chmod +x infrastructure/kafka/config/topics.sh
+          # Validate properties file has required settings
+          grep -q "broker.id" infrastructure/kafka/config/server.properties || exit 1
+          grep -q "listeners" infrastructure/kafka/config/server.properties || exit 1
+          grep -q "zookeeper.connect" infrastructure/kafka/config/server.properties || exit 1
+
+      - name: Validate PostgreSQL configuration
+        run: |
+          if [ ! -f infrastructure/postgres/postgres.conf ]; then
+            echo "Error: PostgreSQL configuration file not found"
+            exit 1
+          fi
+          # Validate properties file has required settings
+          grep -q "max_connections" infrastructure/postgres/postgres.conf || exit 1
+          grep -q "shared_buffers" infrastructure/postgres/postgres.conf || exit 1
+
+      - name: Validate Redis configuration
+        run: |
+          if [ ! -f infrastructure/redis/redis.conf ]; then
+            echo "Error: Redis configuration file not found"
+            exit 1
+          fi
+          # Validate properties file has required settings
+          grep -q "maxmemory" infrastructure/redis/redis.conf || exit 1
+          grep -q "maxmemory-policy" infrastructure/redis/redis.conf || exit 1
+
+      - name: Validate TimescaleDB configuration
+        run: |
+          if [ ! -f infrastructure/timescaledb/timescaledb.conf ]; then
+            echo "Error: TimescaleDB configuration file not found"
+            exit 1
+          fi
+          # Validate properties file has required settings
+          grep -q "shared_preload_libraries" infrastructure/timescaledb/timescaledb.conf || exit 1
+          grep -q "timescaledb.max_background_workers" infrastructure/timescaledb/timescaledb.conf || exit 1
+
+      - name: Test Docker Compose configuration
+        run: |
+          docker-compose config

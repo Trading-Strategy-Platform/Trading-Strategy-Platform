@@ -3,7 +3,11 @@ version: '3.8'
 services:
   # DATABASES
   user-db:
-    image: postgres:14
+    build:
+      context: .
+      dockerfile: ./infrastructure/postgres/Dockerfile
+      args:
+        CONFIG_FILE: ./infrastructure/postgres/postgres.conf
     container_name: user-service-db
     ports:
       - "5432:5432"
@@ -14,12 +18,15 @@ services:
     volumes:
       - user-db-data:/var/lib/postgresql/data
       - ./services/user-service/init-scripts:/docker-entrypoint-initdb.d
-      - ./infrastructure/postgres/postgres.conf:/etc/postgresql/postgresql.conf
     networks:
       - user-service-network
   
   strategy-db:
-    image: postgres:14
+    build:
+      context: .
+      dockerfile: ./infrastructure/postgres/Dockerfile
+      args:
+        CONFIG_FILE: ./infrastructure/postgres/postgres.conf
     container_name: strategy-service-db
     ports:
       - "5433:5432"
@@ -30,12 +37,15 @@ services:
     volumes:
       - strategy-db-data:/var/lib/postgresql/data
       - ./services/strategy-service/init-scripts:/docker-entrypoint-initdb.d
-      - ./infrastructure/postgres/postgres.conf:/etc/postgresql/postgresql.conf
     networks:
       - strategy-service-network
   
   historical-db:
-    image: timescale/timescaledb:latest-pg14
+    build:
+      context: .
+      dockerfile: ./infrastructure/timescaledb/Dockerfile
+      args:
+        CONFIG_FILE: ./infrastructure/timescaledb/timescaledb.conf
     container_name: historical-service-db
     ports:
       - "5434:5432"
@@ -46,7 +56,6 @@ services:
     volumes:
       - historical-db-data:/var/lib/postgresql/data
       - ./services/historical-data-service/init-scripts:/docker-entrypoint-initdb.d
-      - ./infrastructure/timescaledb/timescaledb.conf:/etc/postgresql/postgresql.conf
     networks:
       - historical-service-network
   
@@ -160,7 +169,11 @@ services:
       - kafka-network
   
   kafka:
-    image: confluentinc/cp-kafka:7.3.0
+    build:
+      context: .
+      dockerfile: ./infrastructure/kafka/Dockerfile
+      args:
+        CONFIG_DIR: ./infrastructure/kafka/config
     container_name: kafka
     ports:
       - "9092:9092"
@@ -171,21 +184,22 @@ services:
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
     volumes:
       - kafka-data:/var/lib/kafka/data
-      - ./infrastructure/kafka/config:/etc/kafka/config
     networks:
       - kafka-network
     depends_on:
       - zookeeper
   
   redis:
-    image: redis:7
+    build:
+      context: .
+      dockerfile: ./infrastructure/redis/Dockerfile
+      args:
+        CONFIG_FILE: ./infrastructure/redis/redis.conf
     container_name: redis
     ports:
       - "6379:6379"
     volumes:
       - redis-data:/data
-      - ./infrastructure/redis/redis.conf:/usr/local/etc/redis/redis.conf
-    command: ["redis-server", "/usr/local/etc/redis/redis.conf"]
     networks:
       - redis-network
 

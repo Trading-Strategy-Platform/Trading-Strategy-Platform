@@ -31,6 +31,13 @@ jobs:
         with:
           images: ghcr.io/${{ github.repository }}
       
+      # Set up infrastructure files
+      - name: Set up infrastructure files
+        run: |
+          chmod +x ./setup-infrastructure.sh
+          ./setup-infrastructure.sh
+      
+      # Build and push microservices
       - name: Build and push User Service
         uses: docker/build-push-action@v4
         with:
@@ -62,3 +69,48 @@ jobs:
           push: true
           tags: ghcr.io/${{ github.repository }}/api-gateway:${{ github.ref_name }}
           labels: ${{ steps.meta.outputs.labels }}
+      
+      # Build and push infrastructure images with custom configurations
+      - name: Build and push Kafka
+        uses: docker/build-push-action@v4
+        with:
+          context: ./
+          file: ./infrastructure/kafka/Dockerfile
+          push: true
+          tags: ghcr.io/${{ github.repository }}/kafka:${{ github.ref_name }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            CONFIG_DIR=./infrastructure/kafka/config
+      
+      - name: Build and push PostgreSQL
+        uses: docker/build-push-action@v4
+        with:
+          context: ./
+          file: ./infrastructure/postgres/Dockerfile
+          push: true
+          tags: ghcr.io/${{ github.repository }}/postgres:${{ github.ref_name }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            CONFIG_FILE=./infrastructure/postgres/postgres.conf
+      
+      - name: Build and push Redis
+        uses: docker/build-push-action@v4
+        with:
+          context: ./
+          file: ./infrastructure/redis/Dockerfile
+          push: true
+          tags: ghcr.io/${{ github.repository }}/redis:${{ github.ref_name }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            CONFIG_FILE=./infrastructure/redis/redis.conf
+      
+      - name: Build and push TimescaleDB
+        uses: docker/build-push-action@v4
+        with:
+          context: ./
+          file: ./infrastructure/timescaledb/Dockerfile
+          push: true
+          tags: ghcr.io/${{ github.repository }}/timescaledb:${{ github.ref_name }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            CONFIG_FILE=./infrastructure/timescaledb/timescaledb.conf

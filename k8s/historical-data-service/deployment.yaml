@@ -1,0 +1,57 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: historical-data-service
+  labels:
+    app: historical-data-service
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: historical-data-service
+  template:
+    metadata:
+      labels:
+        app: historical-data-service
+    spec:
+      containers:
+      - name: historical-data-service
+        image: yourregistry/historical-data-service:latest
+        ports:
+        - containerPort: 8081
+        resources:
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+          requests:
+            memory: "512Mi"
+            cpu: "200m"
+        env:
+        - name: POSTGRES_HOST
+          value: "postgres"
+        - name: POSTGRES_PORT
+          value: "5432"
+        - name: POSTGRES_USER
+          valueFrom:
+            secretKeyRef:
+              name: postgres-secret
+              key: username
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: postgres-secret
+              key: password
+        - name: TIMESCALEDB_HOST
+          value: "timescaledb"
+        - name: TIMESCALEDB_PORT
+          value: "5432"
+        - name: TIMESCALEDB_USER
+          valueFrom:
+            secretKeyRef:
+              name: timescaledb-secret
+              key: username
+        - name: TIMESCALEDB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: timescaledb-secret
+              key: password

@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: timescaledb-config
+data:
+  timescaledb.conf: |
+    shared_preload_libraries = 'timescaledb'
+    timescaledb.max_background_workers = 8
+    timescaledb.telemetry_level = 'basic'
+    timescaledb.max_chunks_per_insert = 8
+    timescaledb.max_insert_batch_size = 1000
+    timescaledb.enable_chunk_append = 'on'
+    timescaledb.enable_ordered_append = 'on'
+    timescaledb.enable_constraint_aware_append = 'on'
