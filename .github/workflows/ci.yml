@@ -72,6 +72,16 @@ jobs:
     steps:
       - uses: actions/checkout@v3
 
+      # Add Docker Compose setup
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Set up Docker Compose
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y docker-compose-plugin
+          docker compose version
+
       - name: Set up infrastructure files
         run: |
           chmod +x ./setup-infrastructure.sh
@@ -125,4 +135,22 @@ jobs:
 
       - name: Test Docker Compose configuration
         run: |
-          docker-compose config
+          docker compose config
+
+      # Optionally start infrastructure for more comprehensive testing
+      - name: Start Infrastructure (Optional)
+        run: |
+          docker compose up -d user-db strategy-db historical-db kafka zookeeper redis
+          docker compose ps
+
+      - name: Wait for services to be ready
+        run: sleep 30
+
+      - name: Check services
+        run: |
+          docker compose ps
+          docker compose logs kafka
+
+      - name: Clean up
+        run: |
+          docker compose down

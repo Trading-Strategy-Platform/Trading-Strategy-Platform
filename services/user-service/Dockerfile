@@ -3,16 +3,23 @@ FROM golang:1.21-alpine AS builder
 
 WORKDIR /app
 
-# Copy go.mod and go.sum
-COPY go.mod go.sum ./
-
-# Download dependencies
-RUN go mod download
-
-# Copy source code
+# Copy source code first to ensure proper initialization
 COPY . .
 
+# Explicitly set Go version
+RUN go mod edit -go=1.21
+
+# Initialize the module and download dependencies
+RUN go mod tidy
+RUN go mod download
+
 # Build the application
+RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o user-service ./cmd/server || true
+
+# If the build failed, add missing dependencies and try again
+RUN go get ./... || true
+RUN go mod tidy
+RUN go mod download
 RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o user-service ./cmd/server
 
 # Final stage

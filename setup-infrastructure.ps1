@@ -1,10 +1,10 @@
-# setup-infrastructure.ps1 - Windows PowerShell version of infrastructure setup
+# PowerShell script to set up infrastructure configuration
 
 # Create necessary directories
-New-Item -Path "infrastructure/kafka/config" -ItemType Directory -Force
-New-Item -Path "infrastructure/postgres" -ItemType Directory -Force
-New-Item -Path "infrastructure/redis" -ItemType Directory -Force
-New-Item -Path "infrastructure/timescaledb" -ItemType Directory -Force
+New-Item -Path "infrastructure/kafka/config" -ItemType Directory -Force | Out-Null
+New-Item -Path "infrastructure/postgres" -ItemType Directory -Force | Out-Null
+New-Item -Path "infrastructure/redis" -ItemType Directory -Force | Out-Null
+New-Item -Path "infrastructure/timescaledb" -ItemType Directory -Force | Out-Null
 
 # Set up Kafka configuration
 Write-Host "Setting up Kafka configuration..."
@@ -30,7 +30,7 @@ default.replication.factor=1
 offsets.topic.replication.factor=1
 transaction.state.log.replication.factor=1
 transaction.state.log.min.isr=1
-'@ | Out-File -FilePath "infrastructure/kafka/config/server.properties" -Encoding ascii
+'@ | Out-File -FilePath "infrastructure/kafka/config/server.properties" -Encoding utf8
 
 # Create Kafka topics script
 @'
@@ -56,7 +56,7 @@ echo "List of topics:"
 kafka-topics.sh --bootstrap-server kafka:9092 --list
 
 echo "Topic creation completed!"
-'@ | Out-File -FilePath "infrastructure/kafka/config/topics.sh" -Encoding ascii
+'@ | Out-File -FilePath "infrastructure/kafka/config/topics.sh" -Encoding utf8
 
 # Set up PostgreSQL configuration
 Write-Host "Setting up PostgreSQL configuration..."
@@ -78,7 +78,7 @@ log_destination = 'stderr'
 logging_collector = on
 log_directory = 'log'
 timezone = 'UTC'
-'@ | Out-File -FilePath "infrastructure/postgres/postgres.conf" -Encoding ascii
+'@ | Out-File -FilePath "infrastructure/postgres/postgres.conf" -Encoding utf8
 
 # Set up Redis configuration
 Write-Host "Setting up Redis configuration..."
@@ -108,7 +108,7 @@ maxmemory 256mb
 maxmemory-policy allkeys-lru
 appendonly no
 appendfsync everysec
-'@ | Out-File -FilePath "infrastructure/redis/redis.conf" -Encoding ascii
+'@ | Out-File -FilePath "infrastructure/redis/redis.conf" -Encoding utf8
 
 # Set up TimescaleDB configuration
 Write-Host "Setting up TimescaleDB configuration..."
@@ -122,7 +122,7 @@ timescaledb.max_insert_batch_size = 1000
 timescaledb.enable_chunk_append = 'on'
 timescaledb.enable_ordered_append = 'on'
 timescaledb.enable_constraint_aware_append = 'on'
-'@ | Out-File -FilePath "infrastructure/timescaledb/timescaledb.conf" -Encoding ascii
+'@ | Out-File -FilePath "infrastructure/timescaledb/timescaledb.conf" -Encoding utf8
 
 Write-Host "Infrastructure configuration files created successfully!"
-Write-Host "To start the infrastructure, run: docker-compose up -d" 
+Write-Host "To start the infrastructure, run: docker compose up -d" 

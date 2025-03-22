@@ -1,4 +1,4 @@
-.PHONY: all build clean test run help start stop lint setup-lint infra apply-k8s
+.PHONY: all build clean test run help start stop lint setup-lint infra infra-up apply-k8s
 
 all: build
 
@@ -25,15 +25,15 @@ clean:
 
 start:
 	@echo "Starting services..."
-	@docker-compose up -d
+	@docker compose up -d
 
 stop:
 	@echo "Stopping services..."
-	@docker-compose down
+	@docker compose down
 
 infra-up:
 	@echo "Starting infrastructure only..."
-	@docker-compose up -d user-db strategy-db historical-db kafka zookeeper redis
+	@docker compose up -d user-db strategy-db historical-db kafka zookeeper redis
 
 setup-lint:
 	@echo "Setting up golangci-lint v1.55.2..."

@@ -1,11 +1,15 @@
 FROM confluentinc/cp-kafka:7.3.0
 
 ARG CONFIG_DIR=./config
-COPY ${CONFIG_DIR}/server.properties /etc/kafka/server.properties
-COPY ${CONFIG_DIR}/topics.sh /usr/local/bin/setup-topics.sh
 
-# Make the script executable
-RUN chmod +x /usr/local/bin/setup-topics.sh
+# Copy the server properties
+COPY ${CONFIG_DIR}/server.properties /etc/kafka/server.properties
+
+# Make the script executable locally before copying it
+COPY ${CONFIG_DIR}/topics.sh /tmp/topics.sh
+USER root
+RUN chmod +x /tmp/topics.sh && \
+    mv /tmp/topics.sh /usr/local/bin/setup-topics.sh
 
 # Create startup script
 RUN echo '#!/bin/bash \n\

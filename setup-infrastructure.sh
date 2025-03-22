@@ -128,4 +128,4 @@ timescaledb.enable_constraint_aware_append = 'on'
 EOF
 
 echo "Infrastructure configuration files created successfully!"
-echo "To start the infrastructure, run: make infra-up"
+echo "To start the infrastructure, run: docker compose up -d"
