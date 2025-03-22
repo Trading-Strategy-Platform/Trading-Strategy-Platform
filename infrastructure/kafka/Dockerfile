@@ -5,26 +5,18 @@ ARG CONFIG_DIR=./config
 # Copy the server properties
 COPY ${CONFIG_DIR}/server.properties /etc/kafka/server.properties
 
-# Make the script executable locally before copying it
-COPY ${CONFIG_DIR}/topics.sh /tmp/topics.sh
+# Copy the topics script 
+COPY ${CONFIG_DIR}/topics.sh /usr/local/bin/setup-topics.sh
 USER root
-RUN chmod +x /tmp/topics.sh && \
-    mv /tmp/topics.sh /usr/local/bin/setup-topics.sh
+RUN chmod +x /usr/local/bin/setup-topics.sh
 
-# Create startup script
-RUN echo '#!/bin/bash \n\
-# Start Kafka in background \n\
-/etc/confluent/docker/run & \n\
-\n\
-# Wait for Kafka to start \n\
-sleep 10 \n\
-\n\
-# Set up topics \n\
-/usr/local/bin/setup-topics.sh \n\
-\n\
-# Wait for the Kafka process \n\
-wait $!' > /usr/local/bin/startup.sh && \
-chmod +x /usr/local/bin/startup.sh
+# Create startup script with proper line endings
+RUN echo '#!/bin/bash' > /usr/local/bin/startup.sh && \
+    echo '/etc/confluent/docker/run &' >> /usr/local/bin/startup.sh && \
+    echo 'sleep 10' >> /usr/local/bin/startup.sh && \
+    echo '/usr/local/bin/setup-topics.sh' >> /usr/local/bin/startup.sh && \
+    echo 'wait $!' >> /usr/local/bin/startup.sh && \
+    chmod +x /usr/local/bin/startup.sh
 
 # Override the entrypoint
 ENTRYPOINT ["/usr/local/bin/startup.sh"]

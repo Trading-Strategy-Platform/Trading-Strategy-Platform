@@ -34,8 +34,8 @@ jobs:
       # Set up infrastructure files
       - name: Set up infrastructure files
         run: |
-          chmod +x ./setup-infrastructure.sh
-          ./setup-infrastructure.sh
+          chmod +x ./scripts/setup-infrastructure.sh
+          ./scripts/setup-infrastructure.sh
       
       # Build and push microservices
       - name: Build and push User Service

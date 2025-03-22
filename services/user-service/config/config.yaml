@@ -18,7 +18,7 @@ database:
 auth:
   jwtSecret: your_super_secret_key_for_development_only
   accessTokenDuration: 15m
-  refreshTokenDuration: 7d
+  refreshTokenDuration: 168h  # 7 days in hours (7*24h)
 
 kafka:
   brokers: kafka:9092
@@ -28,7 +28,7 @@ kafka:
 
 redis:
   url: redis:6379
-  sessionPrefix: user-session:
+  sessionPrefix: user-session
   sessionDuration: 24h
 
 logging:
