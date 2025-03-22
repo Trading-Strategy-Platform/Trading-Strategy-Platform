@@ -23,7 +23,6 @@ function Test-ContainersRunning {
     Write-Log "Checking if all containers are running..."
     
     $containers = docker ps --format "{{.Names}}"
-    $containers | Out-File -FilePath "$LogDir\running-containers.txt"
     
     $requiredContainers = @(
         "user-service", 

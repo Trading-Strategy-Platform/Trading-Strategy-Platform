@@ -2,7 +2,6 @@ package handler
 
 import (
 	"services/api-gateway/internal/proxy"
-	"strings"
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -79,18 +78,6 @@ func (h *GatewayHandler) ProxyHistoricalService(c *gin.Context) {
 // getProxyPath extracts the path to proxy from the original request path
 // It removes the API prefix (e.g. "/api/v1") from the path
 func getProxyPath(originalPath, prefix string) string {
-	// Check if the path starts with the prefix
-	if strings.HasPrefix(originalPath, prefix) {
-		// Remove the prefix
-		path := originalPath[len(prefix):]
-
-		// Ensure the path starts with "/" if it's not empty
-		if path != "" && !strings.HasPrefix(path, "/") {
-			path = "/" + path
-		}
-
-		return path
-	}
 
 	// If the path doesn't start with the prefix, return the original path
 	return originalPath

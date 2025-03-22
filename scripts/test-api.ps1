@@ -86,9 +86,7 @@ try {
     Write-Log "Login successful! Token received." "SUCCESS"
     $token = $loginResponse.token
     Write-Log "Token: $token" "SUCCESS"
-    
-    # Save token to file for manual testing
-    $token | Out-File -FilePath "auth-token.txt"
+
     
     # Continue with authenticated requests
     if ($token) {

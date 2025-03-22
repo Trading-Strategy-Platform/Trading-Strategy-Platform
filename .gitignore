@@ -5,9 +5,11 @@
 *.so
 *.dylib
 *.test
+*.sum
 *.out
 bin/
 vendor/
+diagnostic-logs
 
 # Go modules
 go.work
