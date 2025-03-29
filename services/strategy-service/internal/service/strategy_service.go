@@ -196,6 +196,25 @@ func (s *StrategyService) GetPublicStrategies(ctx context.Context, tagID *int, p
 	return strategies, total, nil
 }
 
+// UpdateUserStrategyVersion updates the active version of a strategy for a user
+func (s *StrategyService) UpdateUserStrategyVersion(ctx context.Context, userID, strategyID, version int) (bool, error) {
+	// This would call the database function update_user_strategy_version
+	query := `SELECT update_user_strategy_version($1, $2, $3)`
+
+	var success bool
+	err := s.db.GetContext(ctx, &success, query, userID, strategyID, version)
+	if err != nil {
+		s.logger.Error("Failed to update user strategy version",
+			zap.Error(err),
+			zap.Int("user_id", userID),
+			zap.Int("strategy_id", strategyID),
+			zap.Int("version", version))
+		return false, err
+	}
+
+	return success, nil
+}
+
 // UpdateStrategy updates a strategy
 func (s *StrategyService) UpdateStrategy(ctx context.Context, id int, update *model.StrategyUpdate, userID int) (*model.Strategy, error) {
 	// Check if strategy exists and belongs to the user

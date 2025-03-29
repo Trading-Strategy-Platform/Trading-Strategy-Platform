@@ -81,19 +81,16 @@ type Backtest struct {
 
 // BacktestResults represents the results of a backtest
 type BacktestResults struct {
-	NetProfit          float64   `json:"net_profit"`
-	ProfitFactor       float64   `json:"profit_factor"`
-	TotalTrades        int       `json:"total_trades"`
-	WinningTrades      int       `json:"winning_trades"`
-	LosingTrades       int       `json:"losing_trades"`
-	WinRate            float64   `json:"win_rate"`
-	MaxDrawdown        float64   `json:"max_drawdown"`
-	MaxDrawdownPercent float64   `json:"max_drawdown_percent"`
-	CAGR               float64   `json:"cagr"`
-	SharpeRatio        float64   `json:"sharpe_ratio"`
-	SortinoRatio       float64   `json:"sortino_ratio"`
-	Trades             []Trade   `json:"trades"`
-	EquityCurve        []float64 `json:"equity_curve"`
+	TotalTrades      int             `json:"total_trades" binding:"required"`
+	WinningTrades    int             `json:"winning_trades" binding:"required"`
+	LosingTrades     int             `json:"losing_trades" binding:"required"`
+	ProfitFactor     float64         `json:"profit_factor" binding:"required"`
+	SharpeRatio      float64         `json:"sharpe_ratio" binding:"required"`
+	MaxDrawdown      float64         `json:"max_drawdown" binding:"required"`
+	FinalCapital     float64         `json:"final_capital" binding:"required"`
+	TotalReturn      float64         `json:"total_return" binding:"required"`
+	AnnualizedReturn float64         `json:"annualized_return" binding:"required"`
+	ResultsJSON      json.RawMessage `json:"results_json" binding:"required"`
 }
 
 // Value implements the driver.Valuer interface for BacktestResults
@@ -157,4 +154,20 @@ type MarketDataQuery struct {
 	StartDate   *time.Time `json:"start_date" form:"start_date"`
 	EndDate     *time.Time `json:"end_date" form:"end_date"`
 	Limit       *int       `json:"limit" form:"limit"`
+}
+
+// BacktestTrade represents a single trade in a backtest
+type BacktestTrade struct {
+	ID                int        `json:"id,omitempty"`
+	BacktestRunID     int        `json:"backtest_run_id"`
+	SymbolID          int        `json:"symbol_id" binding:"required"`
+	EntryTime         time.Time  `json:"entry_time" binding:"required"`
+	ExitTime          *time.Time `json:"exit_time,omitempty"`
+	PositionType      string     `json:"position_type" binding:"required"`
+	EntryPrice        float64    `json:"entry_price" binding:"required"`
+	ExitPrice         *float64   `json:"exit_price,omitempty"`
+	Quantity          float64    `json:"quantity" binding:"required"`
+	ProfitLoss        *float64   `json:"profit_loss,omitempty"`
+	ProfitLossPercent *float64   `json:"profit_loss_percent,omitempty"`
+	ExitReason        *string    `json:"exit_reason,omitempty"`
 }

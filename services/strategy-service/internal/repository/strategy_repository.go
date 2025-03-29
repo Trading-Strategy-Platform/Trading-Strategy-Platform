@@ -11,6 +11,7 @@ import (
 	"services/strategy-service/internal/model"
 
 	"github.com/jmoiron/sqlx"
+	"github.com/lib/pq"
 	"go.uber.org/zap"
 )
 
@@ -26,6 +27,19 @@ func NewStrategyRepository(db *sqlx.DB, logger *zap.Logger) *StrategyRepository 
 		db:     db,
 		logger: logger,
 	}
+}
+
+func (r *StrategyRepository) GetUserStrategies(ctx context.Context, userID int, searchTerm string, purchasedOnly bool, tags []int) ([]model.Strategy, error) {
+	query := `SELECT * FROM get_my_strategies($1, $2, $3, $4)`
+
+	var strategies []model.Strategy
+	err := r.db.SelectContext(ctx, &strategies, query, userID, searchTerm, purchasedOnly, pq.Array(tags))
+	if err != nil {
+		r.logger.Error("Failed to get user strategies", zap.Error(err))
+		return nil, err
+	}
+
+	return strategies, nil
 }
 
 // Create adds a new strategy to the database

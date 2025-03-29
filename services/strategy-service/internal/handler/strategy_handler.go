@@ -768,6 +768,50 @@ func (h *MarketplaceHandler) CreateReview(c *gin.Context) {
 	c.JSON(http.StatusCreated, review)
 }
 
+// UpdateActiveVersion handles updating the active version of a strategy for a user
+func (h *StrategyHandler) UpdateActiveVersion(c *gin.Context) {
+	idStr := c.Param("id")
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid strategy ID"})
+		return
+	}
+
+	var request struct {
+		Version int `json:"version" binding:"required"`
+	}
+
+	if err := c.ShouldBindJSON(&request); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	userID, _ := c.Get("userID")
+
+	success, err := h.strategyService.UpdateUserStrategyVersion(
+		c.Request.Context(),
+		userID.(int),
+		id,
+		request.Version,
+	)
+
+	if err != nil {
+		h.logger.Error("Failed to update active version",
+			zap.Error(err),
+			zap.Int("strategy_id", id),
+			zap.Int("version", request.Version))
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	if !success {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Failed to update active version"})
+		return
+	}
+
+	c.Status(http.StatusNoContent)
+}
+
 // GetReviews handles retrieving reviews for a marketplace listing
 func (h *MarketplaceHandler) GetReviews(c *gin.Context) {
 	idStr := c.Param("id")

@@ -205,42 +205,88 @@ func setupRouter(
 	// API routes
 	v1 := router.Group("/api/v1")
 	{
-		// Public routes
-		v1.GET("/strategies/public", strategyHandler.ListPublicStrategies)
-		v1.GET("/indicators", indicatorHandler.GetAllIndicators)
-		v1.GET("/indicators/:id", indicatorHandler.GetIndicator)
-		v1.GET("/tags", tagHandler.GetAllTags)
-		v1.GET("/marketplace", marketplaceHandler.ListListings)
-		v1.GET("/marketplace/:id", marketplaceHandler.GetListing)
-		v1.GET("/marketplace/:id/reviews", marketplaceHandler.GetReviews)
-
-		// Authentication required routes
-		auth := v1.Group("/")
-		auth.Use(middleware.AuthMiddleware(userClient, logger))
+		// Strategy routes
+		strategies := v1.Group("/strategies")
 		{
-			// Strategy routes
-			auth.POST("/strategies", strategyHandler.CreateStrategy)
-			auth.GET("/strategies", strategyHandler.ListUserStrategies)
-			auth.GET("/strategies/:id", strategyHandler.GetStrategy)
-			auth.PUT("/strategies/:id", strategyHandler.UpdateStrategy)
-			auth.DELETE("/strategies/:id", strategyHandler.DeleteStrategy)
-			auth.POST("/strategies/:id/versions", strategyHandler.CreateVersion)
-			auth.GET("/strategies/:id/versions", strategyHandler.GetVersions)
-			auth.GET("/strategies/:id/versions/:version", strategyHandler.GetVersion)
-			auth.POST("/strategies/:id/versions/:version/restore", strategyHandler.RestoreVersion)
-			auth.POST("/strategies/:id/clone", strategyHandler.CloneStrategy)
-			auth.POST("/strategies/:id/backtest", strategyHandler.StartBacktest)
+			// Public strategy endpoints
+			strategies.GET("/public", strategyHandler.ListPublicStrategies) // Use get_public_strategies
 
-			// Tag routes
-			auth.POST("/tags", tagHandler.CreateTag)
+			// Protected strategy endpoints
+			strategies.Use(middleware.AuthMiddleware(userClient, logger))
+			strategies.GET("", strategyHandler.ListUserStrategies)          // Use get_my_strategies
+			strategies.POST("", strategyHandler.CreateStrategy)             // Use add_strategy
+			strategies.GET("/:id", strategyHandler.GetStrategy)             // Use strategy repo + check access
+			strategies.PUT("/:id", strategyHandler.UpdateStrategy)          // Use update_strategy
+			strategies.DELETE("/:id", strategyHandler.DeleteStrategy)       // Use delete_strategy
+			strategies.POST("/:id/clone", strategyHandler.CloneStrategy)    // Custom logic
+			strategies.POST("/:id/backtest", strategyHandler.StartBacktest) // Use historical service
 
-			// Marketplace routes
-			auth.POST("/marketplace", marketplaceHandler.CreateListing)
-			auth.PUT("/marketplace/:id", marketplaceHandler.UpdateListing)
-			auth.DELETE("/marketplace/:id", marketplaceHandler.DeleteListing)
-			auth.POST("/marketplace/:id/purchase", marketplaceHandler.PurchaseStrategy)
-			auth.GET("/purchases", marketplaceHandler.GetPurchases)
-			auth.POST("/marketplace/:id/reviews", marketplaceHandler.CreateReview)
+			// Version management endpoints
+			versions := strategies.Group("/:id/versions")
+			versions.GET("", strategyHandler.GetVersions)                      // Use get_accessible_strategy_versions
+			versions.POST("", strategyHandler.CreateVersion)                   // New version via update_strategy
+			versions.GET("/:version", strategyHandler.GetVersion)              // Custom logic to get specific version
+			versions.POST("/:version/restore", strategyHandler.RestoreVersion) // Custom logic
+
+			strategies.PUT("/:id/active-version", strategyHandler.UpdateActiveVersion) // Use update_user_strategy_version
+		}
+
+		// Strategy tags routes
+		tags := v1.Group("/strategy-tags")
+		{
+			tags.GET("", tagHandler.GetAllTags) // Use get_strategy_tags
+
+			tags.Use(middleware.AuthMiddleware(userClient, logger))
+			tags.POST("", tagHandler.CreateTag) // Use add_strategy_tag
+		}
+
+		// Indicator routes
+		indicators := v1.Group("/indicators")
+		{
+			indicators.GET("", indicatorHandler.GetAllIndicators)         // Use get_indicators
+			indicators.GET("/:id", indicatorHandler.GetIndicator)         // Use get_indicator_by_id
+			indicators.GET("/categories", indicatorHandler.GetCategories) // Use get_indicator_categories
+
+			// Admin-only routes for managing indicators
+			adminIndicators := indicators.Group("")
+			adminIndicators.Use(middleware.AuthMiddleware(userClient, logger))
+			adminIndicators.Use(middleware.RequireRole(userService, "admin"))
+
+			adminIndicators.POST("", indicatorHandler.CreateIndicator)                         // Use add_indicator
+			adminIndicators.POST("/:id/parameters", indicatorHandler.AddParameter)             // Use add_indicator_parameter
+			adminIndicators.POST("/parameters/:id/enum-values", indicatorHandler.AddEnumValue) // Use add_parameter_enum_value
+		}
+
+		// Marketplace routes
+		marketplace := v1.Group("/marketplace")
+		{
+			marketplace.GET("", marketplaceHandler.ListListings)           // Use get_marketplace_strategies
+			marketplace.GET("/:id", marketplaceHandler.GetListing)         // Custom logic with get details
+			marketplace.GET("/:id/reviews", marketplaceHandler.GetReviews) // Use get_strategy_reviews
+
+			// Protected marketplace endpoints
+			marketplaceAuth := marketplace.Group("")
+			marketplaceAuth.Use(middleware.AuthMiddleware(userClient, logger))
+
+			marketplaceAuth.POST("", marketplaceHandler.CreateListing)                 // Use add_to_marketplace
+			marketplaceAuth.PUT("/:id", marketplaceHandler.UpdateListing)              // Custom implementation
+			marketplaceAuth.DELETE("/:id", marketplaceHandler.DeleteListing)           // Use remove_from_marketplace
+			marketplaceAuth.POST("/:id/purchase", marketplaceHandler.PurchaseStrategy) // Use purchase_strategy
+
+			// Reviews management
+			marketplaceAuth.POST("/:id/reviews", marketplaceHandler.CreateReview) // Use add_review
+
+			// Purchases management
+			marketplaceAuth.GET("/purchases", marketplaceHandler.GetPurchases)                  // Custom implementation
+			marketplaceAuth.PUT("/purchases/:id/cancel", marketplaceHandler.CancelSubscription) // Use cancel_subscription
+		}
+
+		// Reviews management (separate from marketplace for edit/delete)
+		reviews := v1.Group("/reviews")
+		{
+			reviews.Use(middleware.AuthMiddleware(userClient, logger))
+			reviews.PUT("/:id", marketplaceHandler.UpdateReview)    // Use edit_review
+			reviews.DELETE("/:id", marketplaceHandler.DeleteReview) // Use delete_review
 		}
 	}
 

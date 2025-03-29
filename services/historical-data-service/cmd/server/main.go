@@ -191,23 +191,65 @@ func setupRouter(
 	// API routes
 	v1 := router.Group("/api/v1")
 	{
-		// Public routes
-		v1.GET("/symbols", symbolHandler.GetAllSymbols)
-		v1.GET("/timeframes", timeframeHandler.GetAllTimeframes)
-
-		// Authentication required routes
-		auth := v1.Group("/")
-		auth.Use(middleware.AuthMiddleware(userClient, logger))
+		// Symbol routes
+		symbols := v1.Group("/symbols")
 		{
-			// Market data routes
-			auth.GET("/market-data/:symbol_id/:timeframe_id", marketDataHandler.GetMarketData)
-			auth.POST("/market-data/import", marketDataHandler.ImportMarketData)
+			symbols.GET("", symbolHandler.GetAllSymbols) // Use get_symbols
 
-			// Backtest routes
-			auth.POST("/backtests", backtestHandler.CreateBacktest)
-			auth.GET("/backtests", backtestHandler.ListBacktests)
-			auth.GET("/backtests/:id", backtestHandler.GetBacktest)
-			auth.DELETE("/backtests/:id", backtestHandler.DeleteBacktest)
+			// Protected symbols management
+			symbolsAuth := symbols.Group("")
+			symbolsAuth.Use(middleware.AuthMiddleware(userClient, logger))
+			symbolsAuth.POST("", symbolHandler.CreateSymbol)       // Use add_symbol
+			symbolsAuth.PUT("/:id", symbolHandler.UpdateSymbol)    // Use update_symbol
+			symbolsAuth.DELETE("/:id", symbolHandler.DeleteSymbol) // Use delete_symbol
+		}
+
+		// Timeframes routes
+		timeframes := v1.Group("/timeframes")
+		{
+			timeframes.GET("", timeframeHandler.GetAllTimeframes) // Direct DB query
+
+			// Admin-only routes for managing timeframes
+			admin := timeframes.Group("")
+			admin.Use(middleware.AuthMiddleware(userClient, logger))
+			admin.Use(middleware.RequireRole(userService, "admin"))
+			admin.POST("", timeframeHandler.CreateTimeframe) // Direct DB implementation
+		}
+
+		// Market data routes
+		marketData := v1.Group("/market-data")
+		{
+			// Only authenticated users can access market data
+			marketData.Use(middleware.AuthMiddleware(userClient, logger))
+
+			marketData.GET("/candles", marketDataHandler.GetCandles)                // Use get_candles
+			marketData.POST("/candles/batch", marketDataHandler.BatchImportCandles) // Use insert_candles
+
+			// Asset types and exchanges
+			marketData.GET("/asset-types", marketDataHandler.GetAssetTypes) // Use get_asset_types
+			marketData.GET("/exchanges", marketDataHandler.GetExchanges)    // Use get_exchanges
+		}
+
+		// Backtest routes
+		backtests := v1.Group("/backtests")
+		{
+			backtests.Use(middleware.AuthMiddleware(userClient, logger))
+
+			backtests.GET("", backtestHandler.ListBacktests)         // Use get_backtest_summary
+			backtests.POST("", backtestHandler.CreateBacktest)       // Use create_backtest
+			backtests.GET("/:id", backtestHandler.GetBacktest)       // Use get_backtest_details
+			backtests.DELETE("/:id", backtestHandler.DeleteBacktest) // Use delete_backtest
+		}
+
+		// Backtest run management
+		backtestRuns := v1.Group("/backtest-runs")
+		{
+			backtestRuns.Use(middleware.AuthMiddleware(userClient, logger))
+
+			backtestRuns.PUT("/:id/status", backtestHandler.UpdateBacktestRunStatus) // Use update_backtest_run_status
+			backtestRuns.POST("/:id/results", backtestHandler.SaveBacktestResults)   // Use save_backtest_result
+			backtestRuns.POST("/:id/trades", backtestHandler.AddBacktestTrade)       // Use add_backtest_trade
+			backtestRuns.GET("/:id/trades", backtestHandler.GetBacktestTrades)       // Use get_backtest_trades
 		}
 
 		// Service-to-service routes (requires service key)
@@ -216,8 +258,8 @@ func setupRouter(
 		{
 			// Internal routes for other services
 			service.POST("/market-data/batch", marketDataHandler.BatchImportMarketData)
+			service.POST("/backtests/notify", backtestHandler.NotifyBacktestComplete)
 		}
 	}
-
 	return router
 }

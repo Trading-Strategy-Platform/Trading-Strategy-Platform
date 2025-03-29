@@ -261,6 +261,101 @@ func (s *BacktestService) failBacktest(ctx context.Context, backtestID int, erro
 	}
 }
 
+// UpdateBacktestRunStatus updates the status of a backtest run
+func (s *BacktestService) UpdateBacktestRunStatus(ctx context.Context, runID int, status string) (bool, error) {
+	query := `SELECT update_backtest_run_status($1, $2)`
+
+	var success bool
+	err := s.db.GetContext(ctx, &success, query, runID, status)
+	if err != nil {
+		s.logger.Error("Failed to update backtest run status", zap.Error(err))
+		return false, err
+	}
+
+	return success, nil
+}
+
+// SaveBacktestResults saves results for a backtest run
+func (s *BacktestService) SaveBacktestResults(ctx context.Context, runID int, results *model.BacktestResults) (int, error) {
+	query := `SELECT save_backtest_result($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`
+
+	// Convert results JSON
+	resultsJSON, err := json.Marshal(results.ResultsJSON)
+	if err != nil {
+		s.logger.Error("Failed to marshal results JSON", zap.Error(err))
+		return 0, err
+	}
+
+	var resultID int
+	err = s.db.GetContext(
+		ctx,
+		&resultID,
+		query,
+		runID,
+		results.TotalTrades,
+		results.WinningTrades,
+		results.LosingTrades,
+		results.ProfitFactor,
+		results.SharpeRatio,
+		results.MaxDrawdown,
+		results.FinalCapital,
+		results.TotalReturn,
+		results.AnnualizedReturn,
+		resultsJSON,
+	)
+
+	if err != nil {
+		s.logger.Error("Failed to save backtest results", zap.Error(err))
+		return 0, err
+	}
+
+	return resultID, nil
+}
+
+// AddBacktestTrade adds a trade to a backtest run
+func (s *BacktestService) AddBacktestTrade(ctx context.Context, trade *model.BacktestTrade) (int, error) {
+	query := `SELECT add_backtest_trade($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`
+
+	var tradeID int
+	err := s.db.GetContext(
+		ctx,
+		&tradeID,
+		query,
+		trade.BacktestRunID,
+		trade.SymbolID,
+		trade.EntryTime,
+		trade.ExitTime,
+		trade.PositionType,
+		trade.EntryPrice,
+		trade.ExitPrice,
+		trade.Quantity,
+		trade.ProfitLoss,
+		trade.ProfitLossPercent,
+		trade.ExitReason,
+	)
+
+	if err != nil {
+		s.logger.Error("Failed to add backtest trade", zap.Error(err))
+		return 0, err
+	}
+
+	return tradeID, nil
+}
+
+// GetBacktestTrades retrieves trades for a backtest run
+func (s *BacktestService) GetBacktestTrades(ctx context.Context, runID, limit, offset int) (interface{}, error) {
+	query := `SELECT * FROM get_backtest_trades($1, $2, $3)`
+
+	var trades []map[string]interface{}
+	err := s.db.SelectContext(ctx, &trades, query, runID, limit, offset)
+	if err != nil {
+		s.logger.Error("Failed to get backtest trades", zap.Error(err))
+		return nil, err
+	}
+
+	return trades, nil
+}
+
 // GetBacktest retrieves a backtest by ID
 func (s *BacktestService) GetBacktest(ctx context.Context, id int, userID int) (*model.Backtest, error) {
 	backtest, err := s.backtestRepo.GetBacktest(ctx, id)

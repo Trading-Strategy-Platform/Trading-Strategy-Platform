@@ -141,6 +141,128 @@ func (h *BacktestHandler) ListBacktests(c *gin.Context) {
 	})
 }
 
+// UpdateBacktestRunStatus handles updating the status of a backtest run
+func (h *BacktestHandler) UpdateBacktestRunStatus(c *gin.Context) {
+	idStr := c.Param("id")
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid backtest run ID"})
+		return
+	}
+
+	var request struct {
+		Status string `json:"status" binding:"required"`
+	}
+
+	if err := c.ShouldBindJSON(&request); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	success, err := h.backtestService.UpdateBacktestRunStatus(c.Request.Context(), id, request.Status)
+	if err != nil {
+		h.logger.Error("Failed to update backtest run status",
+			zap.Error(err),
+			zap.Int("run_id", id))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update status"})
+		return
+	}
+
+	if !success {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Backtest run not found"})
+		return
+	}
+
+	c.Status(http.StatusNoContent)
+}
+
+// SaveBacktestResults handles saving results for a backtest run
+func (h *BacktestHandler) SaveBacktestResults(c *gin.Context) {
+	idStr := c.Param("id")
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid backtest run ID"})
+		return
+	}
+
+	var request model.BacktestResults
+	if err := c.ShouldBindJSON(&request); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	resultID, err := h.backtestService.SaveBacktestResults(c.Request.Context(), id, &request)
+	if err != nil {
+		h.logger.Error("Failed to save backtest results",
+			zap.Error(err),
+			zap.Int("run_id", id))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save results"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"result_id": resultID,
+		"message":   "Backtest results saved successfully",
+	})
+}
+
+// AddBacktestTrade handles adding a trade to a backtest run
+func (h *BacktestHandler) AddBacktestTrade(c *gin.Context) {
+	idStr := c.Param("id")
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid backtest run ID"})
+		return
+	}
+
+	var request model.BacktestTrade
+	if err := c.ShouldBindJSON(&request); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Set the backtest run ID from the path parameter
+	request.BacktestRunID = id
+
+	tradeID, err := h.backtestService.AddBacktestTrade(c.Request.Context(), &request)
+	if err != nil {
+		h.logger.Error("Failed to add backtest trade",
+			zap.Error(err),
+			zap.Int("run_id", id))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to add trade"})
+		return
+	}
+
+	c.JSON(http.StatusCreated, gin.H{
+		"trade_id": tradeID,
+		"message":  "Trade added successfully",
+	})
+}
+
+// GetBacktestTrades handles retrieving trades for a backtest run
+func (h *BacktestHandler) GetBacktestTrades(c *gin.Context) {
+	idStr := c.Param("id")
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid backtest run ID"})
+		return
+	}
+
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "100"))
+
+	trades, err := h.backtestService.GetBacktestTrades(c.Request.Context(), id, limit, (page-1)*limit)
+	if err != nil {
+		h.logger.Error("Failed to get backtest trades",
+			zap.Error(err),
+			zap.Int("run_id", id))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve trades"})
+		return
+	}
+
+	c.JSON(http.StatusOK, trades)
+}
+
 // DeleteBacktest handles deleting a backtest
 func (h *BacktestHandler) DeleteBacktest(c *gin.Context) {
 	// Parse path parameter

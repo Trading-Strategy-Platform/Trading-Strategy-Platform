@@ -155,6 +155,17 @@ func setupRouter(authService *service.AuthService, userService *service.UserServ
 	// API routes
 	v1 := router.Group("/api/v1")
 	{
+		// Add notification routes
+		notifications := v1.Group("/notifications")
+		{
+			notificationHandler := handler.NewNotificationHandler(notificationService, logger)
+			notifications.Use(middleware.AuthMiddleware(authService, logger))
+
+			notifications.GET("", notificationHandler.GetNotifications)
+			notifications.GET("/count", notificationHandler.GetUnreadCount)
+			notifications.PUT("/:id/read", notificationHandler.MarkAsRead)
+			notifications.PUT("/read-all", notificationHandler.MarkAllAsRead)
+		}
 		// Auth routes
 		auth := v1.Group("/auth")
 		{
