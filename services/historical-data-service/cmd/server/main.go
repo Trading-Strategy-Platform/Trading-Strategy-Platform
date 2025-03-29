@@ -55,7 +55,7 @@ func main() {
 	strategyClient := client.NewStrategyClient(cfg.StrategyService.URL, logger)
 
 	// Initialize services
-	marketDataService := service.NewMarketDataService(marketDataRepo, logger)
+	marketDataService := service.NewMarketDataService(marketDataRepo, symbolRepo, logger)
 	backtestService := service.NewBacktestService(
 		backtestRepo,
 		marketDataRepo,
@@ -208,12 +208,6 @@ func setupRouter(
 		timeframes := v1.Group("/timeframes")
 		{
 			timeframes.GET("", timeframeHandler.GetAllTimeframes) // Direct DB query
-
-			// Admin-only routes for managing timeframes
-			admin := timeframes.Group("")
-			admin.Use(middleware.AuthMiddleware(userClient, logger))
-			admin.Use(middleware.RequireRole(userService, "admin"))
-			admin.POST("", timeframeHandler.CreateTimeframe) // Direct DB implementation
 		}
 
 		// Market data routes

@@ -300,8 +300,58 @@ BEGIN
             p_tags IS NULL 
             OR s.tag_ids && p_tags
         )
+        
+    UNION ALL
+    
+    -- Add expired subscriptions (for strategies that no longer appear in v_my_strategies due to expired subscriptions)
+    SELECT 
+        s.id, 
+        s.name, 
+        s.description,
+        s.thumbnail_url,
+        s.user_id AS owner_id,
+        u.username AS owner_username,
+        s.is_public,
+        s.is_active,
+        p.strategy_version AS version,
+        p.created_at AS purchase_date,
+        s.updated_at,
+        'expired' AS access_type,
+        p.id AS purchase_id,
+        p.created_at AS purchase_date,
+        ARRAY(
+            SELECT tag_id 
+            FROM strategy_tag_mappings 
+            WHERE strategy_id = s.id
+        ) AS tag_ids
+    FROM 
+        strategy_purchases p
+        JOIN strategy_marketplace m ON p.marketplace_id = m.id
+        JOIN strategies s ON m.strategy_id = s.id
+        JOIN users u ON s.user_id = u.id
+    WHERE 
+        p.buyer_id = p_user_id
+        AND s.is_active = TRUE 
+        AND p.subscription_end IS NOT NULL
+        AND p.subscription_end <= NOW()
+        AND (
+            p_search_term IS NULL 
+            OR s.name ILIKE '%' || p_search_term || '%' 
+            OR s.description ILIKE '%' || p_search_term || '%'
+        )
+        AND (
+            p_tags IS NULL 
+            OR EXISTS (
+                SELECT 1 
+                FROM strategy_tag_mappings 
+                WHERE strategy_id = s.id 
+                AND tag_id = ANY(p_tags)
+            )
+        )
+        AND (p_purchased_only = FALSE OR TRUE)
+    
     ORDER BY 
-        s.created_at DESC;
+        created_at DESC;
 END;
 $$ LANGUAGE plpgsql;
 

@@ -7,19 +7,26 @@ import (
 	"time"
 )
 
-// MarketData represents a single OHLCV candle for a symbol/timeframe
-type MarketData struct {
-	ID          int        `json:"id" db:"id"`
-	SymbolID    int        `json:"symbol_id" db:"symbol_id"`
-	TimeframeID int        `json:"timeframe_id" db:"timeframe_id"`
-	Timestamp   time.Time  `json:"timestamp" db:"timestamp"`
-	Open        float64    `json:"open" db:"open"`
-	High        float64    `json:"high" db:"high"`
-	Low         float64    `json:"low" db:"low"`
-	Close       float64    `json:"close" db:"close"`
-	Volume      float64    `json:"volume" db:"volume"`
-	CreatedAt   time.Time  `json:"created_at" db:"created_at"`
-	UpdatedAt   *time.Time `json:"updated_at,omitempty" db:"updated_at"`
+// Candle represents a price candle returned by the get_candles function
+type Candle struct {
+	SymbolID int       `json:"symbol_id" db:"symbol_id"`
+	Time     time.Time `json:"time" db:"time"`
+	Open     float64   `json:"open" db:"open"`
+	High     float64   `json:"high" db:"high"`
+	Low      float64   `json:"low" db:"low"`
+	Close    float64   `json:"close" db:"close"`
+	Volume   float64   `json:"volume" db:"volume"`
+}
+
+// CandleBatch represents a batch of candles for database import
+type CandleBatch struct {
+	SymbolID int       `json:"symbol_id"`
+	Time     time.Time `json:"time"`
+	Open     float64   `json:"open"`
+	High     float64   `json:"high"`
+	Low      float64   `json:"low"`
+	Close    float64   `json:"close"`
+	Volume   float64   `json:"volume"`
 }
 
 // Symbol represents a tradable market symbol
@@ -45,41 +52,37 @@ type Timeframe struct {
 	UpdatedAt   *time.Time `json:"updated_at,omitempty" db:"updated_at"`
 }
 
-// BacktestStatus represents the status of a backtest
-type BacktestStatus string
-
-const (
-	BacktestStatusQueued    BacktestStatus = "queued"
-	BacktestStatusRunning   BacktestStatus = "running"
-	BacktestStatusCompleted BacktestStatus = "completed"
-	BacktestStatusFailed    BacktestStatus = "failed"
-)
-
-// Backtest represents a strategy backtest
-type Backtest struct {
-	ID              int              `json:"id" db:"id"`
-	UserID          int              `json:"user_id" db:"user_id"`
-	StrategyID      int              `json:"strategy_id" db:"strategy_id"`
-	StrategyName    string           `json:"strategy_name" db:"strategy_name"`
-	StrategyVersion int              `json:"strategy_version" db:"strategy_version"`
-	SymbolID        int              `json:"symbol_id" db:"symbol_id"`
-	TimeframeID     int              `json:"timeframe_id" db:"timeframe_id"`
-	StartDate       time.Time        `json:"start_date" db:"start_date"`
-	EndDate         time.Time        `json:"end_date" db:"end_date"`
-	InitialCapital  float64          `json:"initial_capital" db:"initial_capital"`
-	Status          BacktestStatus   `json:"status" db:"status"`
-	Results         *BacktestResults `json:"results,omitempty" db:"results"`
-	ErrorMessage    *string          `json:"error_message,omitempty" db:"error_message"`
-	CreatedAt       time.Time        `json:"created_at" db:"created_at"`
-	UpdatedAt       *time.Time       `json:"updated_at,omitempty" db:"updated_at"`
-	CompletedAt     *time.Time       `json:"completed_at,omitempty" db:"completed_at"`
-
-	// Additional fields populated on response
-	SymbolInfo    *Symbol    `json:"symbol_info,omitempty" db:"-"`
-	TimeframeInfo *Timeframe `json:"timeframe_info,omitempty" db:"-"`
+// BacktestSummary represents the summary view of a backtest
+type BacktestSummary struct {
+	BacktestID    int             `json:"backtest_id" db:"backtest_id"`
+	Name          string          `json:"name" db:"name"`
+	StrategyName  string          `json:"strategy_name" db:"strategy_name"`
+	Date          time.Time       `json:"date" db:"date"`
+	Status        string          `json:"status" db:"status"`
+	SymbolResults json.RawMessage `json:"symbol_results" db:"symbol_results"`
+	CompletedRuns int             `json:"completed_runs" db:"completed_runs"`
+	TotalRuns     int             `json:"total_runs" db:"total_runs"`
 }
 
-// BacktestResults represents the results of a backtest
+// BacktestDetails represents the detailed view of a backtest
+type BacktestDetails struct {
+	BacktestID      int             `json:"backtest_id" db:"backtest_id"`
+	Name            string          `json:"name" db:"name"`
+	Description     string          `json:"description" db:"description"`
+	StrategyName    string          `json:"strategy_name" db:"strategy_name"`
+	StrategyID      int             `json:"strategy_id" db:"strategy_id"`
+	StrategyVersion int             `json:"strategy_version" db:"strategy_version"`
+	Timeframe       string          `json:"timeframe" db:"timeframe"`
+	StartDate       time.Time       `json:"start_date" db:"start_date"`
+	EndDate         time.Time       `json:"end_date" db:"end_date"`
+	InitialCapital  float64         `json:"initial_capital" db:"initial_capital"`
+	Status          string          `json:"status" db:"status"`
+	CreatedAt       time.Time       `json:"created_at" db:"created_at"`
+	CompletedAt     *time.Time      `json:"completed_at,omitempty" db:"completed_at"`
+	RunResults      json.RawMessage `json:"run_results" db:"run_results"`
+}
+
+// BacktestResults represents the performance results of a backtest
 type BacktestResults struct {
 	TotalTrades      int             `json:"total_trades" binding:"required"`
 	WinningTrades    int             `json:"winning_trades" binding:"required"`
@@ -107,67 +110,48 @@ func (r *BacktestResults) Scan(value interface{}) error {
 	return json.Unmarshal(b, &r)
 }
 
-// Trade represents a single trade in a backtest
-type Trade struct {
-	EntryTime     time.Time `json:"entry_time"`
-	ExitTime      time.Time `json:"exit_time"`
-	EntryPrice    float64   `json:"entry_price"`
-	ExitPrice     float64   `json:"exit_price"`
-	Direction     string    `json:"direction"` // "long" or "short"
-	Quantity      float64   `json:"quantity"`
-	ProfitLoss    float64   `json:"profit_loss"`
-	ProfitLossPct float64   `json:"profit_loss_pct"`
+// BacktestTrade represents a single trade in a backtest run
+type BacktestTrade struct {
+	ID                int        `json:"id,omitempty" db:"id"`
+	BacktestRunID     int        `json:"backtest_run_id" db:"backtest_run_id"`
+	SymbolID          int        `json:"symbol_id" db:"symbol_id" binding:"required"`
+	Symbol            string     `json:"symbol,omitempty" db:"symbol"`
+	EntryTime         time.Time  `json:"entry_time" db:"entry_time" binding:"required"`
+	ExitTime          *time.Time `json:"exit_time,omitempty" db:"exit_time"`
+	PositionType      string     `json:"position_type" db:"position_type" binding:"required"`
+	EntryPrice        float64    `json:"entry_price" db:"entry_price" binding:"required"`
+	ExitPrice         *float64   `json:"exit_price,omitempty" db:"exit_price"`
+	Quantity          float64    `json:"quantity" db:"quantity" binding:"required"`
+	ProfitLoss        *float64   `json:"profit_loss,omitempty" db:"profit_loss"`
+	ProfitLossPercent *float64   `json:"profit_loss_percent,omitempty" db:"profit_loss_percent"`
+	ExitReason        *string    `json:"exit_reason,omitempty" db:"exit_reason"`
 }
 
 // BacktestRequest represents the input parameters for a backtest
 type BacktestRequest struct {
 	StrategyID      int       `json:"strategy_id" binding:"required"`
 	StrategyVersion int       `json:"strategy_version,omitempty"`
-	SymbolID        int       `json:"symbol_id" binding:"required"`
-	TimeframeID     int       `json:"timeframe_id" binding:"required"`
+	Name            string    `json:"name,omitempty"`
+	Description     string    `json:"description,omitempty"`
+	Timeframe       string    `json:"timeframe" binding:"required"`
+	SymbolIDs       []int     `json:"symbol_ids" binding:"required,min=1"`
 	StartDate       time.Time `json:"start_date" binding:"required"`
 	EndDate         time.Time `json:"end_date" binding:"required"`
 	InitialCapital  float64   `json:"initial_capital" binding:"required,min=1"`
 }
 
-// MarketDataImport represents data for importing market data
-type MarketDataImport struct {
-	SymbolID    int     `json:"symbol_id" binding:"required"`
-	TimeframeID int     `json:"timeframe_id" binding:"required"`
-	Data        []OHLCV `json:"data" binding:"required"`
-}
-
-// OHLCV represents a single candlestick record
-type OHLCV struct {
-	Timestamp time.Time `json:"timestamp" binding:"required"`
-	Open      float64   `json:"open" binding:"required"`
-	High      float64   `json:"high" binding:"required"`
-	Low       float64   `json:"low" binding:"required"`
-	Close     float64   `json:"close" binding:"required"`
-	Volume    float64   `json:"volume" binding:"required"`
-}
-
-// MarketDataQuery represents a query for market data
+// MarketDataQuery represents a query for candle data
 type MarketDataQuery struct {
-	SymbolID    int        `json:"symbol_id" form:"symbol_id" binding:"required"`
-	TimeframeID int        `json:"timeframe_id" form:"timeframe_id" binding:"required"`
-	StartDate   *time.Time `json:"start_date" form:"start_date"`
-	EndDate     *time.Time `json:"end_date" form:"end_date"`
-	Limit       *int       `json:"limit" form:"limit"`
+	SymbolID  int        `json:"symbol_id" form:"symbol_id" binding:"required"`
+	Timeframe string     `json:"timeframe" form:"timeframe" binding:"required"`
+	StartDate *time.Time `json:"start_date" form:"start_date"`
+	EndDate   *time.Time `json:"end_date" form:"end_date"`
+	Limit     *int       `json:"limit" form:"limit"`
 }
 
-// BacktestTrade represents a single trade in a backtest
-type BacktestTrade struct {
-	ID                int        `json:"id,omitempty"`
-	BacktestRunID     int        `json:"backtest_run_id"`
-	SymbolID          int        `json:"symbol_id" binding:"required"`
-	EntryTime         time.Time  `json:"entry_time" binding:"required"`
-	ExitTime          *time.Time `json:"exit_time,omitempty"`
-	PositionType      string     `json:"position_type" binding:"required"`
-	EntryPrice        float64    `json:"entry_price" binding:"required"`
-	ExitPrice         *float64   `json:"exit_price,omitempty"`
-	Quantity          float64    `json:"quantity" binding:"required"`
-	ProfitLoss        *float64   `json:"profit_loss,omitempty"`
-	ProfitLossPercent *float64   `json:"profit_loss_percent,omitempty"`
-	ExitReason        *string    `json:"exit_reason,omitempty"`
+// SymbolFilter represents filter parameters for symbol queries
+type SymbolFilter struct {
+	SearchTerm string `json:"search_term" form:"search_term"`
+	AssetType  string `json:"asset_type" form:"asset_type"`
+	Exchange   string `json:"exchange" form:"exchange"`
 }

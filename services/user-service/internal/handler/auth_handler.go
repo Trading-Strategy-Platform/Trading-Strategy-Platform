@@ -25,6 +25,7 @@ func NewAuthHandler(authService *service.AuthService, logger *zap.Logger) *AuthH
 }
 
 // Register handles user registration
+// POST /api/v1/auth/register
 func (h *AuthHandler) Register(c *gin.Context) {
 	var request model.UserCreate
 	if err := c.ShouldBindJSON(&request); err != nil {
@@ -43,6 +44,7 @@ func (h *AuthHandler) Register(c *gin.Context) {
 }
 
 // Login handles user login
+// POST /api/v1/auth/login
 func (h *AuthHandler) Login(c *gin.Context) {
 	var request model.UserLogin
 	if err := c.ShouldBindJSON(&request); err != nil {
@@ -60,7 +62,27 @@ func (h *AuthHandler) Login(c *gin.Context) {
 	c.JSON(http.StatusOK, response)
 }
 
+// Logout handles user logout
+// POST /api/v1/auth/logout
+func (h *AuthHandler) Logout(c *gin.Context) {
+	userID, exists := c.Get("userID")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Not authenticated"})
+		return
+	}
+
+	err := h.authService.Logout(c.Request.Context(), userID.(int))
+	if err != nil {
+		h.logger.Error("logout failed", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to logout"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Successfully logged out"})
+}
+
 // RefreshToken handles refreshing access tokens
+// POST /api/v1/auth/refresh-token
 func (h *AuthHandler) RefreshToken(c *gin.Context) {
 	var request struct {
 		RefreshToken string `json:"refresh_token" binding:"required"`

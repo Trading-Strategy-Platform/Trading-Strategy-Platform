@@ -66,6 +66,56 @@ func (c *UserClient) ValidateToken(ctx context.Context, token string) (int, erro
 	return 0, fmt.Errorf("invalid token (status code: %d)", resp.StatusCode)
 }
 
+// HasRole checks if a user has a specific role
+func (c *UserClient) HasRole(ctx context.Context, userID int, role string, token string) (bool, error) {
+	url := fmt.Sprintf("%s/api/v1/auth/check-role", c.baseURL)
+
+	requestBody := struct {
+		UserID int    `json:"user_id"`
+		Role   string `json:"role"`
+	}{
+		UserID: userID,
+		Role:   role,
+	}
+
+	jsonBody, err := json.Marshal(requestBody)
+	if err != nil {
+		return false, err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewBuffer(jsonBody))
+	if err != nil {
+		return false, err
+	}
+
+	// Add the token for authorization
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		c.logger.Error("Failed to check role with User Service", zap.Error(err))
+		return false, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusOK {
+		var response struct {
+			HasRole bool `json:"has_role"`
+		}
+
+		err = json.NewDecoder(resp.Body).Decode(&response)
+		if err != nil {
+			c.logger.Error("Failed to decode role check response", zap.Error(err))
+			return false, err
+		}
+
+		return response.HasRole, nil
+	}
+
+	return false, fmt.Errorf("failed to check role (status code: %d)", resp.StatusCode)
+}
+
 // GetUsername gets a username by user ID
 func (c *UserClient) GetUsername(ctx context.Context, userID int) (string, error) {
 	url := fmt.Sprintf("%s/api/v1/admin/users/%d", c.baseURL, userID)
@@ -121,17 +171,13 @@ func NewStrategyClient(baseURL string, logger *zap.Logger) *StrategyClient {
 	}
 }
 
-// GetStrategy retrieves a strategy by ID
-func (c *StrategyClient) GetStrategy(ctx context.Context, strategyID int, token string) (
-	*struct {
-		ID            int             `json:"id"`
-		Name          string          `json:"name"`
-		UserID        int             `json:"user_id"`
-		Structure     json.RawMessage `json:"structure"`
-		Version       int             `json:"version"`
-		CreatorName   string          `json:"creator_name,omitempty"`
-		VersionsCount int             `json:"versions_count,omitempty"`
-	}, error) {
+// GetStrategy retrieves details of a strategy by ID
+func (c *StrategyClient) GetStrategy(ctx context.Context, strategyID int, token string) (*struct {
+	ID        int             `json:"id"`
+	Name      string          `json:"name"`
+	Version   int             `json:"version"`
+	Structure json.RawMessage `json:"structure"`
+}, error) {
 	url := fmt.Sprintf("%s/api/v1/strategies/%d", c.baseURL, strategyID)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
@@ -139,33 +185,34 @@ func (c *StrategyClient) GetStrategy(ctx context.Context, strategyID int, token 
 		return nil, err
 	}
 
-	// Add authentication header
 	if token != "" {
+		// Add the token for authorization
 		req.Header.Set("Authorization", "Bearer "+token)
 	} else {
-		// Use service authentication for non-user requests
+		// Use service auth if no token provided
 		req.Header.Set("X-Service-Key", "historical-service-key")
 	}
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		c.logger.Error("Failed to get strategy from Strategy Service", zap.Error(err))
+		c.logger.Error("Failed to get strategy", zap.Error(err), zap.Int("strategyID", strategyID))
 		return nil, err
 	}
 	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, nil
+	}
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("strategy service returned status code %d", resp.StatusCode)
 	}
 
 	var strategy struct {
-		ID            int             `json:"id"`
-		Name          string          `json:"name"`
-		UserID        int             `json:"user_id"`
-		Structure     json.RawMessage `json:"structure"`
-		Version       int             `json:"version"`
-		CreatorName   string          `json:"creator_name,omitempty"`
-		VersionsCount int             `json:"versions_count,omitempty"`
+		ID        int             `json:"id"`
+		Name      string          `json:"name"`
+		Version   int             `json:"version"`
+		Structure json.RawMessage `json:"structure"`
 	}
 
 	err = json.NewDecoder(resp.Body).Decode(&strategy)
@@ -178,74 +225,63 @@ func (c *StrategyClient) GetStrategy(ctx context.Context, strategyID int, token 
 }
 
 // GetStrategyVersion retrieves a specific version of a strategy
-func (c *StrategyClient) GetStrategyVersion(
-	ctx context.Context,
-	strategyID int,
-	versionNumber int,
-	token string,
-) (*struct {
-	ID          int             `json:"id"`
-	StrategyID  int             `json:"strategy_id"`
-	Version     int             `json:"version"`
-	Structure   json.RawMessage `json:"structure"`
-	ChangeNotes string          `json:"change_notes"`
-	CreatedAt   time.Time       `json:"created_at"`
+func (c *StrategyClient) GetStrategyVersion(ctx context.Context, strategyID, version int, token string) (*struct {
+	ID        int             `json:"id"`
+	Version   int             `json:"version"`
+	Structure json.RawMessage `json:"structure"`
 }, error) {
-	url := fmt.Sprintf("%s/api/v1/strategies/%d/versions/%d", c.baseURL, strategyID, versionNumber)
+	url := fmt.Sprintf("%s/api/v1/strategies/%d/versions/%d", c.baseURL, strategyID, version)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
 	}
 
-	// Add authentication header
 	if token != "" {
+		// Add the token for authorization
 		req.Header.Set("Authorization", "Bearer "+token)
 	} else {
-		// Use service authentication for non-user requests
+		// Use service auth if no token provided
 		req.Header.Set("X-Service-Key", "historical-service-key")
 	}
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		c.logger.Error("Failed to get strategy version", zap.Error(err))
+		c.logger.Error("Failed to get strategy version", zap.Error(err),
+			zap.Int("strategyID", strategyID),
+			zap.Int("version", version))
 		return nil, err
 	}
 	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, nil
+	}
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("strategy service returned status code %d", resp.StatusCode)
 	}
 
-	var version struct {
-		ID          int             `json:"id"`
-		StrategyID  int             `json:"strategy_id"`
-		Version     int             `json:"version"`
-		Structure   json.RawMessage `json:"structure"`
-		ChangeNotes string          `json:"change_notes"`
-		CreatedAt   time.Time       `json:"created_at"`
+	var strategyVersion struct {
+		ID        int             `json:"id"`
+		Version   int             `json:"version"`
+		Structure json.RawMessage `json:"structure"`
 	}
 
-	err = json.NewDecoder(resp.Body).Decode(&version)
+	err = json.NewDecoder(resp.Body).Decode(&strategyVersion)
 	if err != nil {
 		c.logger.Error("Failed to decode strategy version response", zap.Error(err))
 		return nil, err
 	}
 
-	return &version, nil
+	return &strategyVersion, nil
 }
 
-// NotifyBacktestComplete notifies the Strategy Service that a backtest is complete
-func (c *StrategyClient) NotifyBacktestComplete(
-	ctx context.Context,
-	backtestID int,
-	strategyID int,
-	userID int,
-	status string,
-) error {
+// NotifyBacktestComplete notifies the Strategy Service of a completed backtest
+func (c *StrategyClient) NotifyBacktestComplete(ctx context.Context, backtestID, strategyID, userID int, status string) error {
 	url := fmt.Sprintf("%s/api/v1/service/backtests/notify", c.baseURL)
 
-	payload := struct {
+	requestBody := struct {
 		BacktestID int    `json:"backtest_id"`
 		StrategyID int    `json:"strategy_id"`
 		UserID     int    `json:"user_id"`
@@ -257,25 +293,19 @@ func (c *StrategyClient) NotifyBacktestComplete(
 		Status:     status,
 	}
 
-	payloadBytes, err := json.Marshal(payload)
-	if err != nil {
-		c.logger.Error("Failed to marshal backtest notification", zap.Error(err))
-		return err
-	}
-
-	req, err := http.NewRequestWithContext(
-		ctx,
-		http.MethodPost,
-		url,
-		bytes.NewBuffer(payloadBytes),
-	)
+	jsonBody, err := json.Marshal(requestBody)
 	if err != nil {
 		return err
 	}
 
-	// Add headers
-	req.Header.Set("Content-Type", "application/json")
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewBuffer(jsonBody))
+	if err != nil {
+		return err
+	}
+
+	// Use service auth for service-to-service calls
 	req.Header.Set("X-Service-Key", "historical-service-key")
+	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -284,8 +314,8 @@ func (c *StrategyClient) NotifyBacktestComplete(
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
-		return fmt.Errorf("strategy service returned status code %d", resp.StatusCode)
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("strategy service notification failed with status code %d", resp.StatusCode)
 	}
 
 	return nil

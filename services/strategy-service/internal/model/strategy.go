@@ -1,4 +1,3 @@
-// services/strategy-service/internal/model/strategy.go
 package model
 
 import (
@@ -8,18 +7,22 @@ import (
 	"time"
 )
 
-// Strategy represents a trading strategy
-type Strategy struct {
-	ID          int        `json:"id" db:"id"`
-	Name        string     `json:"name" db:"name"`
-	UserID      int        `json:"user_id" db:"user_id"`
-	Description string     `json:"description" db:"description"`
-	Structure   Structure  `json:"structure" db:"structure"`
-	IsPublic    bool       `json:"is_public" db:"is_public"`
-	Version     int        `json:"version" db:"version"`
-	CreatedAt   time.Time  `json:"created_at" db:"created_at"`
-	UpdatedAt   *time.Time `json:"updated_at,omitempty" db:"updated_at"`
-	Tags        []Tag      `json:"tags,omitempty" db:"-"`
+// ConvertToStrategy converts ExtendedStrategy to Strategy
+func (es *ExtendedStrategy) ConvertToStrategy() *Strategy {
+	return &Strategy{
+		ID:           es.ID,
+		Name:         es.Name,
+		UserID:       es.OwnerID,
+		Description:  es.Description,
+		ThumbnailURL: es.ThumbnailURL,
+		IsPublic:     es.IsPublic,
+		IsActive:     es.IsActive,
+		Version:      es.Version,
+		CreatedAt:    es.CreatedAt,
+		UpdatedAt:    es.UpdatedAt,
+		Tags:         es.Tags,
+		// Structure would need to be loaded separately
+	}
 }
 
 // Structure represents the rule structure of a strategy
@@ -62,24 +65,6 @@ type Indicator struct {
 // Condition represents a comparison condition in a rule
 type Condition struct {
 	Symbol string `json:"symbol"` // ">=", "<=", ">", "<", "==", etc.
-}
-
-// StrategyCreate represents data needed to create a new strategy
-type StrategyCreate struct {
-	Name        string    `json:"name" binding:"required"`
-	Description string    `json:"description"`
-	Structure   Structure `json:"structure" binding:"required"`
-	IsPublic    bool      `json:"is_public"`
-	Tags        []int     `json:"tags,omitempty"`
-}
-
-// StrategyUpdate represents data for updating a strategy
-type StrategyUpdate struct {
-	Name        *string    `json:"name"`
-	Description *string    `json:"description"`
-	Structure   *Structure `json:"structure"`
-	IsPublic    *bool      `json:"is_public"`
-	Tags        []int      `json:"tags,omitempty"`
 }
 
 // StrategyVersion represents a version of a strategy
@@ -167,15 +152,6 @@ type MarketplaceItem struct {
 	PurchasesCount int       `json:"purchases_count,omitempty" db:"-"`
 }
 
-// MarketplaceCreate represents data needed to create a marketplace listing
-type MarketplaceCreate struct {
-	StrategyID         int     `json:"strategy_id" binding:"required"`
-	Price              float64 `json:"price" binding:"required,min=0"`
-	IsSubscription     bool    `json:"is_subscription"`
-	SubscriptionPeriod string  `json:"subscription_period,omitempty"`
-	Description        string  `json:"description"`
-}
-
 // StrategyPurchase represents a purchase of a strategy from the marketplace
 type StrategyPurchase struct {
 	ID              int        `json:"id" db:"id"`
@@ -223,4 +199,73 @@ type BacktestRequest struct {
 	StartDate      time.Time `json:"start_date" binding:"required"`
 	EndDate        time.Time `json:"end_date" binding:"required"`
 	InitialCapital float64   `json:"initial_capital" binding:"required,min=1"`
+}
+
+// Strategy - Make sure IsActive field is included
+type Strategy struct {
+	ID           int        `json:"id" db:"id"`
+	Name         string     `json:"name" db:"name"`
+	UserID       int        `json:"user_id" db:"user_id"`
+	Description  string     `json:"description" db:"description"`
+	ThumbnailURL string     `json:"thumbnail_url" db:"thumbnail_url"`
+	Structure    Structure  `json:"structure" db:"structure"`
+	IsPublic     bool       `json:"is_public" db:"is_public"`
+	IsActive     bool       `json:"is_active" db:"is_active"` // Added field
+	Version      int        `json:"version" db:"version"`
+	CreatedAt    time.Time  `json:"created_at" db:"created_at"`
+	UpdatedAt    *time.Time `json:"updated_at,omitempty" db:"updated_at"`
+	Tags         []Tag      `json:"tags,omitempty" db:"-"`
+}
+
+// StrategyCreate - Make sure IsActive field is included
+type StrategyCreate struct {
+	Name         string    `json:"name" binding:"required"`
+	Description  string    `json:"description"`
+	ThumbnailURL string    `json:"thumbnail_url"`
+	Structure    Structure `json:"structure" binding:"required"`
+	IsPublic     bool      `json:"is_public"`
+	IsActive     bool      `json:"is_active"` // Added field, defaulted to true in service
+	Tags         []int     `json:"tags,omitempty"`
+}
+
+// StrategyUpdate - Make sure IsActive field is included
+type StrategyUpdate struct {
+	Name         *string    `json:"name"`
+	Description  *string    `json:"description"`
+	ThumbnailURL *string    `json:"thumbnail_url"`
+	Structure    *Structure `json:"structure"`
+	IsPublic     *bool      `json:"is_public"`
+	IsActive     *bool      `json:"is_active"` // Added field
+	Tags         []int      `json:"tags,omitempty"`
+}
+
+// ExtendedStrategy - Added to map SQL function output directly
+type ExtendedStrategy struct {
+	ID            int        `json:"id" db:"id"`
+	Name          string     `json:"name" db:"name"`
+	Description   string     `json:"description" db:"description"`
+	ThumbnailURL  string     `json:"thumbnail_url" db:"thumbnail_url"`
+	OwnerID       int        `json:"owner_id" db:"owner_id"`
+	OwnerUsername string     `json:"owner_username" db:"owner_username"`
+	IsPublic      bool       `json:"is_public" db:"is_public"`
+	IsActive      bool       `json:"is_active" db:"is_active"`
+	Version       int        `json:"version" db:"version"`
+	CreatedAt     time.Time  `json:"created_at" db:"created_at"`
+	UpdatedAt     *time.Time `json:"updated_at,omitempty" db:"updated_at"`
+	AccessType    string     `json:"access_type" db:"access_type"`
+	PurchaseID    *int       `json:"purchase_id,omitempty" db:"purchase_id"`
+	PurchaseDate  *time.Time `json:"purchase_date,omitempty" db:"purchase_date"`
+	TagIDs        []int      `json:"-" db:"tag_ids"`
+	Tags          []Tag      `json:"tags,omitempty" db:"-"`
+	Structure     *Structure `json:"structure,omitempty" db:"-"`
+}
+
+// MarketplaceCreate - Add missing VersionID field
+type MarketplaceCreate struct {
+	StrategyID         int     `json:"strategy_id" binding:"required"`
+	VersionID          int     `json:"version_id" binding:"required"` // Added field
+	Price              float64 `json:"price" binding:"required,min=0"`
+	IsSubscription     bool    `json:"is_subscription"`
+	SubscriptionPeriod string  `json:"subscription_period,omitempty"`
+	Description        string  `json:"description"`
 }

@@ -1,9 +1,9 @@
+// internal/repository/backtest_repository.go
 package repository
 
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"fmt"
 	"time"
 
@@ -27,270 +27,435 @@ func NewBacktestRepository(db *sqlx.DB, logger *zap.Logger) *BacktestRepository 
 	}
 }
 
-// CreateBacktest creates a new backtest
+// CreateBacktest creates a new backtest using create_backtest function
 func (r *BacktestRepository) CreateBacktest(
 	ctx context.Context,
-	backtest *model.Backtest,
+	userID int,
+	strategyID int,
+	strategyVersion int,
+	name string,
+	description string,
+	timeframe string,
+	startDate time.Time,
+	endDate time.Time,
+	initialCapital float64,
+	symbolIDs []int,
 ) (int, error) {
-	query := `
-		INSERT INTO backtests (
-			user_id, strategy_id, strategy_name, strategy_version, 
-			symbol_id, timeframe_id, start_date, end_date, 
-			initial_capital, status, created_at
-		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-		RETURNING id
-	`
+	query := `SELECT create_backtest($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`
 
-	var id int
-	err := r.db.QueryRowContext(
+	var backtestID int
+	err := r.db.GetContext(
 		ctx,
+		&backtestID,
 		query,
-		backtest.UserID,
-		backtest.StrategyID,
-		backtest.StrategyName,
-		backtest.StrategyVersion,
-		backtest.SymbolID,
-		backtest.TimeframeID,
-		backtest.StartDate,
-		backtest.EndDate,
-		backtest.InitialCapital,
-		backtest.Status,
-		time.Now(),
-	).Scan(&id)
+		userID,
+		strategyID,
+		strategyVersion,
+		name,
+		description,
+		timeframe,
+		startDate,
+		endDate,
+		initialCapital,
+		symbolIDs,
+	)
 
 	if err != nil {
 		r.logger.Error("Failed to create backtest", zap.Error(err))
 		return 0, err
 	}
 
-	return id, nil
+	return backtestID, nil
 }
 
-// GetBacktest retrieves a backtest by ID
+// GetBacktest retrieves a backtest by ID using get_backtest_details function
 func (r *BacktestRepository) GetBacktest(
 	ctx context.Context,
-	id int,
-) (*model.Backtest, error) {
-	query := `
-		SELECT 
-			id, user_id, strategy_id, strategy_name, strategy_version,
-			symbol_id, timeframe_id, start_date, end_date, initial_capital,
-			status, results, error_message, created_at, updated_at, completed_at
-		FROM backtests
-		WHERE id = $1
-	`
+	backtestID int,
+) (*model.BacktestDetails, error) {
+	query := `SELECT * FROM get_backtest_details($1)`
 
-	var backtest model.Backtest
-	err := r.db.GetContext(ctx, &backtest, query, id)
+	var backtest model.BacktestDetails
+	err := r.db.GetContext(ctx, &backtest, query, backtestID)
 	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, nil
-		}
-		r.logger.Error("Failed to get backtest", zap.Error(err), zap.Int("id", id))
+		r.logger.Error("Failed to get backtest details", zap.Error(err), zap.Int("id", backtestID))
 		return nil, err
 	}
 
 	return &backtest, nil
 }
 
-// GetBacktestsByUser retrieves backtests for a user
+// GetBacktestsByUser retrieves backtests for a user using get_backtest_summary function
 func (r *BacktestRepository) GetBacktestsByUser(
 	ctx context.Context,
 	userID int,
-	page, limit int,
-) ([]model.Backtest, int, error) {
-	// Calculate offset
-	offset := (page - 1) * limit
+	limit int,
+	offset int,
+) ([]model.BacktestSummary, error) {
+	query := `SELECT * FROM get_backtest_summary($1, $2, $3)`
 
-	// Query to get total count
-	countQuery := `
-		SELECT COUNT(*) 
-		FROM backtests
-		WHERE user_id = $1
-	`
-
-	var total int
-	err := r.db.GetContext(ctx, &total, countQuery, userID)
+	var backtests []model.BacktestSummary
+	err := r.db.SelectContext(ctx, &backtests, query, userID, limit, offset)
 	if err != nil {
-		r.logger.Error("Failed to count backtests", zap.Error(err), zap.Int("userID", userID))
-		return nil, 0, err
-	}
-
-	// Query to get paginated backtests
-	query := `
-		SELECT 
-			id, user_id, strategy_id, strategy_name, strategy_version,
-			symbol_id, timeframe_id, start_date, end_date, initial_capital,
-			status, results, error_message, created_at, updated_at, completed_at
-		FROM backtests
-		WHERE user_id = $1
-		ORDER BY created_at DESC
-		LIMIT $2 OFFSET $3
-	`
-
-	var backtests []model.Backtest
-	err = r.db.SelectContext(ctx, &backtests, query, userID, limit, offset)
-	if err != nil {
-		r.logger.Error("Failed to get backtests",
+		r.logger.Error("Failed to get backtest summary",
 			zap.Error(err),
-			zap.Int("userID", userID),
-			zap.Int("page", page),
-			zap.Int("limit", limit))
-		return nil, 0, err
+			zap.Int("userID", userID))
+		return nil, err
 	}
 
-	return backtests, total, nil
+	return backtests, nil
 }
 
-// UpdateBacktestStatus updates the status of a backtest
-func (r *BacktestRepository) UpdateBacktestStatus(
-	ctx context.Context,
-	id int,
-	status model.BacktestStatus,
-) error {
-	query := `
-		UPDATE backtests
-		SET status = $1, updated_at = CURRENT_TIMESTAMP
-		WHERE id = $2
-	`
+// CountUserBacktests counts the total number of backtests for a user
+func (r *BacktestRepository) CountUserBacktests(ctx context.Context, userID int) (int, error) {
+	query := `SELECT COUNT(*) FROM backtests WHERE user_id = $1`
 
-	_, err := r.db.ExecContext(ctx, query, status, id)
+	var count int
+	err := r.db.GetContext(ctx, &count, query, userID)
 	if err != nil {
-		r.logger.Error("Failed to update backtest status",
-			zap.Error(err),
-			zap.Int("id", id),
-			zap.String("status", string(status)))
-		return err
+		r.logger.Error("Failed to count user backtests", zap.Error(err), zap.Int("userID", userID))
+		return 0, err
 	}
 
-	return nil
+	return count, nil
 }
 
-// CompleteBacktest completes a backtest with results
-func (r *BacktestRepository) CompleteBacktest(
+// UpdateBacktestRunStatus updates the status of a backtest run using update_backtest_run_status function
+func (r *BacktestRepository) UpdateBacktestRunStatus(
 	ctx context.Context,
-	id int,
-	results model.BacktestResults,
-) error {
-	// Convert results to JSON
-	resultsJSON, err := json.Marshal(results)
+	runID int,
+	status string,
+) (bool, error) {
+	query := `SELECT update_backtest_run_status($1, $2)`
+
+	var success bool
+	err := r.db.GetContext(ctx, &success, query, runID, status)
 	if err != nil {
-		r.logger.Error("Failed to marshal backtest results", zap.Error(err))
-		return err
+		r.logger.Error("Failed to update backtest run status",
+			zap.Error(err),
+			zap.Int("runID", runID),
+			zap.String("status", status))
+		return false, err
 	}
 
-	query := `
-		UPDATE backtests
-		SET 
-			status = $1, 
-			results = $2, 
-			updated_at = CURRENT_TIMESTAMP,
-			completed_at = CURRENT_TIMESTAMP
-		WHERE id = $3
-	`
+	return success, nil
+}
 
-	_, err = r.db.ExecContext(
+// SaveBacktestResults saves results for a backtest run using save_backtest_result function
+func (r *BacktestRepository) SaveBacktestResults(
+	ctx context.Context,
+	runID int,
+	results *model.BacktestResults,
+) (int, error) {
+	query := `SELECT save_backtest_result($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`
+
+	var resultID int
+	err := r.db.GetContext(
 		ctx,
+		&resultID,
 		query,
-		model.BacktestStatusCompleted,
-		resultsJSON,
-		id,
+		runID,
+		results.TotalTrades,
+		results.WinningTrades,
+		results.LosingTrades,
+		results.ProfitFactor,
+		results.SharpeRatio,
+		results.MaxDrawdown,
+		results.FinalCapital,
+		results.TotalReturn,
+		results.AnnualizedReturn,
+		results.ResultsJSON,
 	)
+
 	if err != nil {
-		r.logger.Error("Failed to complete backtest", zap.Error(err), zap.Int("id", id))
-		return err
+		r.logger.Error("Failed to save backtest results", zap.Error(err), zap.Int("runID", runID))
+		return 0, err
 	}
 
-	return nil
+	return resultID, nil
 }
 
-// FailBacktest marks a backtest as failed with an error message
-func (r *BacktestRepository) FailBacktest(
+// AddBacktestTrade adds a trade to a backtest run using add_backtest_trade function
+func (r *BacktestRepository) AddBacktestTrade(
 	ctx context.Context,
-	id int,
-	errorMessage string,
-) error {
-	query := `
-		UPDATE backtests
-		SET 
-			status = $1, 
-			error_message = $2, 
-			updated_at = CURRENT_TIMESTAMP,
-			completed_at = CURRENT_TIMESTAMP
-		WHERE id = $3
-	`
+	trade *model.BacktestTrade,
+) (int, error) {
+	query := `SELECT add_backtest_trade($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`
 
-	_, err := r.db.ExecContext(
+	var tradeID int
+	err := r.db.GetContext(
 		ctx,
+		&tradeID,
 		query,
-		model.BacktestStatusFailed,
-		errorMessage,
-		id,
+		trade.BacktestRunID,
+		trade.SymbolID,
+		trade.EntryTime,
+		trade.ExitTime,
+		trade.PositionType,
+		trade.EntryPrice,
+		trade.ExitPrice,
+		trade.Quantity,
+		trade.ProfitLoss,
+		trade.ProfitLossPercent,
+		trade.ExitReason,
 	)
+
 	if err != nil {
-		r.logger.Error("Failed to set backtest as failed",
-			zap.Error(err),
-			zap.Int("id", id),
-			zap.String("errorMessage", errorMessage))
-		return err
+		r.logger.Error("Failed to add backtest trade", zap.Error(err))
+		return 0, err
 	}
 
-	return nil
+	return tradeID, nil
 }
 
-// DeleteBacktest deletes a backtest
+// GetBacktestTrades retrieves trades for a backtest run using get_backtest_trades function
+func (r *BacktestRepository) GetBacktestTrades(
+	ctx context.Context,
+	runID int,
+	limit int,
+	offset int,
+) ([]model.BacktestTrade, error) {
+	query := `SELECT * FROM get_backtest_trades($1, $2, $3)`
+
+	var trades []model.BacktestTrade
+	err := r.db.SelectContext(ctx, &trades, query, runID, limit, offset)
+	if err != nil {
+		r.logger.Error("Failed to get backtest trades",
+			zap.Error(err),
+			zap.Int("runID", runID))
+		return nil, err
+	}
+
+	return trades, nil
+}
+
+// DeleteBacktest deletes a backtest using delete_backtest function
 func (r *BacktestRepository) DeleteBacktest(
 	ctx context.Context,
-	id int,
 	userID int,
-) error {
-	query := `DELETE FROM backtests WHERE id = $1 AND user_id = $2`
+	backtestID int,
+) (bool, error) {
+	query := `SELECT delete_backtest($1, $2)`
 
-	result, err := r.db.ExecContext(ctx, query, id, userID)
+	var success bool
+	err := r.db.GetContext(ctx, &success, query, userID, backtestID)
 	if err != nil {
 		r.logger.Error("Failed to delete backtest",
 			zap.Error(err),
-			zap.Int("id", id),
-			zap.Int("userID", userID))
-		return err
+			zap.Int("userID", userID),
+			zap.Int("backtestID", backtestID))
+		return false, err
 	}
 
-	// Check if any row was affected
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return err
+	if !success {
+		return false, fmt.Errorf("backtest not found or not owned by user")
 	}
 
-	if rowsAffected == 0 {
-		return fmt.Errorf("backtest not found or not owned by user")
-	}
-
-	return nil
+	return true, nil
 }
 
 // GetQueuedBacktests retrieves backtests in queued status
 func (r *BacktestRepository) GetQueuedBacktests(
 	ctx context.Context,
 	limit int,
-) ([]model.Backtest, error) {
+) ([]model.BacktestSummary, error) {
+	// Using direct query as there's no specific function for this
 	query := `
 		SELECT 
-			id, user_id, strategy_id, strategy_name, strategy_version,
-			symbol_id, timeframe_id, start_date, end_date, initial_capital,
-			status, results, error_message, created_at, updated_at, completed_at
-		FROM backtests
-		WHERE status = $1
-		ORDER BY created_at ASC
-		LIMIT $2
+			b.id AS backtest_id,
+			b.name,
+			s.name AS strategy_name,
+			b.created_at AS date,
+			b.status,
+			NULL AS symbol_results,
+			0 AS completed_runs,
+			COUNT(br.id) AS total_runs
+		FROM 
+			backtests b
+		JOIN 
+			strategies s ON b.strategy_id = s.id
+		LEFT JOIN
+			backtest_runs br ON b.id = br.backtest_id
+		WHERE 
+			b.status = 'pending'
+		GROUP BY
+			b.id, b.name, s.name, b.created_at, b.status
+		ORDER BY 
+			b.created_at ASC
+		LIMIT $1
 	`
 
-	var backtests []model.Backtest
-	err := r.db.SelectContext(ctx, &backtests, query, model.BacktestStatusQueued, limit)
+	var backtests []model.BacktestSummary
+	err := r.db.SelectContext(ctx, &backtests, query, limit)
 	if err != nil {
 		r.logger.Error("Failed to get queued backtests", zap.Error(err))
 		return nil, err
 	}
 
 	return backtests, nil
+}
+
+// GetBacktestRunIDBySymbol finds the run ID for a specific backtest and symbol
+func (r *BacktestRepository) GetBacktestRunIDBySymbol(
+	ctx context.Context,
+	backtestID int,
+	symbolID int,
+) (int, error) {
+	query := `
+		SELECT id FROM backtest_runs
+		WHERE backtest_id = $1 AND symbol_id = $2
+	`
+
+	var runID int
+	err := r.db.GetContext(ctx, &runID, query, backtestID, symbolID)
+	if err != nil {
+		r.logger.Error("Failed to find backtest run ID",
+			zap.Error(err),
+			zap.Int("backtestID", backtestID),
+			zap.Int("symbolID", symbolID))
+		return 0, err
+	}
+
+	return runID, nil
+}
+
+// UpdateBacktestRunsStatusBulk updates all runs for a backtest to the given status
+func (r *BacktestRepository) UpdateBacktestRunsStatusBulk(
+	ctx context.Context,
+	backtestID int,
+	status string,
+) error {
+	query := `
+		UPDATE backtest_runs
+		SET status = $2, completed_at = NOW()
+		WHERE backtest_id = $1
+	`
+	_, err := r.db.ExecContext(ctx, query, backtestID, status)
+	if err != nil {
+		r.logger.Error("Failed to update backtest runs status",
+			zap.Error(err),
+			zap.Int("backtestID", backtestID),
+			zap.String("status", status))
+	}
+	return err
+}
+
+// UpdateBacktestStatus updates a backtest status
+func (r *BacktestRepository) UpdateBacktestStatus(
+	ctx context.Context,
+	backtestID int,
+	status string,
+	errorMessage string,
+) error {
+	query := `
+		UPDATE backtests
+		SET status = $2, error_message = $3, completed_at = NOW(), updated_at = NOW()
+		WHERE id = $1
+	`
+	_, err := r.db.ExecContext(ctx, query, backtestID, status, errorMessage)
+	if err != nil {
+		r.logger.Error("Failed to update backtest status",
+			zap.Error(err),
+			zap.Int("backtestID", backtestID),
+			zap.String("status", status))
+	}
+	return err
+}
+
+// GetBacktestUserID gets the user ID associated with a backtest
+func (r *BacktestRepository) GetBacktestUserID(
+	ctx context.Context,
+	backtestID int,
+) (int, error) {
+	query := "SELECT user_id FROM backtests WHERE id = $1"
+
+	var userID int
+	err := r.db.GetContext(ctx, &userID, query, backtestID)
+	if err != nil {
+		r.logger.Error("Failed to get backtest user ID",
+			zap.Error(err),
+			zap.Int("backtestID", backtestID))
+		return 0, err
+	}
+	return userID, nil
+}
+
+// GetBacktestSymbolIDs gets all symbol IDs for a backtest
+func (r *BacktestRepository) GetBacktestSymbolIDs(
+	ctx context.Context,
+	backtestID int,
+) ([]int, error) {
+	query := `SELECT symbol_id FROM backtest_runs WHERE backtest_id = $1`
+
+	var symbolIDs []int
+	err := r.db.SelectContext(ctx, &symbolIDs, query, backtestID)
+	if err != nil {
+		r.logger.Error("Failed to get backtest symbol IDs",
+			zap.Error(err),
+			zap.Int("backtestID", backtestID))
+		return nil, err
+	}
+	return symbolIDs, err
+}
+
+// GetBacktestDetails gets detailed information about a backtest
+func (r *BacktestRepository) GetBacktestDetails(
+	ctx context.Context,
+	backtestID int,
+) (*struct {
+	StrategyID      int
+	StrategyVersion int
+	UserID          int
+	Timeframe       string
+	StartDate       time.Time
+	EndDate         time.Time
+	InitialCapital  float64
+}, error) {
+	query := `
+		SELECT strategy_id, strategy_version, user_id, timeframe, 
+               start_date, end_date, initial_capital 
+        FROM backtests WHERE id = $1
+	`
+
+	var dbDetails struct {
+		StrategyID      int       `db:"strategy_id"`
+		StrategyVersion int       `db:"strategy_version"`
+		UserID          int       `db:"user_id"`
+		Timeframe       string    `db:"timeframe"`
+		StartDate       time.Time `db:"start_date"`
+		EndDate         time.Time `db:"end_date"`
+		InitialCapital  float64   `db:"initial_capital"`
+	}
+
+	err := r.db.GetContext(ctx, &dbDetails, query, backtestID)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		r.logger.Error("Failed to get backtest details",
+			zap.Error(err),
+			zap.Int("backtestID", backtestID))
+		return nil, err
+	}
+
+	// Create a clean struct without DB tags for the return value
+	result := struct {
+		StrategyID      int
+		StrategyVersion int
+		UserID          int
+		Timeframe       string
+		StartDate       time.Time
+		EndDate         time.Time
+		InitialCapital  float64
+	}{
+		StrategyID:      dbDetails.StrategyID,
+		StrategyVersion: dbDetails.StrategyVersion,
+		UserID:          dbDetails.UserID,
+		Timeframe:       dbDetails.Timeframe,
+		StartDate:       dbDetails.StartDate,
+		EndDate:         dbDetails.EndDate,
+		InitialCapital:  dbDetails.InitialCapital,
+	}
+
+	return &result, nil
 }

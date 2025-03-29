@@ -26,6 +26,7 @@ func NewUserHandler(userService *service.UserService, logger *zap.Logger) *UserH
 }
 
 // GetCurrentUser handles fetching current user profile
+// GET /api/v1/users/me
 func (h *UserHandler) GetCurrentUser(c *gin.Context) {
 	userID, _ := c.Get("userID")
 	user, err := h.userService.GetCurrentUser(c.Request.Context(), userID.(int))
@@ -44,6 +45,7 @@ func (h *UserHandler) GetCurrentUser(c *gin.Context) {
 }
 
 // UpdateCurrentUser handles updating current user profile
+// PUT /api/v1/users/me
 func (h *UserHandler) UpdateCurrentUser(c *gin.Context) {
 	var request model.UserUpdate
 	if err := c.ShouldBindJSON(&request); err != nil {
@@ -71,6 +73,7 @@ func (h *UserHandler) UpdateCurrentUser(c *gin.Context) {
 }
 
 // ChangePassword handles changing user's password
+// PUT /api/v1/users/me/password
 func (h *UserHandler) ChangePassword(c *gin.Context) {
 	var request model.UserChangePassword
 	if err := c.ShouldBindJSON(&request); err != nil {
@@ -89,7 +92,66 @@ func (h *UserHandler) ChangePassword(c *gin.Context) {
 	c.JSON(http.StatusNoContent, nil)
 }
 
+// DeleteCurrentUser handles deleting the current user (deactivating)
+// DELETE /api/v1/users/me
+func (h *UserHandler) DeleteCurrentUser(c *gin.Context) {
+	userID, _ := c.Get("userID")
+
+	err := h.userService.DeleteUser(c.Request.Context(), userID.(int))
+	if err != nil {
+		h.logger.Error("failed to delete user", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete user"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "User successfully deactivated"})
+}
+
+// GetUserPreferences handles fetching user preferences
+// GET /api/v1/users/me/preferences
+func (h *UserHandler) GetUserPreferences(c *gin.Context) {
+	userID, _ := c.Get("userID")
+
+	preferences, err := h.userService.GetPreferences(c.Request.Context(), userID.(int))
+	if err != nil {
+		h.logger.Error("failed to get user preferences", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get preferences"})
+		return
+	}
+
+	c.JSON(http.StatusOK, preferences)
+}
+
+// UpdateUserPreferences handles updating user preferences
+// PUT /api/v1/users/me/preferences
+func (h *UserHandler) UpdateUserPreferences(c *gin.Context) {
+	var request model.PreferencesUpdate
+	if err := c.ShouldBindJSON(&request); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	userID, _ := c.Get("userID")
+	err := h.userService.UpdatePreferences(c.Request.Context(), userID.(int), &request)
+	if err != nil {
+		h.logger.Error("failed to update preferences", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update preferences"})
+		return
+	}
+
+	// Return updated preferences
+	preferences, err := h.userService.GetPreferences(c.Request.Context(), userID.(int))
+	if err != nil {
+		h.logger.Error("failed to get updated preferences", zap.Error(err))
+		c.JSON(http.StatusOK, gin.H{"message": "Preferences updated successfully"})
+		return
+	}
+
+	c.JSON(http.StatusOK, preferences)
+}
+
 // GetUserByID handles fetching a user by ID (admin only)
+// GET /api/v1/admin/users/{id}
 func (h *UserHandler) GetUserByID(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.Atoi(idStr)
@@ -114,6 +176,7 @@ func (h *UserHandler) GetUserByID(c *gin.Context) {
 }
 
 // UpdateUser handles updating a user (admin only)
+// PUT /api/v1/admin/users/{id}
 func (h *UserHandler) UpdateUser(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.Atoi(idStr)
@@ -147,6 +210,7 @@ func (h *UserHandler) UpdateUser(c *gin.Context) {
 }
 
 // ListUsers handles listing users (admin only)
+// GET /api/v1/admin/users
 func (h *UserHandler) ListUsers(c *gin.Context) {
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "10"))

@@ -1,8 +1,9 @@
+// internal/repository/market_data_repository.go
 package repository
 
 import (
 	"context"
-	"fmt"
+	"encoding/json"
 	"time"
 
 	"services/historical-data-service/internal/model"
@@ -25,161 +26,121 @@ func NewMarketDataRepository(db *sqlx.DB, logger *zap.Logger) *MarketDataReposit
 	}
 }
 
-// GetMarketData retrieves market data for a symbol and timeframe
-func (r *MarketDataRepository) GetMarketData(
+// GetCandles retrieves candle data using the get_candles function
+func (r *MarketDataRepository) GetCandles(
 	ctx context.Context,
 	symbolID int,
-	timeframeID int,
-	startDate *time.Time,
-	endDate *time.Time,
+	timeframe string,
+	startTime *time.Time,
+	endTime *time.Time,
 	limit *int,
-) ([]model.MarketData, error) {
-	query := `
-		SELECT id, symbol_id, timeframe_id, timestamp, open, high, low, close, volume, created_at, updated_at
-		FROM market_data
-		WHERE symbol_id = $1 AND timeframe_id = $2
-	`
+) ([]model.Candle, error) {
+	query := `SELECT * FROM get_candles($1, $2, $3, $4, $5)`
 
-	args := []interface{}{symbolID, timeframeID}
-	argCount := 3
-
-	if startDate != nil {
-		query += fmt.Sprintf(" AND timestamp >= $%d", argCount)
-		args = append(args, *startDate)
-		argCount++
+	// Use default limit if not provided
+	var limitValue *int
+	if limit == nil {
+		defaultLimit := 1000
+		limitValue = &defaultLimit
+	} else {
+		limitValue = limit
 	}
 
-	if endDate != nil {
-		query += fmt.Sprintf(" AND timestamp <= $%d", argCount)
-		args = append(args, *endDate)
-		argCount++
+	// Default time boundaries if not provided
+	var startTimeValue time.Time
+	if startTime == nil {
+		startTimeValue = time.Now().AddDate(-1, 0, 0) // 1 year ago
+	} else {
+		startTimeValue = *startTime
 	}
 
-	query += " ORDER BY timestamp"
-
-	if limit != nil {
-		query += fmt.Sprintf(" LIMIT $%d", argCount)
-		args = append(args, *limit)
+	var endTimeValue time.Time
+	if endTime == nil {
+		endTimeValue = time.Now() // now
+	} else {
+		endTimeValue = *endTime
 	}
 
-	var data []model.MarketData
-	err := r.db.SelectContext(ctx, &data, query, args...)
+	var candles []model.Candle
+	err := r.db.SelectContext(
+		ctx,
+		&candles,
+		query,
+		symbolID,
+		timeframe,
+		startTimeValue,
+		endTimeValue,
+		limitValue,
+	)
+
 	if err != nil {
-		r.logger.Error("Failed to get market data",
+		r.logger.Error("Failed to get candles",
 			zap.Error(err),
-			zap.Int("symbol_id", symbolID),
-			zap.Int("timeframe_id", timeframeID))
+			zap.Int("symbolID", symbolID),
+			zap.String("timeframe", timeframe))
 		return nil, err
 	}
 
-	return data, nil
+	return candles, nil
 }
 
-// InsertMarketData inserts a batch of market data
-func (r *MarketDataRepository) InsertMarketData(
+// BatchImportCandles inserts a batch of candles using the insert_candles function
+func (r *MarketDataRepository) BatchImportCandles(
 	ctx context.Context,
-	symbolID int,
-	timeframeID int,
-	data []model.OHLCV,
-) error {
-	// Using transaction for batch insert
-	tx, err := r.db.BeginTxx(ctx, nil)
+	candles []model.CandleBatch,
+) (int, error) {
+	// Convert to JSONB for the database function
+	candlesJSON, err := json.Marshal(candles)
 	if err != nil {
-		r.logger.Error("Failed to begin transaction", zap.Error(err))
-		return err
+		r.logger.Error("Failed to marshal candles to JSON", zap.Error(err))
+		return 0, err
 	}
-	defer tx.Rollback()
 
-	// Prepare the statement for bulk insert
-	stmt, err := tx.PreparexContext(ctx, `
-		INSERT INTO market_data (symbol_id, timeframe_id, timestamp, open, high, low, close, volume, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-		ON CONFLICT (symbol_id, timeframe_id, timestamp) 
-		DO UPDATE SET 
-			open = EXCLUDED.open,
-			high = EXCLUDED.high,
-			low = EXCLUDED.low,
-			close = EXCLUDED.close,
-			volume = EXCLUDED.volume,
-			updated_at = CURRENT_TIMESTAMP
-	`)
+	query := `SELECT insert_candles($1)`
+
+	var insertedCount int
+	err = r.db.GetContext(ctx, &insertedCount, query, candlesJSON)
 	if err != nil {
-		r.logger.Error("Failed to prepare statement", zap.Error(err))
-		return err
-	}
-	defer stmt.Close()
-
-	// Execute batch insert
-	now := time.Now()
-	for _, item := range data {
-		_, err = stmt.ExecContext(
-			ctx,
-			symbolID,
-			timeframeID,
-			item.Timestamp,
-			item.Open,
-			item.High,
-			item.Low,
-			item.Close,
-			item.Volume,
-			now,
-		)
-		if err != nil {
-			r.logger.Error("Failed to insert market data",
-				zap.Error(err),
-				zap.Time("timestamp", item.Timestamp))
-			return err
-		}
+		r.logger.Error("Failed to batch import candles", zap.Error(err))
+		return 0, err
 	}
 
-	// Commit transaction
-	if err := tx.Commit(); err != nil {
-		r.logger.Error("Failed to commit transaction", zap.Error(err))
-		return err
-	}
-
-	return nil
+	return insertedCount, nil
 }
 
 // HasData checks if there is market data for a symbol and timeframe
 func (r *MarketDataRepository) HasData(
 	ctx context.Context,
 	symbolID int,
-	timeframeID int,
+	timeframe string,
 ) (bool, error) {
-	query := `
-		SELECT EXISTS(
-			SELECT 1 FROM market_data
-			WHERE symbol_id = $1 AND timeframe_id = $2
-			LIMIT 1
-		)
-	`
-
-	var exists bool
-	err := r.db.GetContext(ctx, &exists, query, symbolID, timeframeID)
+	// Get a single candle to check if data exists
+	candles, err := r.GetCandles(ctx, symbolID, timeframe, nil, nil, &[]int{1}[0])
 	if err != nil {
 		r.logger.Error("Failed to check if market data exists",
 			zap.Error(err),
-			zap.Int("symbol_id", symbolID),
-			zap.Int("timeframe_id", timeframeID))
+			zap.Int("symbolID", symbolID),
+			zap.String("timeframe", timeframe))
 		return false, err
 	}
 
-	return exists, nil
+	return len(candles) > 0, nil
 }
 
 // GetDataRange returns the date range of available data
 func (r *MarketDataRepository) GetDataRange(
 	ctx context.Context,
 	symbolID int,
-	timeframeID int,
+	timeframe string,
 ) (startDate, endDate time.Time, err error) {
+	// Using get_candles with extreme dates to find boundaries
 	query := `
-		SELECT 
-			MIN(timestamp) as start_date,
-			MAX(timestamp) as end_date
-		FROM market_data
-		WHERE symbol_id = $1 AND timeframe_id = $2
+		SELECT
+			MIN(time) as start_date,
+			MAX(time) as end_date
+		FROM (
+			SELECT * FROM get_candles($1, $2, $3, $4, NULL)
+		) as candles
 	`
 
 	var result struct {
@@ -187,12 +148,16 @@ func (r *MarketDataRepository) GetDataRange(
 		EndDate   time.Time `db:"end_date"`
 	}
 
-	err = r.db.GetContext(ctx, &result, query, symbolID, timeframeID)
+	// Use extreme dates for the range query
+	startValue := time.Date(1970, 1, 1, 0, 0, 0, 0, time.UTC)
+	endValue := time.Date(2100, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	err = r.db.GetContext(ctx, &result, query, symbolID, timeframe, startValue, endValue)
 	if err != nil {
 		r.logger.Error("Failed to get data range",
 			zap.Error(err),
-			zap.Int("symbol_id", symbolID),
-			zap.Int("timeframe_id", timeframeID))
+			zap.Int("symbolID", symbolID),
+			zap.String("timeframe", timeframe))
 		return time.Time{}, time.Time{}, err
 	}
 
@@ -215,7 +180,7 @@ func (r *MarketDataRepository) UpdateSymbolDataAvailability(
 	if err != nil {
 		r.logger.Error("Failed to update symbol data availability",
 			zap.Error(err),
-			zap.Int("symbol_id", symbolID))
+			zap.Int("symbolID", symbolID))
 		return err
 	}
 

@@ -1,3 +1,4 @@
+// internal/handler/market_data_handler.go
 package handler
 
 import (
@@ -26,44 +27,52 @@ func NewMarketDataHandler(marketDataService *service.MarketDataService, logger *
 	}
 }
 
-// GetMarketData handles retrieving market data
-func (h *MarketDataHandler) GetMarketData(c *gin.Context) {
-	// Parse path parameters
-	symbolIDStr := c.Param("symbol_id")
+// GetCandles handles retrieving candle data with dynamic timeframe
+// GET /api/v1/market-data/candles
+func (h *MarketDataHandler) GetCandles(c *gin.Context) {
+	// Parse query parameters
+	var query model.MarketDataQuery
+
+	// Parse symbol_id
+	symbolIDStr := c.Query("symbol_id")
 	symbolID, err := strconv.Atoi(symbolIDStr)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid symbol ID"})
 		return
 	}
+	query.SymbolID = symbolID
 
-	timeframeIDStr := c.Param("timeframe_id")
-	timeframeID, err := strconv.Atoi(timeframeIDStr)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid timeframe ID"})
+	// Parse timeframe
+	timeframe := c.Query("timeframe")
+	if timeframe == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Timeframe is required"})
 		return
 	}
+	query.Timeframe = timeframe
 
-	// Create query object
-	query := &model.MarketDataQuery{
-		SymbolID:    symbolID,
-		TimeframeID: timeframeID,
-	}
-
-	// Parse optional query parameters
-	if startDateStr := c.Query("start_date"); startDateStr != "" {
-		startDate, err := time.Parse("2006-01-02", startDateStr)
+	// Parse optional parameters
+	if startStr := c.Query("start_date"); startStr != "" {
+		startDate, err := time.Parse(time.RFC3339, startStr)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid start date format, use YYYY-MM-DD"})
-			return
+			// Try an alternate format
+			startDate, err = time.Parse("2006-01-02", startStr)
+			if err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid start_date format. Use YYYY-MM-DD or RFC3339"})
+				return
+			}
 		}
 		query.StartDate = &startDate
 	}
 
-	if endDateStr := c.Query("end_date"); endDateStr != "" {
-		endDate, err := time.Parse("2006-01-02", endDateStr)
+	if endStr := c.Query("end_date"); endStr != "" {
+		endDate, err := time.Parse(time.RFC3339, endStr)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid end date format, use YYYY-MM-DD"})
-			return
+			// Try an alternate format
+			endDate, err = time.Parse("2006-01-02", endStr)
+			if err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid end_date format. Use YYYY-MM-DD or RFC3339"})
+				return
+			}
 		}
 		query.EndDate = &endDate
 	}
@@ -77,21 +86,54 @@ func (h *MarketDataHandler) GetMarketData(c *gin.Context) {
 		query.Limit = &limit
 	}
 
-	// Get market data
-	data, err := h.marketDataService.GetMarketData(c.Request.Context(), query)
+	// Get candle data
+	candles, err := h.marketDataService.GetCandles(c.Request.Context(), &query)
 	if err != nil {
-		h.logger.Error("Failed to get market data",
+		h.logger.Error("Failed to get candles",
 			zap.Error(err),
-			zap.Int("symbolID", symbolID),
-			zap.Int("timeframeID", timeframeID))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get market data"})
+			zap.Int("symbolID", query.SymbolID),
+			zap.String("timeframe", query.Timeframe))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get candle data"})
 		return
 	}
 
-	c.JSON(http.StatusOK, data)
+	c.JSON(http.StatusOK, candles)
+}
+
+// BatchImportCandles handles batch importing of candle data
+// POST /api/v1/market-data/candles/batch
+func (h *MarketDataHandler) BatchImportCandles(c *gin.Context) {
+	var request struct {
+		Candles []model.CandleBatch `json:"candles" binding:"required"`
+	}
+
+	if err := c.ShouldBindJSON(&request); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Validate candle data
+	if len(request.Candles) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "No candle data provided"})
+		return
+	}
+
+	// Import candles
+	count, err := h.marketDataService.BatchImportCandles(c.Request.Context(), request.Candles)
+	if err != nil {
+		h.logger.Error("Failed to batch import candles", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to import candles: " + err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message": "Successfully imported candles",
+		"count":   count,
+	})
 }
 
 // GetAssetTypes handles retrieving available asset types
+// GET /api/v1/market-data/asset-types
 func (h *MarketDataHandler) GetAssetTypes(c *gin.Context) {
 	assetTypes, err := h.marketDataService.GetAssetTypes(c.Request.Context())
 	if err != nil {
@@ -104,6 +146,7 @@ func (h *MarketDataHandler) GetAssetTypes(c *gin.Context) {
 }
 
 // GetExchanges handles retrieving available exchanges
+// GET /api/v1/market-data/exchanges
 func (h *MarketDataHandler) GetExchanges(c *gin.Context) {
 	exchanges, err := h.marketDataService.GetExchanges(c.Request.Context())
 	if err != nil {
@@ -115,151 +158,41 @@ func (h *MarketDataHandler) GetExchanges(c *gin.Context) {
 	c.JSON(http.StatusOK, exchanges)
 }
 
-// GetCandles handles retrieving candle data with dynamic timeframe
-func (h *MarketDataHandler) GetCandles(c *gin.Context) {
-	symbolID, err := strconv.Atoi(c.Query("symbol_id"))
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid symbol ID"})
-		return
-	}
-
-	timeframe := c.Query("timeframe")
-	if timeframe == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Timeframe is required"})
-		return
-	}
-
-	var startDate, endDate *time.Time
-
-	if startStr := c.Query("start_time"); startStr != "" {
-		parsedTime, err := time.Parse(time.RFC3339, startStr)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid start_time format"})
-			return
-		}
-		startDate = &parsedTime
-	}
-
-	if endStr := c.Query("end_time"); endStr != "" {
-		parsedTime, err := time.Parse(time.RFC3339, endStr)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid end_time format"})
-			return
-		}
-		endDate = &parsedTime
-	}
-
-	var limitPtr *int
-	if limitStr := c.Query("limit"); limitStr != "" {
-		limit, err := strconv.Atoi(limitStr)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid limit"})
-			return
-		}
-		limitPtr = &limit
-	}
-
-	candles, err := h.marketDataService.GetCandles(
-		c.Request.Context(),
-		symbolID,
-		timeframe,
-		startDate,
-		endDate,
-		limitPtr,
-	)
-
-	if err != nil {
-		h.logger.Error("Failed to get candles", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get candle data"})
-		return
-	}
-
-	c.JSON(http.StatusOK, candles)
-}
-
-// BatchImportCandles handles batch importing of candle data
-func (h *MarketDataHandler) BatchImportCandles(c *gin.Context) {
-	var request struct {
-		Candles []model.CandleBatch `json:"candles" binding:"required"`
-	}
-
-	if err := c.ShouldBindJSON(&request); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	// Convert to JSONB for the database function
-	count, err := h.marketDataService.BatchImportCandles(c.Request.Context(), request.Candles)
-	if err != nil {
-		h.logger.Error("Failed to batch import candles", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to import candles"})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"message": "Successfully imported candles",
-		"count":   count,
-	})
-}
-
-// ImportMarketData handles importing market data
-func (h *MarketDataHandler) ImportMarketData(c *gin.Context) {
-	var request model.MarketDataImport
-	if err := c.ShouldBindJSON(&request); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	// Get user ID
-	userID, exists := c.Get("userID")
-	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
-		return
-	}
-
-	// Import data
-	err := h.marketDataService.ImportMarketData(c.Request.Context(), &request)
-	if err != nil {
-		h.logger.Error("Failed to import market data",
-			zap.Error(err),
-			zap.Int("userID", userID.(int)),
-			zap.Int("symbolID", request.SymbolID),
-			zap.Int("timeframeID", request.TimeframeID))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to import market data: " + err.Error()})
-		return
-	}
-
-	c.JSON(http.StatusCreated, gin.H{
-		"message":   "Market data imported successfully",
-		"count":     len(request.Data),
-		"symbol":    request.SymbolID,
-		"timeframe": request.TimeframeID,
-	})
-}
-
-// BatchImportMarketData handles batch importing market data
+// BatchImportMarketData handles batch importing of market data for internal service use
+// POST /api/v1/service/market-data/batch
 func (h *MarketDataHandler) BatchImportMarketData(c *gin.Context) {
-	var requests []model.MarketDataImport
-	if err := c.ShouldBindJSON(&requests); err != nil {
+	var request []struct {
+		SymbolID  int                 `json:"symbol_id" binding:"required"`
+		Timeframe string              `json:"timeframe" binding:"required"`
+		Candles   []model.CandleBatch `json:"candles" binding:"required"`
+	}
+
+	if err := c.ShouldBindJSON(&request); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	if len(requests) == 0 {
+	if len(request) == 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "No import requests provided"})
 		return
 	}
 
-	// Import data
-	err := h.marketDataService.BatchImportMarketData(c.Request.Context(), requests)
-	if err != nil {
-		h.logger.Error("Failed to batch import market data", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to batch import market data: " + err.Error()})
-		return
+	// Process each set of candles
+	totalImported := 0
+	for _, batch := range request {
+		count, err := h.marketDataService.BatchImportCandles(c.Request.Context(), batch.Candles)
+		if err != nil {
+			h.logger.Error("Failed to import batch",
+				zap.Error(err),
+				zap.Int("symbolID", batch.SymbolID),
+				zap.String("timeframe", batch.Timeframe))
+			continue
+		}
+		totalImported += count
 	}
 
 	c.JSON(http.StatusCreated, gin.H{
 		"message": "Market data batch imported successfully",
-		"count":   len(requests),
+		"count":   totalImported,
 	})
 }

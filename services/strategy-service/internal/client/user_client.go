@@ -30,6 +30,49 @@ func NewUserClient(baseURL string, logger *zap.Logger) *UserClient {
 	}
 }
 
+// CheckUserRole checks if a user has a specific role
+func (c *UserClient) CheckUserRole(ctx context.Context, userID int, role string) (bool, error) {
+	url := fmt.Sprintf("%s/api/v1/admin/users/%d/roles", c.baseURL, userID)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return false, err
+	}
+
+	// Add service authentication header
+	req.Header.Set("X-Service-Key", "strategy-service-key")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		c.logger.Error("Failed to check user role with User Service", zap.Error(err))
+		return false, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return false, fmt.Errorf("user service returned status code %d", resp.StatusCode)
+	}
+
+	var response struct {
+		Roles []string `json:"roles"`
+	}
+
+	err = json.NewDecoder(resp.Body).Decode(&response)
+	if err != nil {
+		c.logger.Error("Failed to decode roles response", zap.Error(err))
+		return false, err
+	}
+
+	// Check if the required role is in the user's roles
+	for _, userRole := range response.Roles {
+		if userRole == role {
+			return true, nil
+		}
+	}
+
+	return false, nil
+}
+
 // GetUserByID retrieves a user's username by ID
 func (c *UserClient) GetUserByID(ctx context.Context, userID int) (string, error) {
 	url := fmt.Sprintf("%s/api/v1/admin/users/%d", c.baseURL, userID)

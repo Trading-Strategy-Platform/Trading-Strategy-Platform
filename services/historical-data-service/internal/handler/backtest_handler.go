@@ -1,3 +1,4 @@
+// internal/handler/backtest_handler.go
 package handler
 
 import (
@@ -26,6 +27,7 @@ func NewBacktestHandler(backtestService *service.BacktestService, logger *zap.Lo
 }
 
 // CreateBacktest handles creating a new backtest
+// POST /api/v1/backtests
 func (h *BacktestHandler) CreateBacktest(c *gin.Context) {
 	var request model.BacktestRequest
 	if err := c.ShouldBindJSON(&request); err != nil {
@@ -67,6 +69,7 @@ func (h *BacktestHandler) CreateBacktest(c *gin.Context) {
 }
 
 // GetBacktest handles retrieving a backtest by ID
+// GET /api/v1/backtests/:id
 func (h *BacktestHandler) GetBacktest(c *gin.Context) {
 	// Parse path parameter
 	idStr := c.Param("id")
@@ -94,15 +97,11 @@ func (h *BacktestHandler) GetBacktest(c *gin.Context) {
 		return
 	}
 
-	if backtest == nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Backtest not found"})
-		return
-	}
-
 	c.JSON(http.StatusOK, backtest)
 }
 
 // ListBacktests handles listing backtests for a user
+// GET /api/v1/backtests
 func (h *BacktestHandler) ListBacktests(c *gin.Context) {
 	// Parse query parameters
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
@@ -137,11 +136,13 @@ func (h *BacktestHandler) ListBacktests(c *gin.Context) {
 			"total": total,
 			"page":  page,
 			"limit": limit,
+			"pages": (total + limit - 1) / limit,
 		},
 	})
 }
 
 // UpdateBacktestRunStatus handles updating the status of a backtest run
+// PUT /api/v1/backtest-runs/:id/status
 func (h *BacktestHandler) UpdateBacktestRunStatus(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.Atoi(idStr)
@@ -156,6 +157,19 @@ func (h *BacktestHandler) UpdateBacktestRunStatus(c *gin.Context) {
 
 	if err := c.ShouldBindJSON(&request); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Validate status
+	validStatuses := map[string]bool{
+		"pending":   true,
+		"running":   true,
+		"completed": true,
+		"failed":    true,
+	}
+
+	if !validStatuses[request.Status] {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid status. Must be one of: pending, running, completed, failed"})
 		return
 	}
 
@@ -177,6 +191,7 @@ func (h *BacktestHandler) UpdateBacktestRunStatus(c *gin.Context) {
 }
 
 // SaveBacktestResults handles saving results for a backtest run
+// POST /api/v1/backtest-runs/:id/results
 func (h *BacktestHandler) SaveBacktestResults(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.Atoi(idStr)
@@ -207,6 +222,7 @@ func (h *BacktestHandler) SaveBacktestResults(c *gin.Context) {
 }
 
 // AddBacktestTrade handles adding a trade to a backtest run
+// POST /api/v1/backtest-runs/:id/trades
 func (h *BacktestHandler) AddBacktestTrade(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.Atoi(idStr)
@@ -240,6 +256,7 @@ func (h *BacktestHandler) AddBacktestTrade(c *gin.Context) {
 }
 
 // GetBacktestTrades handles retrieving trades for a backtest run
+// GET /api/v1/backtest-runs/:id/trades
 func (h *BacktestHandler) GetBacktestTrades(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.Atoi(idStr)
@@ -251,7 +268,10 @@ func (h *BacktestHandler) GetBacktestTrades(c *gin.Context) {
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "100"))
 
-	trades, err := h.backtestService.GetBacktestTrades(c.Request.Context(), id, limit, (page-1)*limit)
+	// Calculate offset from page and limit
+	offset := (page - 1) * limit
+
+	trades, err := h.backtestService.GetBacktestTrades(c.Request.Context(), id, limit, offset)
 	if err != nil {
 		h.logger.Error("Failed to get backtest trades",
 			zap.Error(err),
@@ -264,6 +284,7 @@ func (h *BacktestHandler) GetBacktestTrades(c *gin.Context) {
 }
 
 // DeleteBacktest handles deleting a backtest
+// DELETE /api/v1/backtests/:id
 func (h *BacktestHandler) DeleteBacktest(c *gin.Context) {
 	// Parse path parameter
 	idStr := c.Param("id")
@@ -292,4 +313,32 @@ func (h *BacktestHandler) DeleteBacktest(c *gin.Context) {
 	}
 
 	c.Status(http.StatusNoContent)
+}
+
+// NotifyBacktestComplete handles notifications about completed backtests
+// This is used by background workers or other services
+// POST /api/v1/service/backtests/notify
+func (h *BacktestHandler) NotifyBacktestComplete(c *gin.Context) {
+	var request struct {
+		BacktestID int    `json:"backtest_id" binding:"required"`
+		StrategyID int    `json:"strategy_id" binding:"required"`
+		UserID     int    `json:"user_id" binding:"required"`
+		Status     string `json:"status" binding:"required"`
+	}
+
+	if err := c.ShouldBindJSON(&request); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Log the notification
+	h.logger.Info("Received backtest completion notification",
+		zap.Int("backtestID", request.BacktestID),
+		zap.Int("strategyID", request.StrategyID),
+		zap.Int("userID", request.UserID),
+		zap.String("status", request.Status))
+
+	// In a real implementation, you might update a message queue or notify the user
+
+	c.JSON(http.StatusOK, gin.H{"message": "Notification received"})
 }

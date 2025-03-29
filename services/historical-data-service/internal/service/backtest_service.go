@@ -49,30 +49,6 @@ func (s *BacktestService) CreateBacktest(
 		return 0, errors.New("end date must be after start date")
 	}
 
-	// Check if there's data available for the requested symbol and timeframe
-	hasData, err := s.marketDataRepo.HasData(ctx, request.SymbolID, request.TimeframeID)
-	if err != nil {
-		return 0, err
-	}
-
-	if !hasData {
-		return 0, errors.New("no market data available for the requested symbol and timeframe")
-	}
-
-	// Check if data range is available
-	startDate, endDate, err := s.marketDataRepo.GetDataRange(ctx, request.SymbolID, request.TimeframeID)
-	if err != nil {
-		return 0, err
-	}
-
-	if request.StartDate.Before(startDate) || request.EndDate.After(endDate) {
-		return 0, fmt.Errorf("requested date range (%s to %s) is outside available data range (%s to %s)",
-			request.StartDate.Format("2006-01-02"),
-			request.EndDate.Format("2006-01-02"),
-			startDate.Format("2006-01-02"),
-			endDate.Format("2006-01-02"))
-	}
-
 	// Get strategy details
 	strategy, err := s.strategyClient.GetStrategy(ctx, request.StrategyID, token)
 	if err != nil {
@@ -83,22 +59,61 @@ func (s *BacktestService) CreateBacktest(
 		return 0, errors.New("strategy not found")
 	}
 
-	// Create backtest record
-	backtest := &model.Backtest{
-		UserID:          userID,
-		StrategyID:      request.StrategyID,
-		StrategyName:    strategy.Name,
-		StrategyVersion: request.StrategyVersion,
-		SymbolID:        request.SymbolID,
-		TimeframeID:     request.TimeframeID,
-		StartDate:       request.StartDate,
-		EndDate:         request.EndDate,
-		InitialCapital:  request.InitialCapital,
-		Status:          model.BacktestStatusQueued,
+	// Verify data availability for all symbols
+	for _, symbolID := range request.SymbolIDs {
+		// Check if there's data available for the requested symbol and timeframe
+		hasData, err := s.marketDataRepo.HasData(ctx, symbolID, request.Timeframe)
+		if err != nil {
+			return 0, err
+		}
+
+		if !hasData {
+			return 0, fmt.Errorf("no market data available for symbol ID %d with timeframe %s",
+				symbolID, request.Timeframe)
+		}
+
+		// Check data range
+		startDate, endDate, err := s.marketDataRepo.GetDataRange(ctx, symbolID, request.Timeframe)
+		if err != nil {
+			return 0, err
+		}
+
+		if request.StartDate.Before(startDate) || request.EndDate.After(endDate) {
+			return 0, fmt.Errorf("requested date range (%s to %s) is outside available data range for symbol ID %d (%s to %s)",
+				request.StartDate.Format("2006-01-02"),
+				request.EndDate.Format("2006-01-02"),
+				symbolID,
+				startDate.Format("2006-01-02"),
+				endDate.Format("2006-01-02"))
+		}
 	}
 
-	// Insert backtest
-	backtestID, err := s.backtestRepo.CreateBacktest(ctx, backtest)
+	// Use strategy version from request or default to latest version
+	strategyVersion := request.StrategyVersion
+	if strategyVersion == 0 {
+		strategyVersion = strategy.Version
+	}
+
+	// Set default name if not provided
+	name := request.Name
+	if name == "" {
+		name = strategy.Name + " Backtest"
+	}
+
+	// Create backtest using repository function
+	backtestID, err := s.backtestRepo.CreateBacktest(
+		ctx,
+		userID,
+		request.StrategyID,
+		strategyVersion,
+		name,
+		request.Description,
+		request.Timeframe,
+		request.StartDate,
+		request.EndDate,
+		request.InitialCapital,
+		request.SymbolIDs,
+	)
 	if err != nil {
 		return 0, err
 	}
@@ -118,15 +133,6 @@ func (s *BacktestService) runBacktest(
 ) {
 	// Create a new context for background processing
 	ctx := context.Background()
-
-	// Mark backtest as running
-	err := s.backtestRepo.UpdateBacktestStatus(ctx, backtestID, model.BacktestStatusRunning)
-	if err != nil {
-		s.logger.Error("Failed to update backtest status",
-			zap.Error(err),
-			zap.Int("backtestID", backtestID))
-		return
-	}
 
 	// Get strategy structure (either latest or specific version)
 	var strategyStructure json.RawMessage
@@ -153,91 +159,101 @@ func (s *BacktestService) runBacktest(
 		strategyStructure = strategy.Structure
 	}
 
-	// Use strategyStructure - log information about it
-	if len(strategyStructure) > 0 {
-		s.logger.Info("Retrieved strategy structure for backtest",
-			zap.Int("backtest_id", backtestID),
-			zap.Int("bytes_length", len(strategyStructure)))
-	} else {
-		s.logger.Warn("Empty strategy structure for backtest",
-			zap.Int("backtest_id", backtestID))
+	// Log strategy structure to use the variable
+	s.logger.Debug("Running backtest with strategy structure",
+		zap.Int("backtestID", backtestID),
+		zap.String("strategyType", string(strategyStructure)[:100]+"..."))
+
+	// Process each symbol in the backtest
+	for _, symbolID := range request.SymbolIDs {
+		// Find the run ID for this symbol
+		runID, err := s.backtestRepo.GetBacktestRunIDBySymbol(ctx, backtestID, symbolID)
+		if err != nil {
+			s.logger.Error("Failed to find backtest run ID",
+				zap.Error(err),
+				zap.Int("backtestID", backtestID),
+				zap.Int("symbolID", symbolID))
+			continue
+		}
+
+		// Update run status to 'running'
+		success, err := s.backtestRepo.UpdateBacktestRunStatus(ctx, runID, "running")
+		if err != nil || !success {
+			s.logger.Error("Failed to update backtest run status",
+				zap.Error(err),
+				zap.Int("runID", runID))
+			continue
+		}
+
+		// Get market data for backtesting
+		candles, err := s.marketDataRepo.GetCandles(
+			ctx,
+			symbolID,
+			request.Timeframe,
+			&request.StartDate,
+			&request.EndDate,
+			nil,
+		)
+		if err != nil {
+			// Mark this run as failed
+			s.backtestRepo.UpdateBacktestRunStatus(ctx, runID, "failed")
+			s.logger.Error("Failed to get market data",
+				zap.Error(err),
+				zap.Int("symbolID", symbolID))
+			continue
+		}
+
+		if len(candles) == 0 {
+			// Mark this run as failed
+			s.backtestRepo.UpdateBacktestRunStatus(ctx, runID, "failed")
+			s.logger.Error("No market data available",
+				zap.Int("symbolID", symbolID))
+			continue
+		}
+
+		// TODO: Implement the actual backtest execution logic
+		// This would involve processing the strategy rules against the market data
+		// For now, we'll simulate a backtest with dummy results
+
+		// Simulate processing time
+		time.Sleep(2 * time.Second)
+
+		// Generate dummy results
+		results := &model.BacktestResults{
+			TotalTrades:      25,
+			WinningTrades:    15,
+			LosingTrades:     10,
+			ProfitFactor:     1.5,
+			SharpeRatio:      1.8,
+			MaxDrawdown:      5.5,
+			FinalCapital:     request.InitialCapital * 1.15,
+			TotalReturn:      15.0,
+			AnnualizedReturn: 10.0,
+			ResultsJSON:      json.RawMessage(`{"equityCurve": [1000, 1025, 1050, 1075, 1100, 1125, 1150]}`),
+		}
+
+		// Save backtest results
+		resultID, err := s.backtestRepo.SaveBacktestResults(ctx, runID, results)
+		if err != nil {
+			s.logger.Error("Failed to save backtest results",
+				zap.Error(err),
+				zap.Int("runID", runID))
+			continue
+		}
+
+		s.logger.Info("Backtest run completed and results saved",
+			zap.Int("runID", runID),
+			zap.Int("resultID", resultID))
+
+		// Add some dummy trades
+		s.addDummyTrades(ctx, runID, symbolID, &request.StartDate)
 	}
 
-	// Get market data for backtesting
-	marketData, err := s.marketDataRepo.GetMarketData(
-		ctx,
-		request.SymbolID,
-		request.TimeframeID,
-		&request.StartDate,
-		&request.EndDate,
-		nil,
-	)
-	if err != nil {
-		s.failBacktest(ctx, backtestID, fmt.Sprintf("Failed to get market data: %v", err))
-		return
-	}
-
-	if len(marketData) == 0 {
-		s.failBacktest(ctx, backtestID, "No market data available for the requested period")
-		return
-	}
-
-	// TODO: Implement the actual backtest execution logic
-	// This would involve processing the strategy rules against the market data
-	// For now, we'll simulate a backtest with dummy results
-
-	// Simulate processing time
-	time.Sleep(2 * time.Second)
-
-	// Generate dummy results
-	results := model.BacktestResults{
-		NetProfit:          1000.50,
-		ProfitFactor:       1.5,
-		TotalTrades:        25,
-		WinningTrades:      15,
-		LosingTrades:       10,
-		WinRate:            60.0,
-		MaxDrawdown:        250.30,
-		MaxDrawdownPercent: 5.5,
-		CAGR:               15.2,
-		SharpeRatio:        1.8,
-		SortinoRatio:       2.2,
-		Trades: []model.Trade{
-			{
-				EntryTime:     time.Date(2023, 1, 5, 10, 0, 0, 0, time.UTC),
-				ExitTime:      time.Date(2023, 1, 7, 14, 30, 0, 0, time.UTC),
-				EntryPrice:    100.50,
-				ExitPrice:     105.75,
-				Direction:     "long",
-				Quantity:      10,
-				ProfitLoss:    52.50,
-				ProfitLossPct: 5.22,
-			},
-			{
-				EntryTime:     time.Date(2023, 1, 12, 11, 0, 0, 0, time.UTC),
-				ExitTime:      time.Date(2023, 1, 14, 15, 45, 0, 0, time.UTC),
-				EntryPrice:    107.25,
-				ExitPrice:     104.50,
-				Direction:     "long",
-				Quantity:      10,
-				ProfitLoss:    -27.50,
-				ProfitLossPct: -2.56,
-			},
-		},
-		EquityCurve: []float64{1000.0, 1025.5, 1052.5, 1040.0, 1055.0, 1025.0, 1015.0, 1055.0, 1075.0, 1100.0},
-	}
-
-	// Complete the backtest with results
-	err = s.backtestRepo.CompleteBacktest(ctx, backtestID, results)
-	if err != nil {
-		s.logger.Error("Failed to complete backtest",
-			zap.Error(err),
-			zap.Int("backtestID", backtestID))
-		return
-	}
+	// Once all runs are processed, the update_backtest_run_status function will
+	// automatically update the parent backtest status if all runs are complete
 
 	// Notify the Strategy Service that the backtest is complete
-	err = s.strategyClient.NotifyBacktestComplete(
+	err := s.strategyClient.NotifyBacktestComplete(
 		ctx,
 		backtestID,
 		request.StrategyID,
@@ -253,7 +269,16 @@ func (s *BacktestService) runBacktest(
 
 // failBacktest marks a backtest as failed with an error message
 func (s *BacktestService) failBacktest(ctx context.Context, backtestID int, errorMessage string) {
-	err := s.backtestRepo.FailBacktest(ctx, backtestID, errorMessage)
+	// Update all runs for this backtest to 'failed'
+	err := s.backtestRepo.UpdateBacktestRunsStatusBulk(ctx, backtestID, "failed")
+	if err != nil {
+		s.logger.Error("Failed to mark backtest runs as failed",
+			zap.Error(err),
+			zap.Int("backtestID", backtestID))
+	}
+
+	// Update backtest status to 'failed'
+	err = s.backtestRepo.UpdateBacktestStatus(ctx, backtestID, "failed", errorMessage)
 	if err != nil {
 		s.logger.Error("Failed to mark backtest as failed",
 			zap.Error(err),
@@ -261,114 +286,74 @@ func (s *BacktestService) failBacktest(ctx context.Context, backtestID int, erro
 	}
 }
 
-// UpdateBacktestRunStatus updates the status of a backtest run
-func (s *BacktestService) UpdateBacktestRunStatus(ctx context.Context, runID int, status string) (bool, error) {
-	query := `SELECT update_backtest_run_status($1, $2)`
+// addDummyTrades adds some dummy trades for testing
+func (s *BacktestService) addDummyTrades(
+	ctx context.Context,
+	runID int,
+	symbolID int,
+	startDate *time.Time,
+) {
+	// Add a few dummy trades
+	tradeDate := startDate.AddDate(0, 0, 5)
 
-	var success bool
-	err := s.db.GetContext(ctx, &success, query, runID, status)
-	if err != nil {
-		s.logger.Error("Failed to update backtest run status", zap.Error(err))
-		return false, err
+	longTrade := &model.BacktestTrade{
+		BacktestRunID:     runID,
+		SymbolID:          symbolID,
+		EntryTime:         tradeDate,
+		ExitTime:          &[]time.Time{tradeDate.AddDate(0, 0, 2)}[0],
+		PositionType:      "long",
+		EntryPrice:        100.0,
+		ExitPrice:         &[]float64{105.0}[0],
+		Quantity:          10.0,
+		ProfitLoss:        &[]float64{50.0}[0],
+		ProfitLossPercent: &[]float64{5.0}[0],
+		ExitReason:        &[]string{"take_profit"}[0],
 	}
 
-	return success, nil
-}
-
-// SaveBacktestResults saves results for a backtest run
-func (s *BacktestService) SaveBacktestResults(ctx context.Context, runID int, results *model.BacktestResults) (int, error) {
-	query := `SELECT save_backtest_result($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`
-
-	// Convert results JSON
-	resultsJSON, err := json.Marshal(results.ResultsJSON)
+	_, err := s.backtestRepo.AddBacktestTrade(ctx, longTrade)
 	if err != nil {
-		s.logger.Error("Failed to marshal results JSON", zap.Error(err))
-		return 0, err
+		s.logger.Error("Failed to add dummy long trade", zap.Error(err))
 	}
 
-	var resultID int
-	err = s.db.GetContext(
-		ctx,
-		&resultID,
-		query,
-		runID,
-		results.TotalTrades,
-		results.WinningTrades,
-		results.LosingTrades,
-		results.ProfitFactor,
-		results.SharpeRatio,
-		results.MaxDrawdown,
-		results.FinalCapital,
-		results.TotalReturn,
-		results.AnnualizedReturn,
-		resultsJSON,
-	)
-
-	if err != nil {
-		s.logger.Error("Failed to save backtest results", zap.Error(err))
-		return 0, err
+	shortTrade := &model.BacktestTrade{
+		BacktestRunID:     runID,
+		SymbolID:          symbolID,
+		EntryTime:         tradeDate.AddDate(0, 0, 5),
+		ExitTime:          &[]time.Time{tradeDate.AddDate(0, 0, 7)}[0],
+		PositionType:      "short",
+		EntryPrice:        110.0,
+		ExitPrice:         &[]float64{105.0}[0],
+		Quantity:          10.0,
+		ProfitLoss:        &[]float64{50.0}[0],
+		ProfitLossPercent: &[]float64{4.5}[0],
+		ExitReason:        &[]string{"take_profit"}[0],
 	}
 
-	return resultID, nil
-}
-
-// AddBacktestTrade adds a trade to a backtest run
-func (s *BacktestService) AddBacktestTrade(ctx context.Context, trade *model.BacktestTrade) (int, error) {
-	query := `SELECT add_backtest_trade($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`
-
-	var tradeID int
-	err := s.db.GetContext(
-		ctx,
-		&tradeID,
-		query,
-		trade.BacktestRunID,
-		trade.SymbolID,
-		trade.EntryTime,
-		trade.ExitTime,
-		trade.PositionType,
-		trade.EntryPrice,
-		trade.ExitPrice,
-		trade.Quantity,
-		trade.ProfitLoss,
-		trade.ProfitLossPercent,
-		trade.ExitReason,
-	)
-
+	_, err = s.backtestRepo.AddBacktestTrade(ctx, shortTrade)
 	if err != nil {
-		s.logger.Error("Failed to add backtest trade", zap.Error(err))
-		return 0, err
+		s.logger.Error("Failed to add dummy short trade", zap.Error(err))
 	}
-
-	return tradeID, nil
-}
-
-// GetBacktestTrades retrieves trades for a backtest run
-func (s *BacktestService) GetBacktestTrades(ctx context.Context, runID, limit, offset int) (interface{}, error) {
-	query := `SELECT * FROM get_backtest_trades($1, $2, $3)`
-
-	var trades []map[string]interface{}
-	err := s.db.SelectContext(ctx, &trades, query, runID, limit, offset)
-	if err != nil {
-		s.logger.Error("Failed to get backtest trades", zap.Error(err))
-		return nil, err
-	}
-
-	return trades, nil
 }
 
 // GetBacktest retrieves a backtest by ID
-func (s *BacktestService) GetBacktest(ctx context.Context, id int, userID int) (*model.Backtest, error) {
-	backtest, err := s.backtestRepo.GetBacktest(ctx, id)
+func (s *BacktestService) GetBacktest(
+	ctx context.Context,
+	backtestID int,
+	userID int,
+) (*model.BacktestDetails, error) {
+	// Get backtest details using SQL function
+	backtest, err := s.backtestRepo.GetBacktest(ctx, backtestID)
 	if err != nil {
 		return nil, err
 	}
 
-	if backtest == nil {
-		return nil, errors.New("backtest not found")
+	// Check user access (we must do this in code since the SQL function doesn't have this check)
+	backtestUserID, err := s.backtestRepo.GetBacktestUserID(ctx, backtestID)
+	if err != nil {
+		return nil, err
 	}
 
-	// Check user access
-	if backtest.UserID != userID {
+	if backtestUserID != userID {
 		return nil, errors.New("access denied")
 	}
 
@@ -381,7 +366,7 @@ func (s *BacktestService) ListBacktests(
 	userID int,
 	page int,
 	limit int,
-) ([]model.Backtest, int, error) {
+) ([]model.BacktestSummary, int, error) {
 	if page < 1 {
 		page = 1
 	}
@@ -389,81 +374,136 @@ func (s *BacktestService) ListBacktests(
 		limit = 10
 	}
 
-	return s.backtestRepo.GetBacktestsByUser(ctx, userID, page, limit)
+	// Calculate offset
+	offset := (page - 1) * limit
+
+	// Get backtests for the user
+	backtests, err := s.backtestRepo.GetBacktestsByUser(ctx, userID, limit, offset)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	// Get total count
+	total, err := s.backtestRepo.CountUserBacktests(ctx, userID)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	return backtests, total, nil
 }
 
 // DeleteBacktest deletes a backtest
-func (s *BacktestService) DeleteBacktest(ctx context.Context, id int, userID int) error {
-	return s.backtestRepo.DeleteBacktest(ctx, id, userID)
+func (s *BacktestService) DeleteBacktest(
+	ctx context.Context,
+	backtestID int,
+	userID int,
+) error {
+	// Use SQL function to delete the backtest
+	success, err := s.backtestRepo.DeleteBacktest(ctx, userID, backtestID)
+	if err != nil {
+		return err
+	}
+
+	if !success {
+		return errors.New("backtest not found or not owned by user")
+	}
+
+	return nil
+}
+
+// UpdateBacktestRunStatus updates the status of a backtest run
+func (s *BacktestService) UpdateBacktestRunStatus(
+	ctx context.Context,
+	runID int,
+	status string,
+) (bool, error) {
+	return s.backtestRepo.UpdateBacktestRunStatus(ctx, runID, status)
+}
+
+// SaveBacktestResults saves results for a backtest run
+func (s *BacktestService) SaveBacktestResults(
+	ctx context.Context,
+	runID int,
+	results *model.BacktestResults,
+) (int, error) {
+	return s.backtestRepo.SaveBacktestResults(ctx, runID, results)
+}
+
+// AddBacktestTrade adds a trade to a backtest run
+func (s *BacktestService) AddBacktestTrade(
+	ctx context.Context,
+	trade *model.BacktestTrade,
+) (int, error) {
+	return s.backtestRepo.AddBacktestTrade(ctx, trade)
+}
+
+// GetBacktestTrades retrieves trades for a backtest run
+func (s *BacktestService) GetBacktestTrades(
+	ctx context.Context,
+	runID int,
+	limit int,
+	offset int,
+) ([]model.BacktestTrade, error) {
+	return s.backtestRepo.GetBacktestTrades(ctx, runID, limit, offset)
 }
 
 // ProcessQueuedBacktests processes queued backtests
-func (s *BacktestService) ProcessQueuedBacktests(ctx context.Context, limit int) (int, error) {
+func (s *BacktestService) ProcessQueuedBacktests(
+	ctx context.Context,
+	limit int,
+) (int, error) {
 	// Get queued backtests
 	backtests, err := s.backtestRepo.GetQueuedBacktests(ctx, limit)
 	if err != nil {
 		return 0, err
 	}
 
-	count := 0
+	processedCount := 0
 
 	// Process each backtest
 	for _, backtest := range backtests {
-		// Update status to running
-		err := s.backtestRepo.UpdateBacktestStatus(ctx, backtest.ID, model.BacktestStatusRunning)
+		// Extract the necessary information to create a backtest request
+		// We need to query for additional details since the summary doesn't have everything
+		details, err := s.backtestRepo.GetBacktestDetails(ctx, backtest.BacktestID)
 		if err != nil {
-			s.logger.Error("Failed to update backtest status",
+			s.logger.Error("Failed to get backtest details",
 				zap.Error(err),
-				zap.Int("backtestID", backtest.ID))
+				zap.Int("backtestID", backtest.BacktestID))
 			continue
 		}
 
-		// Create backtest request
+		if details == nil {
+			s.logger.Error("Backtest not found",
+				zap.Int("backtestID", backtest.BacktestID))
+			continue
+		}
+
+		// Get the symbol IDs for this backtest
+		symbolIDs, err := s.backtestRepo.GetBacktestSymbolIDs(ctx, backtest.BacktestID)
+		if err != nil {
+			s.logger.Error("Failed to get symbol IDs",
+				zap.Error(err),
+				zap.Int("backtestID", backtest.BacktestID))
+			continue
+		}
+
+		// Create a backtest request
 		request := &model.BacktestRequest{
-			StrategyID:      backtest.StrategyID,
-			StrategyVersion: backtest.StrategyVersion,
-			SymbolID:        backtest.SymbolID,
-			TimeframeID:     backtest.TimeframeID,
-			StartDate:       backtest.StartDate,
-			EndDate:         backtest.EndDate,
-			InitialCapital:  backtest.InitialCapital,
+			StrategyID:      details.StrategyID,
+			StrategyVersion: details.StrategyVersion,
+			Name:            backtest.Name,
+			Timeframe:       details.Timeframe,
+			SymbolIDs:       symbolIDs,
+			StartDate:       details.StartDate,
+			EndDate:         details.EndDate,
+			InitialCapital:  details.InitialCapital,
 		}
 
 		// Run backtest in background
-		go s.runBacktest(backtest.ID, request, backtest.UserID, "")
+		go s.runBacktest(backtest.BacktestID, request, details.UserID, "")
 
-		count++
+		processedCount++
 	}
 
-	return count, nil
-}
-
-// RunBacktest is a placeholder for the RunBacktest method
-func (s *BacktestService) RunBacktest(ctx context.Context, backtest *model.Backtest) error {
-	// ... existing code ...
-
-	// Get strategy structure (if needed)
-	var strategyStructure json.RawMessage
-	// Actually get and use strategy structure from strategy client
-	if backtest.StrategyVersion > 0 {
-		version, err := s.strategyClient.GetStrategyVersion(ctx, backtest.StrategyID, backtest.StrategyVersion, "")
-		if err == nil && version != nil {
-			strategyStructure = version.Structure
-		}
-	} else {
-		strategy, err := s.strategyClient.GetStrategy(ctx, backtest.StrategyID, "")
-		if err == nil && strategy != nil {
-			strategyStructure = strategy.Structure
-		}
-	}
-
-	// Log if we have strategy structure
-	if len(strategyStructure) > 0 {
-		s.logger.Info("Using strategy structure for backtest", zap.Int("backtest_id", backtest.ID))
-	} else {
-		s.logger.Warn("Missing strategy structure for backtest", zap.Int("backtest_id", backtest.ID))
-	}
-
-	// ... rest of the implementation
-	return nil
+	return processedCount, nil
 }

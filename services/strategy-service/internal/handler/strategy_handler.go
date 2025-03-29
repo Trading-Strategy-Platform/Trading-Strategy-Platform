@@ -2,8 +2,10 @@
 package handler
 
 import (
+	"context"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"services/strategy-service/internal/model"
 	"services/strategy-service/internal/service"
@@ -15,18 +17,88 @@ import (
 // StrategyHandler handles strategy-related HTTP requests
 type StrategyHandler struct {
 	strategyService *service.StrategyService
+	userClient      UserClient
 	logger          *zap.Logger
 }
 
+// UserClient defines the interface for user service client
+type UserClient interface {
+	GetUserByID(ctx context.Context, userID int) (string, error)
+}
+
 // NewStrategyHandler creates a new strategy handler
-func NewStrategyHandler(strategyService *service.StrategyService, logger *zap.Logger) *StrategyHandler {
+func NewStrategyHandler(strategyService *service.StrategyService, userClient UserClient, logger *zap.Logger) *StrategyHandler {
 	return &StrategyHandler{
 		strategyService: strategyService,
+		userClient:      userClient,
 		logger:          logger,
 	}
 }
 
+// ListUserStrategies handles listing strategies for a user
+// GET /api/v1/strategies
+func (h *StrategyHandler) ListUserStrategies(c *gin.Context) {
+	userID, exists := c.Get("userID")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		return
+	}
+
+	// Parse pagination parameters
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "10"))
+	if page < 1 {
+		page = 1
+	}
+	if limit < 1 || limit > 100 {
+		limit = 10
+	}
+
+	// Parse search term
+	searchTerm := c.Query("search")
+
+	// Parse purchased_only filter
+	purchasedOnly := c.Query("purchased_only") == "true"
+
+	// Parse tag filters
+	var tagIDs []int
+	if tagIDsStr := c.Query("tag_ids"); tagIDsStr != "" {
+		for _, idStr := range strings.Split(tagIDsStr, ",") {
+			if id, err := strconv.Atoi(idStr); err == nil {
+				tagIDs = append(tagIDs, id)
+			}
+		}
+	}
+
+	strategies, total, err := h.strategyService.GetUserStrategies(
+		c.Request.Context(),
+		userID.(int),
+		searchTerm,
+		purchasedOnly,
+		tagIDs,
+		page,
+		limit,
+	)
+
+	if err != nil {
+		h.logger.Error("Failed to get user strategies", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch strategies"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"strategies": strategies,
+		"meta": gin.H{
+			"total": total,
+			"page":  page,
+			"limit": limit,
+			"pages": (total + limit - 1) / limit, // Calculate total pages
+		},
+	})
+}
+
 // CreateStrategy handles creating a new strategy
+// POST /api/v1/strategies
 func (h *StrategyHandler) CreateStrategy(c *gin.Context) {
 	var request model.StrategyCreate
 	if err := c.ShouldBindJSON(&request); err != nil {
@@ -40,6 +112,9 @@ func (h *StrategyHandler) CreateStrategy(c *gin.Context) {
 		return
 	}
 
+	// Set default IsActive to true
+	request.IsActive = true
+
 	strategy, err := h.strategyService.CreateStrategy(c.Request.Context(), &request, userID.(int))
 	if err != nil {
 		h.logger.Error("Failed to create strategy", zap.Error(err))
@@ -51,6 +126,7 @@ func (h *StrategyHandler) CreateStrategy(c *gin.Context) {
 }
 
 // GetStrategy handles retrieving a strategy by ID
+// GET /api/v1/strategies/{id}
 func (h *StrategyHandler) GetStrategy(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.Atoi(idStr)
@@ -72,102 +148,24 @@ func (h *StrategyHandler) GetStrategy(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, strategy)
-}
-
-// ListUserStrategies handles listing strategies for a user
-func (h *StrategyHandler) ListUserStrategies(c *gin.Context) {
-	userID, exists := c.Get("userID")
-	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
-		return
-	}
-
-	// Parse request parameters
-	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "10"))
-
-	// Parse isPublic filter
-	var isPublic *bool
-	if isPublicStr := c.Query("is_public"); isPublicStr != "" {
-		isPublicBool := isPublicStr == "true"
-		isPublic = &isPublicBool
-	}
-
-	// Parse tag filter
-	var tagID *int
-	if tagIDStr := c.Query("tag_id"); tagIDStr != "" {
-		tagIDInt, err := strconv.Atoi(tagIDStr)
-		if err == nil {
-			tagID = &tagIDInt
-		}
-	}
-
-	strategies, total, err := h.strategyService.GetUserStrategies(
-		c.Request.Context(),
-		userID.(int),
-		userID.(int),
-		isPublic,
-		tagID,
-		page,
-		limit,
-	)
-
+	// Get creator username
+	creatorName, err := h.userClient.GetUserByID(c.Request.Context(), strategy.UserID)
 	if err != nil {
-		h.logger.Error("Failed to get user strategies", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch strategies"})
-		return
+		h.logger.Warn("Failed to get creator name", zap.Error(err))
+		creatorName = "Unknown"
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"strategies": strategies,
-		"meta": gin.H{
-			"total": total,
-			"page":  page,
-			"limit": limit,
-		},
-	})
-}
-
-// ListPublicStrategies handles listing public strategies
-func (h *StrategyHandler) ListPublicStrategies(c *gin.Context) {
-	// Parse request parameters
-	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "10"))
-
-	// Parse tag filter
-	var tagID *int
-	if tagIDStr := c.Query("tag_id"); tagIDStr != "" {
-		tagIDInt, err := strconv.Atoi(tagIDStr)
-		if err == nil {
-			tagID = &tagIDInt
-		}
+	// Create response with additional metadata
+	response := gin.H{
+		"strategy":     strategy,
+		"creator_name": creatorName,
 	}
 
-	strategies, total, err := h.strategyService.GetPublicStrategies(
-		c.Request.Context(),
-		tagID,
-		page,
-		limit,
-	)
-
-	if err != nil {
-		h.logger.Error("Failed to get public strategies", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch strategies"})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"strategies": strategies,
-		"meta": gin.H{
-			"total": total,
-			"page":  page,
-			"limit": limit,
-		},
-	})
+	c.JSON(http.StatusOK, response)
 }
 
 // UpdateStrategy handles updating a strategy
+// PUT /api/v1/strategies/{id}
 func (h *StrategyHandler) UpdateStrategy(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.Atoi(idStr)
@@ -199,6 +197,7 @@ func (h *StrategyHandler) UpdateStrategy(c *gin.Context) {
 }
 
 // DeleteStrategy handles deleting a strategy
+// DELETE /api/v1/strategies/{id}
 func (h *StrategyHandler) DeleteStrategy(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.Atoi(idStr)
@@ -223,38 +222,8 @@ func (h *StrategyHandler) DeleteStrategy(c *gin.Context) {
 	c.Status(http.StatusNoContent)
 }
 
-// CreateVersion handles creating a new version of a strategy
-func (h *StrategyHandler) CreateVersion(c *gin.Context) {
-	idStr := c.Param("id")
-	id, err := strconv.Atoi(idStr)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid strategy ID"})
-		return
-	}
-
-	userID, exists := c.Get("userID")
-	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
-		return
-	}
-
-	var request model.VersionCreate
-	if err := c.ShouldBindJSON(&request); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	version, err := h.strategyService.CreateVersion(c.Request.Context(), id, &request, userID.(int))
-	if err != nil {
-		h.logger.Error("Failed to create version", zap.Error(err), zap.Int("strategy_id", id))
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	c.JSON(http.StatusCreated, version)
-}
-
 // GetVersions handles retrieving all versions of a strategy
+// GET /api/v1/strategies/{id}/versions
 func (h *StrategyHandler) GetVersions(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.Atoi(idStr)
@@ -269,506 +238,36 @@ func (h *StrategyHandler) GetVersions(c *gin.Context) {
 		return
 	}
 
-	versions, err := h.strategyService.GetVersions(c.Request.Context(), id, userID.(int))
+	// Parse pagination parameters
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
+	if page < 1 {
+		page = 1
+	}
+	if limit < 1 || limit > 100 {
+		limit = 20
+	}
+
+	versions, total, err := h.strategyService.GetVersions(c.Request.Context(), id, userID.(int), page, limit)
 	if err != nil {
 		h.logger.Error("Failed to get versions", zap.Error(err), zap.Int("strategy_id", id))
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	c.JSON(http.StatusOK, versions)
-}
-
-// GetVersion handles retrieving a specific version of a strategy
-func (h *StrategyHandler) GetVersion(c *gin.Context) {
-	idStr := c.Param("id")
-	id, err := strconv.Atoi(idStr)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid strategy ID"})
-		return
-	}
-
-	versionStr := c.Param("version")
-	version, err := strconv.Atoi(versionStr)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid version number"})
-		return
-	}
-
-	userID, exists := c.Get("userID")
-	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
-		return
-	}
-
-	versionObj, err := h.strategyService.GetVersion(c.Request.Context(), id, version, userID.(int))
-	if err != nil {
-		h.logger.Error("Failed to get version", zap.Error(err), zap.Int("strategy_id", id), zap.Int("version", version))
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	c.JSON(http.StatusOK, versionObj)
-}
-
-// RestoreVersion handles restoring a strategy to a previous version
-func (h *StrategyHandler) RestoreVersion(c *gin.Context) {
-	idStr := c.Param("id")
-	id, err := strconv.Atoi(idStr)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid strategy ID"})
-		return
-	}
-
-	versionStr := c.Param("version")
-	version, err := strconv.Atoi(versionStr)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid version number"})
-		return
-	}
-
-	userID, exists := c.Get("userID")
-	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
-		return
-	}
-
-	strategy, err := h.strategyService.RestoreVersion(c.Request.Context(), id, version, userID.(int))
-	if err != nil {
-		h.logger.Error("Failed to restore version", zap.Error(err), zap.Int("strategy_id", id), zap.Int("version", version))
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	c.JSON(http.StatusOK, strategy)
-}
-
-// CloneStrategy handles cloning a strategy
-func (h *StrategyHandler) CloneStrategy(c *gin.Context) {
-	idStr := c.Param("id")
-	id, err := strconv.Atoi(idStr)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid strategy ID"})
-		return
-	}
-
-	userID, exists := c.Get("userID")
-	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
-		return
-	}
-
-	var request struct {
-		Name string `json:"name" binding:"required"`
-	}
-
-	if err := c.ShouldBindJSON(&request); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	strategy, err := h.strategyService.CloneStrategy(c.Request.Context(), id, userID.(int), request.Name)
-	if err != nil {
-		h.logger.Error("Failed to clone strategy", zap.Error(err), zap.Int("source_id", id))
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	c.JSON(http.StatusCreated, strategy)
-}
-
-// StartBacktest handles starting a backtest for a strategy
-func (h *StrategyHandler) StartBacktest(c *gin.Context) {
-	idStr := c.Param("id")
-	id, err := strconv.Atoi(idStr)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid strategy ID"})
-		return
-	}
-
-	userID, exists := c.Get("userID")
-	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
-		return
-	}
-
-	var request model.BacktestRequest
-	if err := c.ShouldBindJSON(&request); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	// Set strategy ID from URL parameter
-	request.StrategyID = id
-
-	backtestID, err := h.strategyService.StartBacktest(c.Request.Context(), &request, userID.(int))
-	if err != nil {
-		h.logger.Error("Failed to start backtest", zap.Error(err), zap.Int("strategy_id", id))
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	c.JSON(http.StatusAccepted, gin.H{
-		"backtest_id": backtestID,
-		"message":     "Backtest started successfully",
-	})
-}
-
-// TagHandler handles tag-related HTTP requests
-type TagHandler struct {
-	tagService *service.TagService
-	logger     *zap.Logger
-}
-
-// NewTagHandler creates a new tag handler
-func NewTagHandler(tagService *service.TagService, logger *zap.Logger) *TagHandler {
-	return &TagHandler{
-		tagService: tagService,
-		logger:     logger,
-	}
-}
-
-// GetAllTags handles retrieving all tags
-func (h *TagHandler) GetAllTags(c *gin.Context) {
-	tags, err := h.tagService.GetAllTags(c.Request.Context())
-	if err != nil {
-		h.logger.Error("Failed to get tags", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch tags"})
-		return
-	}
-
-	c.JSON(http.StatusOK, tags)
-}
-
-// CreateTag handles creating a new tag
-func (h *TagHandler) CreateTag(c *gin.Context) {
-	var request struct {
-		Name string `json:"name" binding:"required"`
-	}
-
-	if err := c.ShouldBindJSON(&request); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	tag, err := h.tagService.CreateTag(c.Request.Context(), request.Name)
-	if err != nil {
-		h.logger.Error("Failed to create tag", zap.Error(err))
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	c.JSON(http.StatusCreated, tag)
-}
-
-// IndicatorHandler handles indicator-related HTTP requests
-type IndicatorHandler struct {
-	indicatorService *service.IndicatorService
-	logger           *zap.Logger
-}
-
-// NewIndicatorHandler creates a new indicator handler
-func NewIndicatorHandler(indicatorService *service.IndicatorService, logger *zap.Logger) *IndicatorHandler {
-	return &IndicatorHandler{
-		indicatorService: indicatorService,
-		logger:           logger,
-	}
-}
-
-// GetAllIndicators handles retrieving all indicators
-func (h *IndicatorHandler) GetAllIndicators(c *gin.Context) {
-	// Parse category filter
-	var category *string
-	if categoryStr := c.Query("category"); categoryStr != "" {
-		category = &categoryStr
-	}
-
-	indicators, err := h.indicatorService.GetAllIndicators(c.Request.Context(), category)
-	if err != nil {
-		h.logger.Error("Failed to get indicators", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch indicators"})
-		return
-	}
-
-	c.JSON(http.StatusOK, indicators)
-}
-
-// GetIndicator handles retrieving a specific indicator
-func (h *IndicatorHandler) GetIndicator(c *gin.Context) {
-	idStr := c.Param("id")
-	id, err := strconv.Atoi(idStr)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid indicator ID"})
-		return
-	}
-
-	indicator, err := h.indicatorService.GetIndicator(c.Request.Context(), id)
-	if err != nil {
-		h.logger.Error("Failed to get indicator", zap.Error(err), zap.Int("id", id))
-		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
-		return
-	}
-
-	c.JSON(http.StatusOK, indicator)
-}
-
-// MarketplaceHandler handles marketplace-related HTTP requests
-type MarketplaceHandler struct {
-	marketplaceService *service.MarketplaceService
-	logger             *zap.Logger
-}
-
-// NewMarketplaceHandler creates a new marketplace handler
-func NewMarketplaceHandler(marketplaceService *service.MarketplaceService, logger *zap.Logger) *MarketplaceHandler {
-	return &MarketplaceHandler{
-		marketplaceService: marketplaceService,
-		logger:             logger,
-	}
-}
-
-// CreateListing handles creating a new marketplace listing
-func (h *MarketplaceHandler) CreateListing(c *gin.Context) {
-	var request model.MarketplaceCreate
-	if err := c.ShouldBindJSON(&request); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	userID, exists := c.Get("userID")
-	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
-		return
-	}
-
-	listing, err := h.marketplaceService.CreateListing(c.Request.Context(), &request, userID.(int))
-	if err != nil {
-		h.logger.Error("Failed to create listing", zap.Error(err))
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	c.JSON(http.StatusCreated, listing)
-}
-
-// GetListing handles retrieving a marketplace listing
-func (h *MarketplaceHandler) GetListing(c *gin.Context) {
-	idStr := c.Param("id")
-	id, err := strconv.Atoi(idStr)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid listing ID"})
-		return
-	}
-
-	listing, err := h.marketplaceService.GetListing(c.Request.Context(), id)
-	if err != nil {
-		h.logger.Error("Failed to get listing", zap.Error(err), zap.Int("id", id))
-		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
-		return
-	}
-
-	c.JSON(http.StatusOK, listing)
-}
-
-// ListListings handles listing marketplace listings
-func (h *MarketplaceHandler) ListListings(c *gin.Context) {
-	// Parse request parameters
-	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "10"))
-
-	// Parse isActive filter
-	var isActive *bool
-	if isActiveStr := c.Query("is_active"); isActiveStr != "" {
-		isActiveBool := isActiveStr == "true"
-		isActive = &isActiveBool
-	}
-
-	// Parse userID filter
-	var userID *int
-	if userIDStr := c.Query("user_id"); userIDStr != "" {
-		userIDInt, err := strconv.Atoi(userIDStr)
-		if err == nil {
-			userID = &userIDInt
-		}
-	}
-
-	listings, total, err := h.marketplaceService.GetAllListings(
-		c.Request.Context(),
-		isActive,
-		userID,
-		page,
-		limit,
-	)
-
-	if err != nil {
-		h.logger.Error("Failed to get listings", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch listings"})
-		return
-	}
-
 	c.JSON(http.StatusOK, gin.H{
-		"listings": listings,
+		"versions": versions,
 		"meta": gin.H{
 			"total": total,
 			"page":  page,
 			"limit": limit,
+			"pages": (total + limit - 1) / limit,
 		},
 	})
-}
-
-// UpdateListing handles updating a marketplace listing
-func (h *MarketplaceHandler) UpdateListing(c *gin.Context) {
-	idStr := c.Param("id")
-	id, err := strconv.Atoi(idStr)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid listing ID"})
-		return
-	}
-
-	userID, exists := c.Get("userID")
-	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
-		return
-	}
-
-	var request struct {
-		Price       *float64 `json:"price"`
-		IsActive    *bool    `json:"is_active"`
-		Description *string  `json:"description"`
-	}
-
-	if err := c.ShouldBindJSON(&request); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	listing, err := h.marketplaceService.UpdateListing(
-		c.Request.Context(),
-		id,
-		request.Price,
-		request.IsActive,
-		request.Description,
-		userID.(int),
-	)
-
-	if err != nil {
-		h.logger.Error("Failed to update listing", zap.Error(err), zap.Int("id", id))
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	c.JSON(http.StatusOK, listing)
-}
-
-// DeleteListing handles deleting a marketplace listing
-func (h *MarketplaceHandler) DeleteListing(c *gin.Context) {
-	idStr := c.Param("id")
-	id, err := strconv.Atoi(idStr)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid listing ID"})
-		return
-	}
-
-	userID, exists := c.Get("userID")
-	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
-		return
-	}
-
-	err = h.marketplaceService.DeleteListing(c.Request.Context(), id, userID.(int))
-	if err != nil {
-		h.logger.Error("Failed to delete listing", zap.Error(err), zap.Int("id", id))
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	c.Status(http.StatusNoContent)
-}
-
-// PurchaseStrategy handles purchasing a strategy from the marketplace
-func (h *MarketplaceHandler) PurchaseStrategy(c *gin.Context) {
-	idStr := c.Param("id")
-	id, err := strconv.Atoi(idStr)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid listing ID"})
-		return
-	}
-
-	userID, exists := c.Get("userID")
-	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
-		return
-	}
-
-	purchase, err := h.marketplaceService.PurchaseStrategy(c.Request.Context(), id, userID.(int))
-	if err != nil {
-		h.logger.Error("Failed to purchase strategy", zap.Error(err), zap.Int("listing_id", id))
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	c.JSON(http.StatusOK, purchase)
-}
-
-// GetPurchases handles retrieving a user's purchases
-func (h *MarketplaceHandler) GetPurchases(c *gin.Context) {
-	userID, exists := c.Get("userID")
-	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
-		return
-	}
-
-	// Parse request parameters
-	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "10"))
-
-	purchases, total, err := h.marketplaceService.GetPurchases(
-		c.Request.Context(),
-		userID.(int),
-		page,
-		limit,
-	)
-
-	if err != nil {
-		h.logger.Error("Failed to get purchases", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch purchases"})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"purchases": purchases,
-		"meta": gin.H{
-			"total": total,
-			"page":  page,
-			"limit": limit,
-		},
-	})
-}
-
-// CreateReview handles creating a review for a purchased strategy
-func (h *MarketplaceHandler) CreateReview(c *gin.Context) {
-	var request model.ReviewCreate
-	if err := c.ShouldBindJSON(&request); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	userID, exists := c.Get("userID")
-	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
-		return
-	}
-
-	review, err := h.marketplaceService.CreateReview(c.Request.Context(), &request, userID.(int))
-	if err != nil {
-		h.logger.Error("Failed to create review", zap.Error(err))
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	c.JSON(http.StatusCreated, review)
 }
 
 // UpdateActiveVersion handles updating the active version of a strategy for a user
+// PUT /api/v1/strategies/{id}/active-version
 func (h *StrategyHandler) UpdateActiveVersion(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.Atoi(idStr)
@@ -786,9 +285,13 @@ func (h *StrategyHandler) UpdateActiveVersion(c *gin.Context) {
 		return
 	}
 
-	userID, _ := c.Get("userID")
+	userID, exists := c.Get("userID")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		return
+	}
 
-	success, err := h.strategyService.UpdateUserStrategyVersion(
+	err = h.strategyService.UpdateUserStrategyVersion(
 		c.Request.Context(),
 		userID.(int),
 		id,
@@ -804,46 +307,5 @@ func (h *StrategyHandler) UpdateActiveVersion(c *gin.Context) {
 		return
 	}
 
-	if !success {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Failed to update active version"})
-		return
-	}
-
 	c.Status(http.StatusNoContent)
-}
-
-// GetReviews handles retrieving reviews for a marketplace listing
-func (h *MarketplaceHandler) GetReviews(c *gin.Context) {
-	idStr := c.Param("id")
-	id, err := strconv.Atoi(idStr)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid listing ID"})
-		return
-	}
-
-	// Parse request parameters
-	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "10"))
-
-	reviews, total, err := h.marketplaceService.GetReviews(
-		c.Request.Context(),
-		id,
-		page,
-		limit,
-	)
-
-	if err != nil {
-		h.logger.Error("Failed to get reviews", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch reviews"})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"reviews": reviews,
-		"meta": gin.H{
-			"total": total,
-			"page":  page,
-			"limit": limit,
-		},
-	})
 }

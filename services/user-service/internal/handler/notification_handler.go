@@ -12,19 +12,20 @@ import (
 
 // NotificationHandler handles notification-related HTTP requests
 type NotificationHandler struct {
-	notificationService *service.NotificationService
-	logger              *zap.Logger
+	userService *service.UserService
+	logger      *zap.Logger
 }
 
 // NewNotificationHandler creates a new notification handler
-func NewNotificationHandler(notificationService *service.NotificationService, logger *zap.Logger) *NotificationHandler {
+func NewNotificationHandler(userService *service.UserService, logger *zap.Logger) *NotificationHandler {
 	return &NotificationHandler{
-		notificationService: notificationService,
-		logger:              logger,
+		userService: userService,
+		logger:      logger,
 	}
 }
 
 // GetNotifications handles retrieving user notifications
+// GET /api/v1/users/me/notifications
 func (h *NotificationHandler) GetNotifications(c *gin.Context) {
 	userID, _ := c.Get("userID")
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "100"))
@@ -35,9 +36,10 @@ func (h *NotificationHandler) GetNotifications(c *gin.Context) {
 	var err error
 
 	if unreadOnly {
-		notifications, err = h.notificationService.GetActiveNotifications(c.Request.Context(), userID.(int))
+		// If unread_only is true, get only active (unread) notifications
+		notifications, err = h.userService.GetActiveNotifications(c.Request.Context(), userID.(int))
 	} else {
-		notifications, err = h.notificationService.GetAllNotifications(c.Request.Context(), userID.(int), limit, offset)
+		notifications, err = h.userService.GetNotifications(c.Request.Context(), userID.(int), limit, offset)
 	}
 
 	if err != nil {
@@ -50,10 +52,11 @@ func (h *NotificationHandler) GetNotifications(c *gin.Context) {
 }
 
 // GetUnreadCount handles retrieving unread notification count
+// GET /api/v1/users/me/notifications/count
 func (h *NotificationHandler) GetUnreadCount(c *gin.Context) {
 	userID, _ := c.Get("userID")
 
-	count, err := h.notificationService.GetUnreadCount(c.Request.Context(), userID.(int))
+	count, err := h.userService.GetUnreadNotificationCount(c.Request.Context(), userID.(int))
 	if err != nil {
 		h.logger.Error("Failed to get unread notification count", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get notification count"})
@@ -63,8 +66,9 @@ func (h *NotificationHandler) GetUnreadCount(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"count": count})
 }
 
-// MarkAsRead handles marking a notification as read
-func (h *NotificationHandler) MarkAsRead(c *gin.Context) {
+// MarkNotificationAsRead handles marking a notification as read
+// PUT /api/v1/users/me/notifications/{id}/read
+func (h *NotificationHandler) MarkNotificationAsRead(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.Atoi(idStr)
 	if err != nil {
@@ -72,7 +76,7 @@ func (h *NotificationHandler) MarkAsRead(c *gin.Context) {
 		return
 	}
 
-	success, err := h.notificationService.MarkAsRead(c.Request.Context(), id)
+	success, err := h.userService.MarkNotificationAsRead(c.Request.Context(), id)
 	if err != nil {
 		h.logger.Error("Failed to mark notification as read", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update notification"})
@@ -88,10 +92,11 @@ func (h *NotificationHandler) MarkAsRead(c *gin.Context) {
 }
 
 // MarkAllAsRead handles marking all notifications as read
+// PUT /api/v1/users/me/notifications/read-all
 func (h *NotificationHandler) MarkAllAsRead(c *gin.Context) {
 	userID, _ := c.Get("userID")
 
-	count, err := h.notificationService.MarkAllAsRead(c.Request.Context(), userID.(int))
+	count, err := h.userService.MarkAllNotificationsAsRead(c.Request.Context(), userID.(int))
 	if err != nil {
 		h.logger.Error("Failed to mark all notifications as read", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update notifications"})

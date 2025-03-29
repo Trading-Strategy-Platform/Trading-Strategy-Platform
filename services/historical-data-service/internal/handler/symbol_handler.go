@@ -27,9 +27,33 @@ func NewSymbolHandler(symbolService *service.SymbolService, logger *zap.Logger) 
 
 // GetAllSymbols handles retrieving all symbols
 func (h *SymbolHandler) GetAllSymbols(c *gin.Context) {
-	symbols, err := h.symbolService.GetAllSymbols(c.Request.Context())
+	// Get query parameters for filtering
+	searchTerm := c.Query("search")
+	assetType := c.Query("asset_type")
+	exchange := c.Query("exchange")
+
+	// If no filters provided, get all symbols
+	if searchTerm == "" && assetType == "" && exchange == "" {
+		symbols, err := h.symbolService.GetAllSymbols(c.Request.Context())
+		if err != nil {
+			h.logger.Error("Failed to get all symbols", zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve symbols"})
+			return
+		}
+		c.JSON(http.StatusOK, symbols)
+		return
+	}
+
+	// Apply filters
+	filter := &model.SymbolFilter{
+		SearchTerm: searchTerm,
+		AssetType:  assetType,
+		Exchange:   exchange,
+	}
+
+	symbols, err := h.symbolService.GetSymbolsByFilter(c.Request.Context(), filter)
 	if err != nil {
-		h.logger.Error("Failed to get all symbols", zap.Error(err))
+		h.logger.Error("Failed to get filtered symbols", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve symbols"})
 		return
 	}
@@ -85,6 +109,67 @@ func (h *SymbolHandler) CreateSymbol(c *gin.Context) {
 	c.JSON(http.StatusCreated, symbol)
 }
 
+// UpdateSymbol handles updating an existing symbol
+func (h *SymbolHandler) UpdateSymbol(c *gin.Context) {
+	// Parse path parameter
+	idStr := c.Param("id")
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid symbol ID"})
+		return
+	}
+
+	var symbol model.Symbol
+	if err := c.ShouldBindJSON(&symbol); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Ensure ID matches path parameter
+	symbol.ID = id
+
+	// Update symbol
+	success, err := h.symbolService.UpdateSymbol(c.Request.Context(), &symbol)
+	if err != nil {
+		h.logger.Error("Failed to update symbol", zap.Error(err), zap.Int("id", id))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update symbol: " + err.Error()})
+		return
+	}
+
+	if !success {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Symbol not found"})
+		return
+	}
+
+	c.JSON(http.StatusOK, symbol)
+}
+
+// DeleteSymbol handles deleting a symbol (marking as inactive)
+func (h *SymbolHandler) DeleteSymbol(c *gin.Context) {
+	// Parse path parameter
+	idStr := c.Param("id")
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid symbol ID"})
+		return
+	}
+
+	// Delete symbol
+	success, err := h.symbolService.DeleteSymbol(c.Request.Context(), id)
+	if err != nil {
+		h.logger.Error("Failed to delete symbol", zap.Error(err), zap.Int("id", id))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete symbol: " + err.Error()})
+		return
+	}
+
+	if !success {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Symbol not found"})
+		return
+	}
+
+	c.Status(http.StatusNoContent)
+}
+
 // TimeframeHandler handles timeframe HTTP requests
 type TimeframeHandler struct {
 	timeframeService *service.TimeframeService
@@ -135,26 +220,4 @@ func (h *TimeframeHandler) GetTimeframe(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, timeframe)
-}
-
-// CreateTimeframe handles creating a new timeframe
-func (h *TimeframeHandler) CreateTimeframe(c *gin.Context) {
-	var timeframe model.Timeframe
-	if err := c.ShouldBindJSON(&timeframe); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	// Create timeframe
-	id, err := h.timeframeService.CreateTimeframe(c.Request.Context(), &timeframe)
-	if err != nil {
-		h.logger.Error("Failed to create timeframe", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create timeframe: " + err.Error()})
-		return
-	}
-
-	// Set the ID in the response
-	timeframe.ID = id
-
-	c.JSON(http.StatusCreated, timeframe)
 }

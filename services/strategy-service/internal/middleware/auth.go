@@ -16,6 +16,35 @@ import (
 // UserClient defines the interface for user service client
 type UserClient interface {
 	ValidateUserAccess(ctx context.Context, userID int, token string) (bool, error)
+	CheckUserRole(ctx context.Context, userID int, role string) (bool, error)
+}
+
+// RequireRole checks if the user has the specified role
+func RequireRole(userClient UserClient, requiredRole string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		userID, exists := c.Get("userID")
+		if !exists {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+			c.Abort()
+			return
+		}
+
+		// Get user roles from user service
+		hasRole, err := userClient.CheckUserRole(c.Request.Context(), userID.(int), requiredRole)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to verify user role"})
+			c.Abort()
+			return
+		}
+
+		if !hasRole {
+			c.JSON(http.StatusForbidden, gin.H{"error": "Insufficient permissions"})
+			c.Abort()
+			return
+		}
+
+		c.Next()
+	}
 }
 
 // AuthMiddleware authenticates requests against the user service

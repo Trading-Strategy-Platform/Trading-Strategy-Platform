@@ -1,3 +1,4 @@
+// internal/service/auth_service.go
 package service
 
 import (
@@ -30,7 +31,7 @@ func NewAuthService(userRepo *repository.UserRepository, cfg *config.Config, log
 	}
 }
 
-// Register creates a new user account
+// Register creates a new user account using the create_user database function
 func (s *AuthService) Register(ctx context.Context, userCreate *model.UserCreate) (*model.TokenResponse, error) {
 	// Check if email already exists
 	existingUser, err := s.userRepo.GetByEmail(ctx, userCreate.Email)
@@ -53,7 +54,7 @@ func (s *AuthService) Register(ctx context.Context, userCreate *model.UserCreate
 		userCreate.Role = "user"
 	}
 
-	// Create the user
+	// Create the user using the database function
 	userID, err := s.userRepo.Create(ctx, userCreate, string(hashedPassword))
 	if err != nil {
 		return nil, err
@@ -179,6 +180,17 @@ func (s *AuthService) RefreshToken(ctx context.Context, refreshToken string) (*m
 		ExpiresAt:    expiresAt,
 		User:         *user,
 	}, nil
+}
+
+// Logout invalidates a user's session
+// Note: In a stateless JWT setup, we can't really "invalidate" a token.
+// This would require a token blacklist, typically stored in Redis.
+// For this example, we'll just return success.
+func (s *AuthService) Logout(ctx context.Context, userID int) error {
+	// In a production environment, you would add the token to a blacklist
+	// or use a database-based session strategy.
+	s.logger.Info("user logged out", zap.Int("userID", userID))
+	return nil
 }
 
 // generateTokens creates a new pair of access and refresh tokens

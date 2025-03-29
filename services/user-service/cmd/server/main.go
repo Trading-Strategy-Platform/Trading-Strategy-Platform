@@ -22,7 +22,6 @@ import (
 	"go.uber.org/zap"
 )
 
-// Rest of the code remains unchanged
 func main() {
 	// Load configuration
 	cfg, err := config.LoadConfig("config/config.yaml")
@@ -46,10 +45,12 @@ func main() {
 
 	// Create repositories
 	userRepo := repository.NewUserRepository(db, logger)
+	notificationRepo := repository.NewNotificationRepository(db, logger)
+	preferencesRepo := repository.NewPreferencesRepository(db, logger)
 
 	// Create services
 	authService := service.NewAuthService(userRepo, cfg, logger)
-	userService := service.NewUserService(userRepo, logger)
+	userService := service.NewUserService(userRepo, notificationRepo, preferencesRepo, logger)
 
 	// Create HTTP server
 	router := setupRouter(authService, userService, logger)
@@ -155,17 +156,6 @@ func setupRouter(authService *service.AuthService, userService *service.UserServ
 	// API routes
 	v1 := router.Group("/api/v1")
 	{
-		// Add notification routes
-		notifications := v1.Group("/notifications")
-		{
-			notificationHandler := handler.NewNotificationHandler(notificationService, logger)
-			notifications.Use(middleware.AuthMiddleware(authService, logger))
-
-			notifications.GET("", notificationHandler.GetNotifications)
-			notifications.GET("/count", notificationHandler.GetUnreadCount)
-			notifications.PUT("/:id/read", notificationHandler.MarkAsRead)
-			notifications.PUT("/read-all", notificationHandler.MarkAllAsRead)
-		}
 		// Auth routes
 		auth := v1.Group("/auth")
 		{
@@ -173,17 +163,36 @@ func setupRouter(authService *service.AuthService, userService *service.UserServ
 			auth.POST("/register", authHandler.Register)
 			auth.POST("/login", authHandler.Login)
 			auth.POST("/refresh-token", authHandler.RefreshToken)
+
+			// Protected logout route
+			authProtected := auth.Group("")
+			authProtected.Use(middleware.AuthMiddleware(authService, logger))
+			authProtected.POST("/logout", authHandler.Logout)
 		}
 
 		// User routes (protected)
-		user := v1.Group("/users")
+		users := v1.Group("/users")
 		{
-			userHandler := handler.NewUserHandler(userService, logger)
-			user.Use(middleware.AuthMiddleware(authService, logger))
+			// All user routes require authentication
+			users.Use(middleware.AuthMiddleware(authService, logger))
 
-			user.GET("/me", userHandler.GetCurrentUser)
-			user.PUT("/me", userHandler.UpdateCurrentUser)
-			user.PUT("/me/password", userHandler.ChangePassword)
+			// User profile handlers
+			userHandler := handler.NewUserHandler(userService, logger)
+			users.GET("/me", userHandler.GetCurrentUser)
+			users.PUT("/me", userHandler.UpdateCurrentUser)
+			users.PUT("/me/password", userHandler.ChangePassword)
+			users.DELETE("/me", userHandler.DeleteCurrentUser)
+
+			// User preferences handlers
+			users.GET("/me/preferences", userHandler.GetUserPreferences)
+			users.PUT("/me/preferences", userHandler.UpdateUserPreferences)
+
+			// User notifications handlers
+			notificationHandler := handler.NewNotificationHandler(userService, logger)
+			users.GET("/me/notifications", notificationHandler.GetNotifications)
+			users.GET("/me/notifications/count", notificationHandler.GetUnreadCount)
+			users.PUT("/me/notifications/:id/read", notificationHandler.MarkNotificationAsRead)
+			users.PUT("/me/notifications/read-all", notificationHandler.MarkAllAsRead)
 		}
 
 		// Admin routes (protected with role check)

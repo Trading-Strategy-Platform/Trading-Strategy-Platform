@@ -21,7 +21,7 @@ func NewNotificationRepository(db *sqlx.DB, logger *zap.Logger) *NotificationRep
 	}
 }
 
-// GetActiveNotifications retrieves active notifications for a user
+// GetActiveNotifications retrieves active notifications for a user using get_active_notifications function
 func (r *NotificationRepository) GetActiveNotifications(ctx context.Context, userID int) (interface{}, error) {
 	query := `SELECT * FROM get_active_notifications($1)`
 
@@ -35,7 +35,7 @@ func (r *NotificationRepository) GetActiveNotifications(ctx context.Context, use
 	return notifications, nil
 }
 
-// GetUnreadCount retrieves the count of unread notifications for a user
+// GetUnreadCount retrieves the count of unread notifications for a user using get_unread_notification_count function
 func (r *NotificationRepository) GetUnreadCount(ctx context.Context, userID int) (int, error) {
 	query := `SELECT get_unread_notification_count($1)`
 
@@ -49,7 +49,7 @@ func (r *NotificationRepository) GetUnreadCount(ctx context.Context, userID int)
 	return count, nil
 }
 
-// GetAllNotifications retrieves all notifications for a user with pagination
+// GetAllNotifications retrieves all notifications for a user with pagination using get_all_notifications function
 func (r *NotificationRepository) GetAllNotifications(ctx context.Context, userID, limit, offset int) (interface{}, error) {
 	query := `SELECT * FROM get_all_notifications($1, $2, $3)`
 
@@ -63,7 +63,7 @@ func (r *NotificationRepository) GetAllNotifications(ctx context.Context, userID
 	return notifications, nil
 }
 
-// MarkNotificationAsRead marks a notification as read
+// MarkNotificationAsRead marks a notification as read using mark_notification_as_read function
 func (r *NotificationRepository) MarkNotificationAsRead(ctx context.Context, notificationID int) (bool, error) {
 	query := `SELECT mark_notification_as_read($1)`
 
@@ -77,7 +77,7 @@ func (r *NotificationRepository) MarkNotificationAsRead(ctx context.Context, not
 	return success, nil
 }
 
-// MarkAllNotificationsAsRead marks all notifications for a user as read
+// MarkAllNotificationsAsRead marks all notifications for a user as read using mark_all_notifications_as_read function
 func (r *NotificationRepository) MarkAllNotificationsAsRead(ctx context.Context, userID int) (int, error) {
 	query := `SELECT mark_all_notifications_as_read($1)`
 
@@ -91,9 +91,9 @@ func (r *NotificationRepository) MarkAllNotificationsAsRead(ctx context.Context,
 	return count, nil
 }
 
-// AddNotification adds a new notification for a user
+// AddNotification adds a new notification for a user using add_notification function
 func (r *NotificationRepository) AddNotification(ctx context.Context, userID int, notificationType, title, message, link string) (int, error) {
-	query := `SELECT add_notification($1, $2, $3, $4, $5)`
+	query := `SELECT add_notification($1, $2::notification_type, $3, $4, $5)`
 
 	var id int
 	err := r.db.GetContext(ctx, &id, query, userID, notificationType, title, message, link)
