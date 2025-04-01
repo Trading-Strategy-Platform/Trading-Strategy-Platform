@@ -8,6 +8,7 @@ build:
 	@cd services/strategy-service && go build -o bin/strategy-service cmd/server/main.go
 	@cd services/historical-data-service && go build -o bin/historical-service cmd/server/main.go
 	@cd services/api-gateway && go build -o bin/api-gateway cmd/server/main.go
+	@cd services/media-service && go build -o bin/media-service cmd/server/main.go
 
 test:
 	@echo "Running tests..."
@@ -15,6 +16,7 @@ test:
 	@cd services/strategy-service && go test ./...
 	@cd services/historical-data-service && go test ./...
 	@cd services/api-gateway && go test ./...
+	@cd services/media-service && go test ./...
 
 clean:
 	@echo "Cleaning..."
@@ -22,6 +24,7 @@ clean:
 	@rm -rf services/strategy-service/bin
 	@rm -rf services/historical-data-service/bin
 	@rm -rf services/api-gateway/bin
+	@rm -rf services/media-service/bin
 
 start:
 	@echo "Starting services..."
@@ -45,6 +48,7 @@ lint: setup-lint
 	@cd services/strategy-service && $(shell go env GOPATH)/bin/golangci-lint run
 	@cd services/historical-data-service && $(shell go env GOPATH)/bin/golangci-lint run
 	@cd services/api-gateway && $(shell go env GOPATH)/bin/golangci-lint run
+	@cd services/media-service && $(shell go env GOPATH)/bin/golangci-lint run
 
 fix-dependencies:
 	@echo "Fixing dependencies..."
@@ -57,6 +61,7 @@ setup-infra:
 	@mkdir -p infrastructure/postgres
 	@mkdir -p infrastructure/redis
 	@mkdir -p infrastructure/timescaledb
+	@mkdir -p infrastructure/media-storage
 	@cp -f infrastructure-configs/server.properties infrastructure/kafka/config/
 	@cp -f infrastructure-topic-script/topics.sh infrastructure/kafka/config/
 	@chmod +x infrastructure/kafka/config/topics.sh
@@ -74,6 +79,7 @@ apply-k8s:
 	@kubectl apply -f k8s/historical-data-service/
 	@kubectl apply -f k8s/strategy-service/
 	@kubectl apply -f k8s/user-service/
+	@kubectl apply -f k8s/media-service/
 
 help:
 	@echo "Available commands:"

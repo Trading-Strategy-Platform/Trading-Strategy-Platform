@@ -12,6 +12,7 @@ type Config struct {
 	Server   ServerConfig
 	Database DatabaseConfig
 	Auth     AuthConfig
+	Media    ServiceConfig
 	Kafka    KafkaConfig
 	Redis    RedisConfig
 	Logging  LoggingConfig
@@ -62,6 +63,13 @@ type RedisConfig struct {
 type LoggingConfig struct {
 	Level  string
 	Format string
+}
+
+// ServiceConfig holds configuration for external services
+type ServiceConfig struct {
+	URL        string
+	Timeout    time.Duration
+	ServiceKey string
 }
 
 // LoadConfig loads the configuration from file and environment variables

@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"services/user-service/internal/client"
 	"services/user-service/internal/config"
 	"services/user-service/internal/handler"
 	"services/user-service/internal/middleware"
@@ -48,12 +49,15 @@ func main() {
 	notificationRepo := repository.NewNotificationRepository(db, logger)
 	preferencesRepo := repository.NewPreferencesRepository(db, logger)
 
+	// Create clients
+	mediaClient := client.NewMediaClient(cfg.Media.URL, cfg.Media.ServiceKey, logger)
+
 	// Create services
 	authService := service.NewAuthService(userRepo, cfg, logger)
 	userService := service.NewUserService(userRepo, notificationRepo, preferencesRepo, logger)
 
 	// Create HTTP server
-	router := setupRouter(authService, userService, logger)
+	router := setupRouter(authService, userService, mediaClient, logger)
 
 	srv := &http.Server{
 		Addr:         ":" + cfg.Server.Port,
@@ -141,7 +145,12 @@ func connectToDB(dbConfig config.DatabaseConfig) (*sqlx.DB, error) {
 	return db, nil
 }
 
-func setupRouter(authService *service.AuthService, userService *service.UserService, logger *zap.Logger) *gin.Engine {
+func setupRouter(
+	authService *service.AuthService,
+	userService *service.UserService,
+	mediaClient *client.MediaClient,
+	logger *zap.Logger,
+) *gin.Engine {
 	router := gin.New()
 
 	// Use middlewares
@@ -193,6 +202,10 @@ func setupRouter(authService *service.AuthService, userService *service.UserServ
 			users.GET("/me/notifications/count", notificationHandler.GetUnreadCount)
 			users.PUT("/me/notifications/:id/read", notificationHandler.MarkNotificationAsRead)
 			users.PUT("/me/notifications/read-all", notificationHandler.MarkAllAsRead)
+
+			// Profile photo handler
+			profilePhotoHandler := handler.NewProfilePhotoHandler(userService, mediaClient, logger)
+			users.POST("/me/profile-photo", profilePhotoHandler.UploadProfilePhoto)
 		}
 
 		// Admin routes (protected with role check)

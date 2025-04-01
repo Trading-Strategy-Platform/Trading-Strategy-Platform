@@ -1,4 +1,3 @@
-// services/strategy-service/internal/config/config.go
 package config
 
 import (
@@ -14,6 +13,7 @@ type Config struct {
 	Database          DatabaseConfig
 	UserService       ServiceConfig
 	HistoricalService ServiceConfig
+	MediaService      ServiceConfig // Added for media service
 	Kafka             KafkaConfig
 	Logging           LoggingConfig
 }
@@ -103,6 +103,11 @@ func setDefaults(v *viper.Viper) {
 	// Historical Service defaults
 	v.SetDefault("historicalService.timeout", "30s")
 	v.SetDefault("historicalService.serviceKey", "strategy-service-key")
+
+	// Media Service defaults
+	v.SetDefault("mediaService.url", "http://media-service:8085")
+	v.SetDefault("mediaService.timeout", "30s")
+	v.SetDefault("mediaService.serviceKey", "media-service-key")
 
 	// Kafka topic defaults
 	v.SetDefault("kafka.topics.strategyEvents", "strategy-events")

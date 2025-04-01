@@ -69,6 +69,7 @@ services:
       - user-db
       - kafka
       - redis
+      - media-service
     ports:
       - "8081:8080"
     environment:
@@ -80,11 +81,14 @@ services:
       JWT_SECRET: your_jwt_secret_key
       KAFKA_BROKERS: kafka:9092
       REDIS_URL: redis:6379
+      MEDIA_SERVICE_URL: http://media-service:8085
+      MEDIA_SERVICE_KEY: media-service-key
     networks:
       - user-service-network
       - kafka-network
       - redis-network
       - api-gateway-network
+      - media-service-network
   
   strategy-service:
     build:
@@ -95,6 +99,7 @@ services:
       - strategy-db
       - kafka
       - redis
+      - media-service
     ports:
       - "8082:8080"
     environment:
@@ -106,11 +111,14 @@ services:
       USER_SERVICE_URL: http://user-service:8080
       KAFKA_BROKERS: kafka:9092
       REDIS_URL: redis:6379
+      MEDIA_SERVICE_URL: http://media-service:8085
+      MEDIA_SERVICE_KEY: media-service-key
     networks:
       - strategy-service-network
       - kafka-network
       - redis-network
       - api-gateway-network
+      - media-service-network
   
   historical-service:
     build:
@@ -136,6 +144,24 @@ services:
       - kafka-network
       - api-gateway-network
   
+  media-service:
+    build:
+      context: ./services/media-service
+      dockerfile: Dockerfile
+    container_name: media-service
+    ports:
+      - "8085:8085"
+    environment:
+      STORAGE_TYPE: local
+      BASE_PATH: /data/images
+      BASE_URL: http://media-service:8085/api/v1/media
+      SERVICE_KEY: media-service-key
+    volumes:
+      - media-storage:/data/images
+    networks:
+      - media-service-network
+      - api-gateway-network
+  
   api-gateway:
     build:
       context: ./services/api-gateway
@@ -147,12 +173,14 @@ services:
       USER_SERVICE_URL: http://user-service:8080
       STRATEGY_SERVICE_URL: http://strategy-service:8080
       HISTORICAL_SERVICE_URL: http://historical-service:8080
+      MEDIA_SERVICE_URL: http://media-service:8085
     networks:
       - api-gateway-network
     depends_on:
       - user-service
       - strategy-service
       - historical-service
+      - media-service
   
   # INFRASTRUCTURE
   zookeeper:
@@ -211,6 +239,7 @@ volumes:
   zookeeper-data:
   zookeeper-log:
   redis-data:
+  media-storage:
 
 networks:
   user-service-network:
@@ -219,3 +248,4 @@ networks:
   kafka-network:
   redis-network:
   api-gateway-network:
+  media-service-network:

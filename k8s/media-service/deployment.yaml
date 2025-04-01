@@ -1,0 +1,48 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: media-service
+  labels:
+    app: media-service
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: media-service
+  template:
+    metadata:
+      labels:
+        app: media-service
+    spec:
+      containers:
+      - name: media-service
+        image: ${REGISTRY}/media-service:latest
+        ports:
+        - containerPort: 8085
+        resources:
+          limits:
+            memory: "512Mi"
+            cpu: "300m"
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+        volumeMounts:
+        - name: media-storage
+          mountPath: /data/images
+        env:
+        - name: AWS_ACCESS_KEY
+          valueFrom:
+            secretKeyRef:
+              name: aws-credentials
+              key: access-key
+              optional: true
+        - name: AWS_SECRET_KEY
+          valueFrom:
+            secretKeyRef:
+              name: aws-credentials
+              key: secret-key
+              optional: true
+      volumes:
+      - name: media-storage
+        persistentVolumeClaim:
+          claimName: media-pvc
