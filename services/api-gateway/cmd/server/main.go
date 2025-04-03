@@ -122,6 +122,7 @@ func setupRouter(
 	router.Use(gin.Recovery())
 	router.Use(middleware.Logger(logger))
 	router.Use(middleware.CORS())
+	router.Use(middleware.DuplicatePathLogger(logger))
 
 	// Rate limiting middleware (optional)
 	if cfg.RateLimit.Enabled {
@@ -148,10 +149,16 @@ func setupRouter(
 		// Strategy service routes
 		api.Any("/v1/strategies/*path", gatewayHandler.ProxyStrategyService)
 		api.Any("/v1/strategy-tags/*path", gatewayHandler.ProxyStrategyService)
-		api.Any("/v1/tags/*path", gatewayHandler.ProxyStrategyService)
 		api.Any("/v1/indicators/*path", gatewayHandler.ProxyStrategyService)
 		api.Any("/v1/marketplace/*path", gatewayHandler.ProxyStrategyService)
 		api.Any("/v1/reviews/*path", gatewayHandler.ProxyStrategyService)
+
+		// Routes without path wildcards
+		api.Any("/v1/indicators", gatewayHandler.ProxyStrategyService)
+		api.Any("/v1/strategies", gatewayHandler.ProxyStrategyService)
+		api.Any("/v1/strategy-tags", gatewayHandler.ProxyStrategyService)
+		api.Any("/v1/marketplace", gatewayHandler.ProxyStrategyService)
+		api.Any("/v1/reviews", gatewayHandler.ProxyStrategyService)
 
 		// Historical data service routes
 		api.Any("/v1/market-data/*path", gatewayHandler.ProxyHistoricalService)
@@ -160,24 +167,14 @@ func setupRouter(
 		api.Any("/v1/symbols/*path", gatewayHandler.ProxyHistoricalService)
 		api.Any("/v1/timeframes/*path", gatewayHandler.ProxyHistoricalService)
 
-		// Add without trailing path versions (same as your existing code)
-		api.Any("/v1/auth", gatewayHandler.ProxyUserService)
-		api.Any("/v1/users", gatewayHandler.ProxyUserService)
-		api.Any("/v1/admin", gatewayHandler.ProxyUserService)
-		api.Any("/v1/notifications", gatewayHandler.ProxyUserService)
-
-		api.Any("/v1/strategies", gatewayHandler.ProxyStrategyService)
-		api.Any("/v1/strategy-tags", gatewayHandler.ProxyStrategyService)
-		api.Any("/v1/tags", gatewayHandler.ProxyStrategyService)
-		api.Any("/v1/indicators", gatewayHandler.ProxyStrategyService)
-		api.Any("/v1/marketplace", gatewayHandler.ProxyStrategyService)
-		api.Any("/v1/reviews", gatewayHandler.ProxyStrategyService)
-
-		api.Any("/v1/market-data", gatewayHandler.ProxyHistoricalService)
-		api.Any("/v1/backtests", gatewayHandler.ProxyHistoricalService)
-		api.Any("/v1/backtest-runs", gatewayHandler.ProxyHistoricalService)
-		api.Any("/v1/symbols", gatewayHandler.ProxyHistoricalService)
-		api.Any("/v1/timeframes", gatewayHandler.ProxyHistoricalService)
+		// Explicit routes for the double v1 prefix to handle malformed client requests
+		api.Any("/v1/v1/indicators", gatewayHandler.ProxyStrategyService)
+		api.Any("/v1/v1/indicators/*path", gatewayHandler.ProxyStrategyService)
+		api.Any("/v1/v1/indicators/categories", gatewayHandler.ProxyStrategyService)
+		api.Any("/v1/v1/strategies/*path", gatewayHandler.ProxyStrategyService)
+		api.Any("/v1/v1/strategy-tags/*path", gatewayHandler.ProxyStrategyService)
+		api.Any("/v1/v1/marketplace/*path", gatewayHandler.ProxyStrategyService)
+		api.Any("/v1/v1/reviews/*path", gatewayHandler.ProxyStrategyService)
 	}
 	return router
 }

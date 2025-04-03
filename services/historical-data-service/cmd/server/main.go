@@ -191,6 +191,24 @@ func setupRouter(
 	// API routes
 	v1 := router.Group("/api/v1")
 	{
+		// Create Binance handler
+		binanceHandler := handler.NewBinanceHandler(marketDataHandler.GetMarketDataService(), logger)
+
+		// Binance API routes
+		binance := v1.Group("/binance")
+		{
+			binance.GET("/symbols", binanceHandler.GetAvailableSymbols)
+			binance.GET("/symbols/:symbol/status", binanceHandler.CheckSymbolStatus)
+
+			// Protected Binance routes
+			binanceAuth := binance.Group("")
+			binanceAuth.Use(middleware.AuthMiddleware(userClient, logger))
+			binanceAuth.POST("/download", binanceHandler.InitiateDataDownload)
+			binanceAuth.GET("/download/:id/status", binanceHandler.GetDownloadStatus)
+			binanceAuth.GET("/downloads/active", binanceHandler.GetActiveDownloads)
+			binanceAuth.DELETE("/download/:id", binanceHandler.CancelDownload)
+		}
+
 		// Symbol routes
 		symbols := v1.Group("/symbols")
 		{

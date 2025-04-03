@@ -45,6 +45,12 @@ func (p *ServiceProxy) ProxyRequest(c *gin.Context, path string) {
 		path = "/" + path
 	}
 
+	// Log the actual target URL being constructed
+	p.logger.Debug("Constructing target URL",
+		zap.String("baseURL", p.baseURL),
+		zap.String("path", path),
+		zap.String("fullURL", targetURL.String()+path))
+
 	// Set the target URL path
 	targetURL.Path = path
 
@@ -121,16 +127,23 @@ func (p *ServiceProxy) ProxyWithReverseProxy(c *gin.Context, path string) {
 	proxy.Director = func(req *http.Request) {
 		originalDirector(req)
 
-		// Set the target URL path
+		// Handle path with or without leading slash
 		if !strings.HasPrefix(path, "/") {
 			path = "/" + path
 		}
+
+		// Set the target URL path
 		req.URL.Path = path
 
 		// Add X-Forwarded headers
 		req.Header.Set("X-Forwarded-For", c.ClientIP())
 		req.Header.Set("X-Forwarded-Proto", c.Request.Proto)
 		req.Header.Set("X-Forwarded-Host", c.Request.Host)
+
+		// Log the modified request
+		p.logger.Debug("Reverse proxy request",
+			zap.String("path", path),
+			zap.String("fullURL", req.URL.String()))
 	}
 
 	// Handle errors

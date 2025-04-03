@@ -1,4 +1,6 @@
 -- Historical Data Service Database Schema
+
+-- Create timeframe_type enum
 CREATE TYPE "timeframe_type" AS ENUM (
   '1m',
   '5m',
@@ -21,6 +23,7 @@ CREATE TABLE IF NOT EXISTS "symbols" (
   "asset_type" varchar(20) NOT NULL,
   "exchange" varchar(50),
   "is_active" boolean NOT NULL DEFAULT true,
+  "data_available" boolean NOT NULL DEFAULT false,
   "created_at" timestamp NOT NULL DEFAULT (CURRENT_TIMESTAMP),
   "updated_at" timestamp
 );
@@ -50,7 +53,9 @@ CREATE TABLE IF NOT EXISTS "backtests" (
   "end_date" timestamp NOT NULL,
   "initial_capital" numeric(20,8) NOT NULL,
   "status" varchar(20) NOT NULL DEFAULT 'pending',
+  "error_message" text,
   "created_at" timestamp NOT NULL DEFAULT (CURRENT_TIMESTAMP),
+  "updated_at" timestamp,
   "completed_at" timestamp
 );
 
@@ -96,12 +101,32 @@ CREATE TABLE IF NOT EXISTS "backtest_trades" (
   "exit_reason" varchar(50)
 );
 
+-- Binance download jobs table
+CREATE TABLE IF NOT EXISTS "binance_download_jobs" (
+  "id" SERIAL PRIMARY KEY,
+  "symbol_id" int NOT NULL,
+  "symbol" varchar(20) NOT NULL,
+  "timeframe" timeframe_type NOT NULL,
+  "start_date" timestamp NOT NULL,
+  "end_date" timestamp NOT NULL,
+  "status" varchar(20) NOT NULL DEFAULT 'pending',
+  "progress" numeric(5,2) NOT NULL DEFAULT 0,
+  "error" text,
+  "created_at" timestamp NOT NULL DEFAULT (CURRENT_TIMESTAMP),
+  "updated_at" timestamp NOT NULL DEFAULT (CURRENT_TIMESTAMP)
+);
+
 -- Indexes
 CREATE INDEX "idx_backtest_trades_backtest_run_id" ON "backtest_trades" ("backtest_run_id");
 CREATE INDEX "idx_backtests_user_id" ON "backtests" ("user_id");
 CREATE INDEX "idx_backtests_strategy_id" ON "backtests" ("strategy_id");
 CREATE INDEX "idx_backtest_runs_backtest_id" ON "backtest_runs" ("backtest_id");
 CREATE UNIQUE INDEX ON "backtest_runs" ("backtest_id", "symbol_id");
+CREATE INDEX "idx_binance_download_jobs_status" ON "binance_download_jobs" ("status");
+CREATE INDEX "idx_binance_download_jobs_symbol_id" ON "binance_download_jobs" ("symbol_id");
+CREATE INDEX "idx_symbols_asset_type" ON "symbols" ("asset_type");
+CREATE INDEX "idx_symbols_exchange" ON "symbols" ("exchange");
+CREATE INDEX "idx_symbols_symbol" ON "symbols" ("symbol");
 
 -- Foreign Keys
 ALTER TABLE "candles" ADD FOREIGN KEY ("symbol_id") REFERENCES "symbols" ("id") ON DELETE CASCADE;
@@ -110,6 +135,7 @@ ALTER TABLE "backtest_runs" ADD FOREIGN KEY ("symbol_id") REFERENCES "symbols" (
 ALTER TABLE "backtest_results" ADD FOREIGN KEY ("backtest_run_id") REFERENCES "backtest_runs" ("id") ON DELETE CASCADE;
 ALTER TABLE "backtest_trades" ADD FOREIGN KEY ("backtest_run_id") REFERENCES "backtest_runs" ("id") ON DELETE CASCADE;
 ALTER TABLE "backtest_trades" ADD FOREIGN KEY ("symbol_id") REFERENCES "symbols" ("id") ON DELETE CASCADE;
+ALTER TABLE "binance_download_jobs" ADD FOREIGN KEY ("symbol_id") REFERENCES "symbols" ("id") ON DELETE CASCADE;
 
 -- Convert candles to hypertable for time series optimization
 SELECT create_hypertable('candles', 'time', chunk_time_interval => INTERVAL '1 week');
@@ -121,7 +147,9 @@ VALUES
 ('ETHUSD', 'Ethereum/US Dollar', 'crypto', 'Coinbase', true, CURRENT_TIMESTAMP),
 ('AAPL', 'Apple Inc.', 'stock', 'NASDAQ', true, CURRENT_TIMESTAMP),
 ('MSFT', 'Microsoft Corporation', 'stock', 'NASDAQ', true, CURRENT_TIMESTAMP),
-('AMZN', 'Amazon.com, Inc.', 'stock', 'NASDAQ', true, CURRENT_TIMESTAMP)
+('AMZN', 'Amazon.com, Inc.', 'stock', 'NASDAQ', true, CURRENT_TIMESTAMP),
+('BTCUSDT', 'Bitcoin/USDT', 'crypto', 'Binance', true, CURRENT_TIMESTAMP),
+('ETHUSDT', 'Ethereum/USDT', 'crypto', 'Binance', true, CURRENT_TIMESTAMP)
 ON CONFLICT (symbol) DO NOTHING;
 
 -- ==========================================
@@ -227,6 +255,41 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+-- Get continuous data ranges for a symbol
+CREATE OR REPLACE FUNCTION get_symbol_data_ranges(
+    p_symbol_id INT,
+    p_timeframe timeframe_type
+)
+RETURNS TABLE (
+    start_date TIMESTAMP,
+    end_date TIMESTAMP
+) AS $$
+BEGIN
+    RETURN QUERY
+    WITH dates AS (
+        SELECT 
+            time,
+            LEAD(time) OVER (ORDER BY time) as next_time
+        FROM candles
+        WHERE symbol_id = p_symbol_id
+        ORDER BY time
+    )
+    SELECT 
+        MIN(time) as start_date,
+        MAX(time) as end_date
+    FROM (
+        SELECT 
+            time,
+            next_time,
+            CASE WHEN next_time IS NULL OR next_time > time + INTERVAL '1 day' THEN 1 ELSE 0 END as is_gap,
+            SUM(CASE WHEN next_time IS NULL OR next_time > time + INTERVAL '1 day' THEN 1 ELSE 0 END) OVER (ORDER BY time) as group_id
+        FROM dates
+    ) t
+    GROUP BY group_id
+    ORDER BY start_date;
+END;
+$$ LANGUAGE plpgsql;
+
 -- Get all symbols
 CREATE OR REPLACE FUNCTION get_symbols(
     p_search_term VARCHAR DEFAULT NULL,
@@ -240,6 +303,7 @@ RETURNS TABLE (
     asset_type VARCHAR(20),
     exchange VARCHAR(50),
     is_active BOOLEAN,
+    data_available BOOLEAN,
     created_at TIMESTAMP,
     updated_at TIMESTAMP
 ) AS $$
@@ -252,6 +316,7 @@ BEGIN
         s.asset_type,
         s.exchange,
         s.is_active,
+        s.data_available,
         s.created_at,
         s.updated_at
     FROM 
@@ -301,6 +366,7 @@ BEGIN
         asset_type,
         exchange,
         is_active,
+        data_available,
         created_at,
         updated_at
     )
@@ -310,6 +376,7 @@ BEGIN
         p_asset_type,
         p_exchange,
         TRUE,
+        FALSE,
         NOW(),
         NOW()
     )
@@ -419,6 +486,120 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+-- Update symbol data availability
+CREATE OR REPLACE FUNCTION update_symbol_data_availability(
+    p_symbol_id INT,
+    p_available BOOLEAN
+)
+RETURNS BOOLEAN AS $$
+DECLARE
+    affected_rows INT;
+BEGIN
+    UPDATE symbols
+    SET 
+        data_available = p_available,
+        updated_at = NOW()
+    WHERE 
+        id = p_symbol_id;
+    
+    GET DIAGNOSTICS affected_rows = ROW_COUNT;
+    RETURN affected_rows > 0;
+END;
+$$ LANGUAGE plpgsql;
+
+-- ==========================================
+-- BINANCE DATA DOWNLOAD FUNCTIONS
+-- ==========================================
+
+-- Create binance download job
+CREATE OR REPLACE FUNCTION create_binance_download_job(
+    p_symbol_id INT,
+    p_symbol VARCHAR(20),
+    p_timeframe timeframe_type,
+    p_start_date TIMESTAMP,
+    p_end_date TIMESTAMP
+)
+RETURNS INT AS $$
+DECLARE
+    new_job_id INT;
+BEGIN
+    INSERT INTO binance_download_jobs (
+        symbol_id,
+        symbol,
+        timeframe,
+        start_date,
+        end_date,
+        status,
+        progress,
+        created_at,
+        updated_at
+    )
+    VALUES (
+        p_symbol_id,
+        p_symbol,
+        p_timeframe,
+        p_start_date,
+        p_end_date,
+        'pending',
+        0,
+        NOW(),
+        NOW()
+    )
+    RETURNING id INTO new_job_id;
+    
+    RETURN new_job_id;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Update binance download job status
+CREATE OR REPLACE FUNCTION update_binance_download_job_status(
+    p_job_id INT,
+    p_status VARCHAR(20),
+    p_progress NUMERIC(5,2),
+    p_error TEXT DEFAULT NULL
+)
+RETURNS BOOLEAN AS $$
+DECLARE
+    affected_rows INT;
+BEGIN
+    UPDATE binance_download_jobs
+    SET 
+        status = p_status,
+        progress = p_progress,
+        error = p_error,
+        updated_at = NOW()
+    WHERE 
+        id = p_job_id;
+    
+    GET DIAGNOSTICS affected_rows = ROW_COUNT;
+    RETURN affected_rows > 0;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Get active binance download jobs
+CREATE OR REPLACE FUNCTION get_active_binance_download_jobs()
+RETURNS TABLE (
+    id INT,
+    symbol_id INT,
+    symbol VARCHAR(20),
+    timeframe timeframe_type,
+    start_date TIMESTAMP,
+    end_date TIMESTAMP,
+    status VARCHAR(20),
+    progress NUMERIC(5,2),
+    error TEXT,
+    created_at TIMESTAMP,
+    updated_at TIMESTAMP
+) AS $$
+BEGIN
+    RETURN QUERY
+    SELECT *
+    FROM binance_download_jobs
+    WHERE status IN ('pending', 'in_progress')
+    ORDER BY created_at DESC;
+END;
+$$ LANGUAGE plpgsql;
+
 -- ==========================================
 -- BACKTESTING FUNCTIONS AND VIEWS
 -- ==========================================
@@ -428,7 +609,7 @@ CREATE OR REPLACE VIEW v_backtest_summary AS
 SELECT 
     b.id AS backtest_id,
     b.name,
-    s.name AS strategy_name,
+    b.strategy_id,
     b.created_at AS date,
     b.status,
     (
@@ -465,7 +646,6 @@ SELECT
     ) AS total_runs
 FROM 
     backtests b
-JOIN symbols s ON b.strategy_id = s.id
 ORDER BY 
     b.created_at DESC;
 
@@ -478,7 +658,7 @@ CREATE OR REPLACE FUNCTION get_backtest_summary(
 RETURNS TABLE (
     backtest_id INT,
     name TEXT,
-    strategy_name VARCHAR(100),
+    strategy_id INT,
     date TIMESTAMP,
     status VARCHAR(20),
     symbol_results JSONB,
@@ -490,7 +670,7 @@ BEGIN
     SELECT 
         bs.backtest_id,
         bs.name,
-        bs.strategy_name,
+        bs.strategy_id,
         bs.date,
         bs.status,
         bs.symbol_results,
@@ -514,7 +694,6 @@ RETURNS TABLE (
     backtest_id INT,
     name TEXT,
     description TEXT,
-    strategy_name VARCHAR(100),
     strategy_id INT,
     strategy_version INT,
     timeframe timeframe_type,
@@ -532,7 +711,6 @@ BEGIN
         b.id AS backtest_id,
         b.name,
         b.description,
-        s.name AS strategy_name,
         b.strategy_id,
         b.strategy_version,
         b.timeframe,
@@ -572,7 +750,6 @@ BEGIN
         ) AS run_results
     FROM 
         backtests b
-        JOIN symbols s ON b.strategy_id = s.id
     WHERE 
         b.id = p_backtest_id;
 END;
@@ -608,7 +785,8 @@ BEGIN
         end_date,
         initial_capital,
         status,
-        created_at
+        created_at,
+        updated_at
     )
     VALUES (
         p_user_id,
@@ -621,6 +799,7 @@ BEGIN
         p_end_date,
         p_initial_capital,
         'pending',
+        NOW(),
         NOW()
     )
     RETURNING id INTO new_backtest_id;
@@ -679,7 +858,8 @@ BEGIN
         UPDATE backtests
         SET 
             status = 'completed',
-            completed_at = NOW()
+            completed_at = NOW(),
+            updated_at = NOW()
         WHERE 
             id = backtest_id;
     END IF;

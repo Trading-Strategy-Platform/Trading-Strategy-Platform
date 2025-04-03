@@ -1,6 +1,5 @@
-# services/strategy-service/config/config.yaml
 server:
-  port: 8080
+  port: 8082
   readTimeout: 10s
   writeTimeout: 10s
   idleTimeout: 120s

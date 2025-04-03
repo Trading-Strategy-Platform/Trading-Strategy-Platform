@@ -5,16 +5,18 @@ server:
   idleTimeout: 120s
 
 userService:
-  url: http://user-service:8080
+  url: http://user-service:8083  
   timeout: 10s
 
 strategyService:
-  url: http://strategy-service:8080
+  url: http://strategy-service:8082  
   timeout: 10s
 
 historicalService:
-  url: http://historical-service:8080
-  timeout: 30s
+  url: http://historical-service:8081  
+
+mediaService:
+  url: http://historical-service:8085  
 
 rateLimit:
   enabled: true

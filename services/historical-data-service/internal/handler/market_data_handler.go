@@ -145,6 +145,11 @@ func (h *MarketDataHandler) GetAssetTypes(c *gin.Context) {
 	c.JSON(http.StatusOK, assetTypes)
 }
 
+// GetMarketDataService returns the market data service for use by other handlers
+func (h *MarketDataHandler) GetMarketDataService() *service.MarketDataService {
+	return h.marketDataService
+}
+
 // GetExchanges handles retrieving available exchanges
 // GET /api/v1/market-data/exchanges
 func (h *MarketDataHandler) GetExchanges(c *gin.Context) {

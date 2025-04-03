@@ -69,22 +69,22 @@ ALTER TABLE "notifications" ADD FOREIGN KEY ("user_id") REFERENCES "users" ("id"
 
 -- Insert default roles
 INSERT INTO users (username, email, password_hash, role, is_active, created_at) VALUES 
-('admin', 'admin@example.com', '$2a$10$ZYwnmqZPir2/HTIvTl7za.gqbZwAUUyXOLJFOuln9wVcJoEgJNTlm', 'admin', true, NOW()),
-('user', 'user@example.com', '$2a$10$ZYwnmqZPir2/HTIvTl7za.gqbZwAUUyXOLJFOuln9wVcJoEgJNTlm', 'user', true, NOW())
+('admin', 'admin@example.com', '$2a$10$G/oAFA62ZzBAEjXTDkMudegfXv5Jm5tjH9T/aO2iVrzgup2RpTswy', 'admin', true, NOW()),
+('user', 'user@example.com', '$2a$10$G/oAFA62ZzBAEjXTDkMudegfXv5Jm5tjH9T/aO2iVrzgup2RpTswy', 'user', true, NOW())
 ON CONFLICT DO NOTHING;
 
 -- ==========================================
 -- USER MANAGEMENT FUNCTIONS
 -- ==========================================
 
--- Get user with active notification count and preferences
+-- Make sure the view is created before the function that depends on it
 CREATE OR REPLACE VIEW v_user_details AS
 SELECT
     u.id,
     u.username,
     u.email,
     u.role,
-    u.profile_photo_url,
+    COALESCE(u.profile_photo_url, '') as profile_photo_url,
     u.is_active,
     u.last_login,
     u.created_at,
@@ -94,15 +94,15 @@ SELECT
         FROM notifications n 
         WHERE n.user_id = u.id AND n.is_read = FALSE
     ) AS unread_notifications_count,
-    p.theme,
-    p.default_timeframe,
-    p.chart_preferences,
-    p.notification_settings
+    COALESCE(p.theme, 'light') as theme,
+    COALESCE(p.default_timeframe, '1h') as default_timeframe,
+    COALESCE(p.chart_preferences, '{}'::jsonb) as chart_preferences,
+    COALESCE(p.notification_settings, '{}'::jsonb) as notification_settings
 FROM
     users u
     LEFT JOIN user_preferences p ON u.id = p.user_id;
 
--- Get user details
+-- Then create the function that relies on this view
 CREATE OR REPLACE FUNCTION get_user_details(p_user_id INT)
 RETURNS TABLE (
     id INT,
@@ -123,7 +123,7 @@ RETURNS TABLE (
 BEGIN
     RETURN QUERY
     SELECT * FROM v_user_details
-    WHERE id = p_user_id;
+    WHERE v_user_details.id = p_user_id;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -438,5 +438,162 @@ BEGIN
     
     GET DIAGNOSTICS affected_rows = ROW_COUNT;
     RETURN affected_rows;
+END;
+$$ LANGUAGE plpgsql;
+
+-- ==========================================
+-- SERVICE AUTHENTICATION FUNCTIONS
+-- ==========================================
+
+-- Create service key table for secure service-to-service communication
+CREATE TABLE IF NOT EXISTS "service_keys" (
+  "id" SERIAL PRIMARY KEY,
+  "service_name" varchar(50) UNIQUE NOT NULL,
+  "key_hash" varchar(255) NOT NULL,
+  "is_active" boolean NOT NULL DEFAULT true,
+  "created_at" timestamp NOT NULL DEFAULT (CURRENT_TIMESTAMP),
+  "updated_at" timestamp,
+  "last_used" timestamp
+);
+
+-- Insert default service keys (these should be replaced in production)
+INSERT INTO service_keys (service_name, key_hash, is_active, created_at) VALUES 
+('strategy-service', '$2a$10$G/oAFA62ZzBAEjXTDkMudegfXv5Jm5tjH9T/aO2iVrzgup2RpTswy', true, NOW()),
+('historical-service', '$2a$10$G/oAFA62ZzBAEjXTDkMudegfXv5Jm5tjH9T/aO2iVrzgup2RpTswy', true, NOW()),
+('media-service', '$2a$10$G/oAFA62ZzBAEjXTDkMudegfXv5Jm5tjH9T/aO2iVrzgup2RpTswy', true, NOW())
+ON CONFLICT DO NOTHING;
+
+-- Validate service key function
+CREATE OR REPLACE FUNCTION validate_service_key(p_service_name VARCHAR, p_key_hash VARCHAR)
+RETURNS BOOLEAN AS $$
+DECLARE
+    stored_key_hash VARCHAR;
+    is_key_active BOOLEAN;
+BEGIN
+    -- Get the key hash and active status for the service
+    SELECT key_hash, is_active INTO stored_key_hash, is_key_active
+    FROM service_keys
+    WHERE service_name = p_service_name;
+    
+    -- Update last used timestamp
+    IF FOUND THEN
+        UPDATE service_keys
+        SET last_used = NOW()
+        WHERE service_name = p_service_name;
+    END IF;
+    
+    -- Check if key exists, is active, and matches
+    RETURN FOUND AND is_key_active AND stored_key_hash = p_key_hash;
+END;
+$$ LANGUAGE plpgsql;
+
+-- ==========================================
+-- SERVICE COMMUNICATION LOG
+-- ==========================================
+
+-- Create service communication log table for debugging and auditing
+CREATE TABLE IF NOT EXISTS "service_communication_log" (
+  "id" SERIAL PRIMARY KEY,
+  "source_service" varchar(50) NOT NULL,
+  "target_service" varchar(50) NOT NULL,
+  "endpoint" varchar(255) NOT NULL,
+  "http_method" varchar(10) NOT NULL,
+  "status_code" int,
+  "request_id" varchar(36),
+  "user_id" int,
+  "error_message" text,
+  "created_at" timestamp NOT NULL DEFAULT (CURRENT_TIMESTAMP)
+);
+
+-- Create index for faster queries on logs
+CREATE INDEX IF NOT EXISTS "idx_service_comm_log_service" ON "service_communication_log" ("source_service", "created_at");
+CREATE INDEX IF NOT EXISTS "idx_service_comm_log_user" ON "service_communication_log" ("user_id", "created_at");
+
+-- Log service communication function
+CREATE OR REPLACE FUNCTION log_service_communication(
+    p_source_service VARCHAR,
+    p_target_service VARCHAR,
+    p_endpoint VARCHAR,
+    p_http_method VARCHAR,
+    p_status_code INT,
+    p_request_id VARCHAR DEFAULT NULL,
+    p_user_id INT DEFAULT NULL,
+    p_error_message TEXT DEFAULT NULL
+)
+RETURNS INT AS $$
+DECLARE
+    log_id INT;
+BEGIN
+    INSERT INTO service_communication_log (
+        source_service,
+        target_service,
+        endpoint,
+        http_method,
+        status_code,
+        request_id,
+        user_id,
+        error_message,
+        created_at
+    )
+    VALUES (
+        p_source_service,
+        p_target_service,
+        p_endpoint,
+        p_http_method,
+        p_status_code,
+        p_request_id,
+        p_user_id,
+        p_error_message,
+        NOW()
+    )
+    RETURNING id INTO log_id;
+    
+    RETURN log_id;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Get recent service communication logs
+CREATE OR REPLACE FUNCTION get_service_communication_logs(
+    p_source_service VARCHAR DEFAULT NULL,
+    p_target_service VARCHAR DEFAULT NULL,
+    p_user_id INT DEFAULT NULL,
+    p_limit INT DEFAULT 100,
+    p_offset INT DEFAULT 0
+)
+RETURNS TABLE (
+    id INT,
+    source_service VARCHAR,
+    target_service VARCHAR,
+    endpoint VARCHAR,
+    http_method VARCHAR,
+    status_code INT,
+    request_id VARCHAR,
+    user_id INT,
+    error_message TEXT,
+    created_at TIMESTAMP
+) AS $$
+BEGIN
+    RETURN QUERY
+    SELECT 
+        scl.id,
+        scl.source_service,
+        scl.target_service,
+        scl.endpoint,
+        scl.http_method,
+        scl.status_code,
+        scl.request_id,
+        scl.user_id,
+        scl.error_message,
+        scl.created_at
+    FROM 
+        service_communication_log scl
+    WHERE
+        (p_source_service IS NULL OR scl.source_service = p_source_service) AND
+        (p_target_service IS NULL OR scl.target_service = p_target_service) AND
+        (p_user_id IS NULL OR scl.user_id = p_user_id)
+    ORDER BY 
+        scl.created_at DESC
+    LIMIT p_limit
+    OFFSET p_offset;
 END;
 $$ LANGUAGE plpgsql;
