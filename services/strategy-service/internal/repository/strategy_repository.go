@@ -589,7 +589,7 @@ func (r *MarketplaceRepository) GetAll(ctx context.Context, searchTerm string, m
 	// otherwise execute a count query
 	total := len(items)
 	if limit > 0 && total == limit {
-		// If we got exactly the number of items requested, there might GetUserStrategies more
+		// If we got exactly the number of items requested, there might be more
 		countQuery := `
             SELECT COUNT(*) 
             FROM v_marketplace_strategies 
@@ -883,10 +883,10 @@ func (r *IndicatorRepository) GetAll(ctx context.Context, category *string, page
 	var params []interface{}
 
 	if category != nil {
-		query = `SELECT * FROM get_indicators($1)`
+		query = `SELECT * FROM get_indicators($1::VARCHAR)`
 		params = append(params, *category)
 	} else {
-		query = `SELECT * FROM get_indicators(NULL)`
+		query = `SELECT * FROM get_indicators(NULL::VARCHAR)`
 	}
 
 	var allIndicators []model.TechnicalIndicator

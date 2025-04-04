@@ -167,14 +167,6 @@ func setupRouter(
 		api.Any("/v1/symbols/*path", gatewayHandler.ProxyHistoricalService)
 		api.Any("/v1/timeframes/*path", gatewayHandler.ProxyHistoricalService)
 
-		// Explicit routes for the double v1 prefix to handle malformed client requests
-		api.Any("/v1/v1/indicators", gatewayHandler.ProxyStrategyService)
-		api.Any("/v1/v1/indicators/*path", gatewayHandler.ProxyStrategyService)
-		api.Any("/v1/v1/indicators/categories", gatewayHandler.ProxyStrategyService)
-		api.Any("/v1/v1/strategies/*path", gatewayHandler.ProxyStrategyService)
-		api.Any("/v1/v1/strategy-tags/*path", gatewayHandler.ProxyStrategyService)
-		api.Any("/v1/v1/marketplace/*path", gatewayHandler.ProxyStrategyService)
-		api.Any("/v1/v1/reviews/*path", gatewayHandler.ProxyStrategyService)
 	}
 	return router
 }

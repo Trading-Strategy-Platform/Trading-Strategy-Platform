@@ -3,8 +3,6 @@ package handler
 import (
 	"services/api-gateway/internal/proxy"
 
-	"strings"
-
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 )
@@ -35,14 +33,12 @@ func NewGatewayHandler(
 // ProxyUserService proxies requests to the user service
 func (h *GatewayHandler) ProxyUserService(c *gin.Context) {
 	// Extract path to proxy, preserving any path parameters
-	originalPath := c.Request.URL.Path
-	path := getProxyPath(originalPath, "/api/v1")
+	path := getProxyPath(c.Request.URL.Path, "/api/v1")
 
-	// Log the request and the paths
+	// Log the request
 	h.logger.Debug("Proxying to user service",
 		zap.String("method", c.Request.Method),
-		zap.String("original_path", originalPath),
-		zap.String("proxied_path", path),
+		zap.String("path", path),
 		zap.String("client_ip", c.ClientIP()))
 
 	// Proxy the request
@@ -52,14 +48,12 @@ func (h *GatewayHandler) ProxyUserService(c *gin.Context) {
 // ProxyStrategyService proxies requests to the strategy service
 func (h *GatewayHandler) ProxyStrategyService(c *gin.Context) {
 	// Extract path to proxy, preserving any path parameters
-	originalPath := c.Request.URL.Path
-	path := getProxyPath(originalPath, "/api/v1")
+	path := getProxyPath(c.Request.URL.Path, "/api/v1")
 
-	// Log the request and the paths
+	// Log the request
 	h.logger.Debug("Proxying to strategy service",
 		zap.String("method", c.Request.Method),
-		zap.String("original_path", originalPath),
-		zap.String("proxied_path", path),
+		zap.String("path", path),
 		zap.String("client_ip", c.ClientIP()))
 
 	// Proxy the request
@@ -69,14 +63,12 @@ func (h *GatewayHandler) ProxyStrategyService(c *gin.Context) {
 // ProxyHistoricalService proxies requests to the historical data service
 func (h *GatewayHandler) ProxyHistoricalService(c *gin.Context) {
 	// Extract path to proxy, preserving any path parameters
-	originalPath := c.Request.URL.Path
-	path := getProxyPath(originalPath, "/api/v1")
+	path := getProxyPath(c.Request.URL.Path, "/api/v1")
 
-	// Log the request and the paths
+	// Log the request
 	h.logger.Debug("Proxying to historical data service",
 		zap.String("method", c.Request.Method),
-		zap.String("original_path", originalPath),
-		zap.String("proxied_path", path),
+		zap.String("path", path),
 		zap.String("client_ip", c.ClientIP()))
 
 	// Proxy the request
@@ -86,10 +78,7 @@ func (h *GatewayHandler) ProxyHistoricalService(c *gin.Context) {
 // getProxyPath extracts the path to proxy from the original request path
 // It removes the API prefix (e.g. "/api/v1") from the path
 func getProxyPath(originalPath, prefix string) string {
-	// If the path starts with the prefix, remove it
-	if strings.HasPrefix(originalPath, prefix) {
-		return originalPath[len(prefix):]
-	}
-	// Otherwise, return the original path
+
+	// If the path doesn't start with the prefix, return the original path
 	return originalPath
 }

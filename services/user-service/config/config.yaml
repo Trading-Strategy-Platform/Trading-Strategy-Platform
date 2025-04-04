@@ -1,5 +1,5 @@
 server:
-  port: 8083  
+  port: 8083  # User service listening on 8083
   readTimeout: 10s
   writeTimeout: 10s
   idleTimeout: 120s
@@ -30,6 +30,10 @@ redis:
   url: redis:6379
   sessionPrefix: user-session
   sessionDuration: 24h
+
+media:
+  URL: http://media-service:8085
+  ServiceKey: media-service-key
 
 logging:
   level: debug

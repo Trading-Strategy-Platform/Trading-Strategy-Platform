@@ -1,5 +1,5 @@
 server:
-  port: 8081
+  port: 8081  # Historical service listening on 8081
   readTimeout: 10s
   writeTimeout: 10s
   idleTimeout: 120s
@@ -16,13 +16,13 @@ database:
   connMaxLifetime: 30m
 
 userService:
-  url: http://user-service:8080
+  url: http://user-service:8083  # Updated to correct port
   timeout: 5s
   serviceKey: historical-service-key
 
 strategyService:
-  url: http://strategy-service:8080
-  timeout: 30s
+  url: http://strategy-service:8082  # Updated to correct port
+  timeout: 5s
   serviceKey: historical-service-key
 
 kafka:
@@ -31,7 +31,9 @@ kafka:
     backtestEvents: backtest-events
     backtestCompletions: backtest-completions
 
-serviceKey: historical-service-key
+storage:
+  type: local
+  path: /data/historical
 
 logging:
   level: debug

@@ -5,18 +5,20 @@ server:
   idleTimeout: 120s
 
 userService:
-  url: http://user-service:8083  
+  url: http://user-service:8083  # Updated to use correct port
   timeout: 10s
 
 strategyService:
-  url: http://strategy-service:8082  
+  url: http://strategy-service:8082  # Updated to use correct port
   timeout: 10s
 
 historicalService:
-  url: http://historical-service:8081  
+  url: http://historical-service:8081  # Updated to use correct port
+  timeout: 30s
 
 mediaService:
-  url: http://historical-service:8085  
+  url: http://media-service:8085  # Correct port
+  timeout: 30s
 
 rateLimit:
   enabled: true

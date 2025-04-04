@@ -1,5 +1,5 @@
 server:
-  port: 8082
+  port: 8082  # Strategy service listening on 8082
   readTimeout: 10s
   writeTimeout: 10s
   idleTimeout: 120s
@@ -16,14 +16,19 @@ database:
   connMaxLifetime: 30m
 
 userService:
-  url: http://user-service:8080
+  url: http://user-service:8083  # Updated to correct port
   timeout: 5s
   serviceKey: strategy-service-key
 
 historicalService:
-  url: http://historical-service:8080
+  url: http://historical-service:8081  # Updated to correct port
   timeout: 30s
   serviceKey: strategy-service-key
+
+mediaService:
+  url: http://media-service:8085  # Correct port
+  timeout: 30s
+  serviceKey: media-service-key
 
 kafka:
   brokers: kafka:9092

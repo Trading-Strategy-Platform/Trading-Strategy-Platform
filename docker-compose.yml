@@ -71,7 +71,7 @@ services:
       - redis
       - media-service
     ports:
-      - "8081:8080"
+      - "8081:8083"  # Map host 8081 to container 8083
     environment:
       DB_HOST: user-db
       DB_PORT: 5432
@@ -101,14 +101,14 @@ services:
       - redis
       - media-service
     ports:
-      - "8082:8080"
+      - "8082:8082"  # Map host 8082 to container 8082
     environment:
       DB_HOST: strategy-db
       DB_PORT: 5432
       DB_USER: strategy_service_user
       DB_PASSWORD: strategy_service_password
       DB_NAME: strategy_service
-      USER_SERVICE_URL: http://user-service:8080
+      USER_SERVICE_URL: http://user-service:8083
       KAFKA_BROKERS: kafka:9092
       REDIS_URL: redis:6379
       MEDIA_SERVICE_URL: http://media-service:8085
@@ -129,15 +129,15 @@ services:
       - historical-db
       - kafka
     ports:
-      - "8083:8080"
+      - "8083:8081"  # Map host 8083 to container 8081
     environment:
       DB_HOST: historical-db
       DB_PORT: 5432
       DB_USER: historical_service_user
       DB_PASSWORD: historical_service_password
       DB_NAME: historical_service
-      STRATEGY_SERVICE_URL: http://strategy-service:8080
-      USER_SERVICE_URL: http://user-service:8080
+      STRATEGY_SERVICE_URL: http://strategy-service:8082
+      USER_SERVICE_URL: http://user-service:8083
       KAFKA_BROKERS: kafka:9092
     networks:
       - historical-service-network
@@ -150,7 +150,7 @@ services:
       dockerfile: Dockerfile
     container_name: media-service
     ports:
-      - "8085:8085"
+      - "8085:8085"  # Map host 8085 to container 8085
     environment:
       STORAGE_TYPE: local
       BASE_PATH: /data/images
@@ -170,9 +170,9 @@ services:
     ports:
       - "8080:8080"
     environment:
-      USER_SERVICE_URL: http://user-service:8080
-      STRATEGY_SERVICE_URL: http://strategy-service:8080
-      HISTORICAL_SERVICE_URL: http://historical-service:8080
+      USER_SERVICE_URL: http://user-service:8083
+      STRATEGY_SERVICE_URL: http://strategy-service:8082
+      HISTORICAL_SERVICE_URL: http://historical-service:8081
       MEDIA_SERVICE_URL: http://media-service:8085
     networks:
       - api-gateway-network
