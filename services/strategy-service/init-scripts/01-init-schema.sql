@@ -1275,8 +1275,10 @@ SELECT
 FROM 
     indicators i;
 
--- Get all indicators
-CREATE OR REPLACE FUNCTION get_indicators(p_category VARCHAR DEFAULT NULL)
+
+
+-- Create the get_indicators function
+CREATE OR REPLACE FUNCTION get_indicators(p_category VARCHAR)
 RETURNS TABLE (
     id INT,
     name VARCHAR(50),
@@ -1297,9 +1299,31 @@ BEGIN
         i.formula,
         i.created_at,
         i.updated_at,
-        i.parameters
+        ARRAY(
+            SELECT jsonb_build_object(
+                'id', p.id,
+                'name', p.parameter_name,
+                'type', p.parameter_type,
+                'is_required', p.is_required,
+                'min_value', p.min_value,
+                'max_value', p.max_value,
+                'default_value', p.default_value,
+                'description', p.description,
+                'enum_values', (
+                    SELECT jsonb_agg(jsonb_build_object(
+                        'id', ev.id,
+                        'value', ev.enum_value,
+                        'display_name', ev.display_name
+                    ))
+                    FROM parameter_enum_values ev
+                    WHERE ev.parameter_id = p.id
+                )
+            )
+            FROM indicator_parameters p
+            WHERE p.indicator_id = i.id
+        ) AS parameters
     FROM 
-        v_indicators_with_parameters i
+        indicators i
     WHERE
         p_category IS NULL OR i.category = p_category
     ORDER BY 
