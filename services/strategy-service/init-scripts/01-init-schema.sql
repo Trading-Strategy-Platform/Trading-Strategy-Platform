@@ -168,14 +168,6 @@ INSERT INTO strategy_tags (name) VALUES
 ('Machine Learning')
 ON CONFLICT (name) DO NOTHING;
 
--- Insert default indicators
-INSERT INTO indicators (name, description, category, formula, created_at) VALUES
-('RSI', 'Relative Strength Index - measures the magnitude of price changes to evaluate oversold or overbought conditions', 'Momentum', 'RSI = 100 - (100 / (1 + RS))', CURRENT_TIMESTAMP),
-('Bollinger Bands', 'Volatility bands placed above and below a moving average', 'Volatility', 'Middle Band = 20-day SMA, Upper Band = Middle Band + (20-day SD * 2), Lower Band = Middle Band - (20-day SD * 2)', CURRENT_TIMESTAMP),
-('MACD', 'Moving Average Convergence Divergence - shows the relationship between two moving averages of a security\'s price', 'Trend', 'MACD Line = 12-day EMA - 26-day EMA, Signal Line = 9-day EMA of MACD Line', CURRENT_TIMESTAMP),
-('Moving Average', 'Average of price over a specific period', 'Trend', 'SMA = Sum of prices for n periods / n', CURRENT_TIMESTAMP),
-('Stochastic', 'Momentum indicator comparing closing price to price range over a specific period', 'Momentum', '%K = 100 * (Current Close - Lowest Low) / (Highest High - Lowest Low), %D = 3-day SMA of %K', CURRENT_TIMESTAMP)
-ON CONFLICT (name) DO NOTHING;
 
 -- ==========================================
 -- STRATEGIES FUNCTIONS AND VIEWS
@@ -189,7 +181,7 @@ SELECT
     s.description, 
     s.thumbnail_url,
     s.user_id AS owner_id,
-    u.username AS owner_username,
+    s.user_id AS owner_user_id, -- Using user_id instead of username
     s.is_public,
     s.is_active,
     s.version,
@@ -205,7 +197,6 @@ SELECT
     ) AS tag_ids
 FROM 
     strategies s
-    JOIN users u ON s.user_id = u.id
 WHERE 
     s.is_active = TRUE
 
@@ -217,7 +208,7 @@ SELECT
     s.description,
     s.thumbnail_url,
     s.user_id AS owner_id,
-    u.username AS owner_username,
+    s.user_id AS owner_user_id, -- Using user_id instead of username
     s.is_public,
     s.is_active,
     v.version,
@@ -235,7 +226,6 @@ FROM
     strategy_purchases p
     JOIN strategy_marketplace m ON p.marketplace_id = m.id
     JOIN strategies s ON m.strategy_id = s.id
-    JOIN users u ON s.user_id = u.id
     JOIN strategy_versions v ON s.id = v.strategy_id AND v.version = p.strategy_version
 WHERE 
     s.is_active = TRUE 
@@ -257,7 +247,7 @@ RETURNS TABLE (
     description TEXT,
     thumbnail_url VARCHAR(255),
     owner_id INT,
-    owner_username VARCHAR(50),
+    owner_user_id INT, -- Changed from owner_username
     is_public BOOLEAN,
     is_active BOOLEAN,
     version INT,
@@ -276,7 +266,7 @@ BEGIN
         s.description, 
         s.thumbnail_url,
         s.owner_id,
-        s.owner_username,
+        s.owner_user_id,
         s.is_public,
         s.is_active,
         s.version,
@@ -310,7 +300,7 @@ BEGIN
         s.description,
         s.thumbnail_url,
         s.user_id AS owner_id,
-        u.username AS owner_username,
+        s.user_id AS owner_user_id, -- Using user_id instead of username
         s.is_public,
         s.is_active,
         p.strategy_version AS version,
@@ -328,7 +318,6 @@ BEGIN
         strategy_purchases p
         JOIN strategy_marketplace m ON p.marketplace_id = m.id
         JOIN strategies s ON m.strategy_id = s.id
-        JOIN users u ON s.user_id = u.id
     WHERE 
         p.buyer_id = p_user_id
         AND s.is_active = TRUE 
@@ -698,8 +687,8 @@ SELECT
     s.description,
     s.thumbnail_url,
     s.user_id AS owner_id,
-    u.username AS owner_username,
-    u.profile_photo_url AS owner_photo,
+    s.user_id AS owner_user_id, -- Using user_id instead of username
+    NULL AS owner_photo, -- Removed dependency on profile_photo_url
     m.version_id,
     m.price,
     m.is_subscription,
@@ -723,13 +712,12 @@ SELECT
 FROM 
     strategy_marketplace m
     JOIN strategies s ON m.strategy_id = s.id
-    JOIN users u ON s.user_id = u.id
     LEFT JOIN strategy_reviews r ON m.id = r.marketplace_id
 WHERE 
     m.is_active = TRUE
     AND s.is_active = TRUE
 GROUP BY 
-    m.id, s.id, u.id;
+    m.id, s.id;
 
 -- Get marketplace strategies with filtering and sorting
 CREATE OR REPLACE FUNCTION get_marketplace_strategies(
@@ -750,7 +738,7 @@ RETURNS TABLE (
     description TEXT,
     thumbnail_url VARCHAR(255),
     owner_id INT,
-    owner_username VARCHAR(50),
+    owner_user_id INT, -- Changed from owner_username
     owner_photo VARCHAR(255),
     version_id INT,
     price NUMERIC(10,2),
@@ -772,7 +760,7 @@ BEGIN
         ms.description,
         ms.thumbnail_url,
         ms.owner_id,
-        ms.owner_username,
+        ms.owner_user_id,
         ms.owner_photo,
         ms.version_id,
         ms.price,
@@ -924,7 +912,8 @@ BEGIN
     -- Get marketplace listing details
     SELECT 
         m.*, 
-        s.user_id AS seller_id
+        s.user_id AS seller_id,
+        s.name AS strategy_name
     INTO marketplace_record
     FROM 
         strategy_marketplace m
@@ -994,15 +983,7 @@ BEGIN
     ON CONFLICT (user_id, strategy_id) DO UPDATE
     SET active_version = marketplace_record.version_id;
     
-    -- Create notification for strategy seller
-    PERFORM add_notification(
-        marketplace_record.seller_id,
-        'strategy_purchased'::notification_type,
-        'Strategy purchased',
-        'Your strategy "' || (SELECT name FROM strategies WHERE id = marketplace_record.strategy_id) || '" was purchased by ' || (SELECT username FROM users WHERE id = p_user_id),
-        NULL
-    );
-    
+    -- Return the purchase ID
     RETURN new_purchase_id;
 END;
 $$ LANGUAGE plpgsql;
@@ -1017,7 +998,7 @@ DECLARE
     affected_rows INT;
     marketplace_record RECORD;
 BEGIN
-    -- Get strategy details for notification
+    -- Get strategy details
     SELECT 
         m.strategy_id,
         s.user_id AS seller_id,
@@ -1044,17 +1025,6 @@ BEGIN
         AND subscription_end > NOW();
     
     GET DIAGNOSTICS affected_rows = ROW_COUNT;
-    
-    IF affected_rows > 0 THEN
-        -- Notify seller about cancellation
-        PERFORM add_notification(
-            marketplace_record.seller_id,
-            'subscription_cancelled'::notification_type,
-            'Subscription cancelled',
-            'A subscription to your strategy "' || marketplace_record.strategy_name || '" was cancelled.',
-            NULL
-        );
-    END IF;
     
     RETURN affected_rows > 0;
 END;
@@ -1118,15 +1088,6 @@ BEGIN
         NOW()
     )
     RETURNING id INTO new_review_id;
-    
-    -- Notify seller of new review
-    PERFORM add_notification(
-        marketplace_record.seller_id,
-        'strategy_reviewed'::notification_type,
-        'New strategy review',
-        'Your strategy "' || marketplace_record.strategy_name || '" received a ' || p_rating || '-star review',
-        NULL
-    );
     
     RETURN new_review_id;
 END;
@@ -1204,8 +1165,6 @@ CREATE OR REPLACE FUNCTION get_strategy_reviews(
 RETURNS TABLE (
     review_id INT,
     user_id INT,
-    username VARCHAR(50),
-    user_photo VARCHAR(255),
     rating INT,
     comment TEXT,
     created_at TIMESTAMP,
@@ -1216,8 +1175,6 @@ BEGIN
     SELECT 
         r.id AS review_id,
         r.user_id,
-        u.username,
-        u.profile_photo_url AS user_photo,
         r.rating,
         r.comment,
         r.created_at,
@@ -1225,7 +1182,6 @@ BEGIN
     FROM 
         strategy_reviews r
         JOIN strategy_marketplace m ON r.marketplace_id = m.id
-        JOIN users u ON r.user_id = u.id
     WHERE 
         m.strategy_id = p_strategy_id
     ORDER BY 
@@ -1274,8 +1230,6 @@ SELECT
     ) AS parameters
 FROM 
     indicators i;
-
-
 
 -- Create the get_indicators function
 CREATE OR REPLACE FUNCTION get_indicators(p_category VARCHAR)

@@ -24,20 +24,20 @@ CREATE TABLE IF NOT EXISTS "symbols" (
   "exchange" varchar(50),
   "is_active" boolean NOT NULL DEFAULT true,
   "data_available" boolean NOT NULL DEFAULT false,
-  "created_at" timestamp NOT NULL DEFAULT (CURRENT_TIMESTAMP),
-  "updated_at" timestamp
+  "created_at" timestamptz NOT NULL DEFAULT (CURRENT_TIMESTAMP),
+  "updated_at" timestamptz
 );
 
--- Candles table
+-- Candles table - Using "candle_time" as column name to avoid reserved keywords
 CREATE TABLE IF NOT EXISTS "candles" (
   "symbol_id" int NOT NULL,
-  "time" timestamp NOT NULL,
+  "candle_time" timestamptz NOT NULL,
   "open" numeric(20,8) NOT NULL,
   "high" numeric(20,8) NOT NULL,
   "low" numeric(20,8) NOT NULL,
   "close" numeric(20,8) NOT NULL,
   "volume" numeric(20,8) NOT NULL,
-  PRIMARY KEY ("symbol_id", "time")
+  PRIMARY KEY ("symbol_id", "candle_time")
 );
 
 -- Backtests table
@@ -49,14 +49,14 @@ CREATE TABLE IF NOT EXISTS "backtests" (
   "name" varchar(100),
   "description" text,
   "timeframe" timeframe_type NOT NULL,
-  "start_date" timestamp NOT NULL,
-  "end_date" timestamp NOT NULL,
+  "start_date" timestamptz NOT NULL,
+  "end_date" timestamptz NOT NULL,
   "initial_capital" numeric(20,8) NOT NULL,
   "status" varchar(20) NOT NULL DEFAULT 'pending',
   "error_message" text,
-  "created_at" timestamp NOT NULL DEFAULT (CURRENT_TIMESTAMP),
-  "updated_at" timestamp,
-  "completed_at" timestamp
+  "created_at" timestamptz NOT NULL DEFAULT (CURRENT_TIMESTAMP),
+  "updated_at" timestamptz,
+  "completed_at" timestamptz
 );
 
 -- Backtest runs table
@@ -65,8 +65,8 @@ CREATE TABLE IF NOT EXISTS "backtest_runs" (
   "backtest_id" int NOT NULL,
   "symbol_id" int NOT NULL,
   "status" varchar(20) NOT NULL DEFAULT 'pending',
-  "created_at" timestamp NOT NULL DEFAULT (CURRENT_TIMESTAMP),
-  "completed_at" timestamp
+  "created_at" timestamptz NOT NULL DEFAULT (CURRENT_TIMESTAMP),
+  "completed_at" timestamptz
 );
 
 -- Backtest results table
@@ -90,8 +90,8 @@ CREATE TABLE IF NOT EXISTS "backtest_trades" (
   "id" SERIAL PRIMARY KEY,
   "backtest_run_id" int NOT NULL,
   "symbol_id" int NOT NULL,
-  "entry_time" timestamp NOT NULL,
-  "exit_time" timestamp,
+  "entry_time" timestamptz NOT NULL,
+  "exit_time" timestamptz,
   "position_type" varchar(10) NOT NULL,
   "entry_price" numeric(20,8) NOT NULL,
   "exit_price" numeric(20,8),
@@ -107,13 +107,13 @@ CREATE TABLE IF NOT EXISTS "binance_download_jobs" (
   "symbol_id" int NOT NULL,
   "symbol" varchar(20) NOT NULL,
   "timeframe" timeframe_type NOT NULL,
-  "start_date" timestamp NOT NULL,
-  "end_date" timestamp NOT NULL,
+  "start_date" timestamptz NOT NULL,
+  "end_date" timestamptz NOT NULL,
   "status" varchar(20) NOT NULL DEFAULT 'pending',
   "progress" numeric(5,2) NOT NULL DEFAULT 0,
   "error" text,
-  "created_at" timestamp NOT NULL DEFAULT (CURRENT_TIMESTAMP),
-  "updated_at" timestamp NOT NULL DEFAULT (CURRENT_TIMESTAMP)
+  "created_at" timestamptz NOT NULL DEFAULT (CURRENT_TIMESTAMP),
+  "updated_at" timestamptz NOT NULL DEFAULT (CURRENT_TIMESTAMP)
 );
 
 -- Indexes
@@ -138,7 +138,7 @@ ALTER TABLE "backtest_trades" ADD FOREIGN KEY ("symbol_id") REFERENCES "symbols"
 ALTER TABLE "binance_download_jobs" ADD FOREIGN KEY ("symbol_id") REFERENCES "symbols" ("id") ON DELETE CASCADE;
 
 -- Convert candles to hypertable for time series optimization
-SELECT create_hypertable('candles', 'time', chunk_time_interval => INTERVAL '1 week');
+SELECT create_hypertable('candles', 'candle_time', chunk_time_interval => INTERVAL '1 week');
 
 -- Insert default symbols
 INSERT INTO symbols (symbol, name, asset_type, exchange, is_active, created_at)
@@ -156,17 +156,17 @@ ON CONFLICT (symbol) DO NOTHING;
 -- MARKET DATA (CANDLES AND SYMBOLS)
 -- ==========================================
 
--- Get candle data with specific timeframe
+-- Fixed get_candles function with proper dollar quoting
 CREATE OR REPLACE FUNCTION get_candles(
     p_symbol_id INT,
     p_timeframe timeframe_type,
-    p_start_time TIMESTAMP,
-    p_end_time TIMESTAMP,
+    p_start_time TIMESTAMPTZ,
+    p_end_time TIMESTAMPTZ,
     p_limit INT DEFAULT NULL
 )
 RETURNS TABLE (
     symbol_id INT,
-    time TIMESTAMP,
+    candle_time TIMESTAMPTZ,
     open NUMERIC(20,8),
     high NUMERIC(20,8),
     low NUMERIC(20,8),
@@ -192,34 +192,84 @@ BEGIN
     -- Return 1m data directly
     IF interval_minutes = 1 THEN
         RETURN QUERY
-        SELECT c.symbol_id, c.time, c.open, c.high, c.low, c.close, c.volume
+        SELECT c.symbol_id, c.candle_time, c.open, c.high, c.low, c.close, c.volume
         FROM candles c
         WHERE c.symbol_id = p_symbol_id
-          AND c.time BETWEEN p_start_time AND p_end_time
-        ORDER BY c.time DESC
+          AND c.candle_time BETWEEN p_start_time AND p_end_time
+        ORDER BY c.candle_time DESC
         LIMIT p_limit;
     ELSE
         -- Aggregate candles for higher timeframes
         RETURN QUERY
         SELECT 
             c.symbol_id,
-            time_bucket(interval_minutes || ' minutes', c.time) AS time,
-            FIRST(c.open, c.time) AS open,
+            time_bucket(interval_minutes || ' minutes', c.candle_time) AS candle_time,
+            FIRST(c.open, c.candle_time) AS open,
             MAX(c.high) AS high,
             MIN(c.low) AS low,
-            LAST(c.close, c.time) AS close,
+            LAST(c.close, c.candle_time) AS close,
             SUM(c.volume) AS volume
         FROM candles c
         WHERE c.symbol_id = p_symbol_id
-          AND c.time BETWEEN p_start_time AND p_end_time
-        GROUP BY c.symbol_id, time_bucket(interval_minutes || ' minutes', c.time)
-        ORDER BY time DESC
+          AND c.candle_time BETWEEN p_start_time AND p_end_time
+        GROUP BY c.symbol_id, time_bucket(interval_minutes || ' minutes', c.candle_time)
+        ORDER BY candle_time DESC
         LIMIT p_limit;
     END IF;
 END;
 $$ LANGUAGE plpgsql;
 
--- Insert candles in batch
+-- Add backtest trade
+CREATE OR REPLACE FUNCTION add_backtest_trade(
+    p_backtest_run_id INT,
+    p_symbol_id INT,
+    p_entry_time TIMESTAMPTZ,
+    p_exit_time TIMESTAMPTZ,
+    p_position_type VARCHAR(10),
+    p_entry_price NUMERIC(20,8),
+    p_exit_price NUMERIC(20,8),
+    p_quantity NUMERIC(20,8),
+    p_profit_loss NUMERIC(20,8),
+    p_profit_loss_percent NUMERIC(10,4),
+    p_exit_reason VARCHAR(50)
+)
+RETURNS INT AS $$
+DECLARE
+    new_trade_id INT;
+BEGIN
+    INSERT INTO backtest_trades (
+        backtest_run_id,
+        symbol_id,
+        entry_time,
+        exit_time,
+        position_type,
+        entry_price,
+        exit_price,
+        quantity,
+        profit_loss,
+        profit_loss_percent,
+        exit_reason
+    )
+    VALUES (
+        p_backtest_run_id,
+        p_symbol_id,
+        p_entry_time,
+        p_exit_time,
+        p_position_type,
+        p_entry_price,
+        p_exit_price,
+        p_quantity,
+        p_profit_loss,
+        p_profit_loss_percent,
+        p_exit_reason
+    )
+    RETURNING id INTO new_trade_id;
+    
+    RETURN new_trade_id;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Fix for insert_candles function
 CREATE OR REPLACE FUNCTION insert_candles(
     p_candles JSONB
 )
@@ -230,17 +280,17 @@ DECLARE
 BEGIN
     FOR candle_record IN SELECT * FROM jsonb_array_elements(p_candles)
     LOOP
-        INSERT INTO candles (symbol_id, time, open, high, low, close, volume)
+        INSERT INTO candles (symbol_id, candle_time, open, high, low, close, volume)
         VALUES (
             (candle_record->>'symbol_id')::INT,
-            (candle_record->>'time')::TIMESTAMP,
+            (candle_record->>'candle_time')::TIMESTAMPTZ,
             (candle_record->>'open')::NUMERIC(20,8),
             (candle_record->>'high')::NUMERIC(20,8),
             (candle_record->>'low')::NUMERIC(20,8),
             (candle_record->>'close')::NUMERIC(20,8),
             (candle_record->>'volume')::NUMERIC(20,8)
         )
-        ON CONFLICT (symbol_id, time)
+        ON CONFLICT (symbol_id, candle_time)
         DO UPDATE SET
             open = EXCLUDED.open,
             high = EXCLUDED.high,
@@ -255,38 +305,111 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- Get continuous data ranges for a symbol
+-- Fix for get_backtest_trades function
+CREATE OR REPLACE FUNCTION get_backtest_trades(
+    p_backtest_run_id INT,
+    p_limit INT DEFAULT 100,
+    p_offset INT DEFAULT 0
+)
+RETURNS TABLE (
+    id INT,
+    symbol_id INT,
+    symbol VARCHAR(20),
+    entry_time TIMESTAMPTZ,
+    exit_time TIMESTAMPTZ,
+    position_type VARCHAR(10),
+    entry_price NUMERIC(20,8),
+    exit_price NUMERIC(20,8),
+    quantity NUMERIC(20,8),
+    profit_loss NUMERIC(20,8),
+    profit_loss_percent NUMERIC(10,4),
+    exit_reason VARCHAR(50)
+) AS $$
+BEGIN
+    RETURN QUERY
+    SELECT 
+        t.id,
+        t.symbol_id,
+        s.symbol,
+        t.entry_time,
+        t.exit_time,
+        t.position_type,
+        t.entry_price,
+        t.exit_price,
+        t.quantity,
+        t.profit_loss,
+        t.profit_loss_percent,
+        t.exit_reason
+    FROM 
+        backtest_trades t
+        JOIN symbols s ON t.symbol_id = s.id
+    WHERE 
+        t.backtest_run_id = p_backtest_run_id
+    ORDER BY 
+        t.entry_time
+    LIMIT p_limit
+    OFFSET p_offset;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Get continuous data ranges for a symbol - Updated to use "candle_time" column
 CREATE OR REPLACE FUNCTION get_symbol_data_ranges(
     p_symbol_id INT,
     p_timeframe timeframe_type
 )
 RETURNS TABLE (
-    start_date TIMESTAMP,
-    end_date TIMESTAMP
+    start_date TIMESTAMPTZ,
+    end_date TIMESTAMPTZ
 ) AS $$
 BEGIN
     RETURN QUERY
     WITH dates AS (
         SELECT 
-            time,
-            LEAD(time) OVER (ORDER BY time) as next_time
+            candle_time,
+            LEAD(candle_time) OVER (ORDER BY candle_time) as next_time
         FROM candles
         WHERE symbol_id = p_symbol_id
-        ORDER BY time
+        ORDER BY candle_time
     )
     SELECT 
-        MIN(time) as start_date,
-        MAX(time) as end_date
+        MIN(candle_time) as start_date,
+        MAX(candle_time) as end_date
     FROM (
         SELECT 
-            time,
+            candle_time,
             next_time,
-            CASE WHEN next_time IS NULL OR next_time > time + INTERVAL '1 day' THEN 1 ELSE 0 END as is_gap,
-            SUM(CASE WHEN next_time IS NULL OR next_time > time + INTERVAL '1 day' THEN 1 ELSE 0 END) OVER (ORDER BY time) as group_id
+            CASE WHEN next_time IS NULL OR next_time > candle_time + INTERVAL '1 day' THEN 1 ELSE 0 END as is_gap,
+            SUM(CASE WHEN next_time IS NULL OR next_time > candle_time + INTERVAL '1 day' THEN 1 ELSE 0 END) OVER (ORDER BY candle_time) as group_id
         FROM dates
     ) t
     GROUP BY group_id
     ORDER BY start_date;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Delete backtest
+CREATE OR REPLACE FUNCTION delete_backtest(
+    p_user_id INT,
+    p_backtest_id INT
+)
+RETURNS BOOLEAN AS $$
+DECLARE
+    affected_rows INT;
+BEGIN
+    -- Check ownership
+    PERFORM 1 FROM backtests
+    WHERE id = p_backtest_id AND user_id = p_user_id;
+    
+    IF NOT FOUND THEN
+        RETURN FALSE;
+    END IF;
+    
+    -- Delete backtest and all related data (cascade will handle related records)
+    DELETE FROM backtests
+    WHERE id = p_backtest_id;
+    
+    GET DIAGNOSTICS affected_rows = ROW_COUNT;
+    RETURN affected_rows > 0;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -304,8 +427,8 @@ RETURNS TABLE (
     exchange VARCHAR(50),
     is_active BOOLEAN,
     data_available BOOLEAN,
-    created_at TIMESTAMP,
-    updated_at TIMESTAMP
+    created_at TIMESTAMPTZ,
+    updated_at TIMESTAMPTZ
 ) AS $$
 BEGIN
     RETURN QUERY
@@ -516,8 +639,8 @@ CREATE OR REPLACE FUNCTION create_binance_download_job(
     p_symbol_id INT,
     p_symbol VARCHAR(20),
     p_timeframe timeframe_type,
-    p_start_date TIMESTAMP,
-    p_end_date TIMESTAMP
+    p_start_date TIMESTAMPTZ,
+    p_end_date TIMESTAMPTZ
 )
 RETURNS INT AS $$
 DECLARE
@@ -583,13 +706,13 @@ RETURNS TABLE (
     symbol_id INT,
     symbol VARCHAR(20),
     timeframe timeframe_type,
-    start_date TIMESTAMP,
-    end_date TIMESTAMP,
+    start_date TIMESTAMPTZ,
+    end_date TIMESTAMPTZ,
     status VARCHAR(20),
     progress NUMERIC(5,2),
     error TEXT,
-    created_at TIMESTAMP,
-    updated_at TIMESTAMP
+    created_at TIMESTAMPTZ,
+    updated_at TIMESTAMPTZ
 ) AS $$
 BEGIN
     RETURN QUERY
@@ -659,7 +782,7 @@ RETURNS TABLE (
     backtest_id INT,
     name TEXT,
     strategy_id INT,
-    date TIMESTAMP,
+    date TIMESTAMPTZ,
     status VARCHAR(20),
     symbol_results JSONB,
     completed_runs BIGINT,
@@ -697,12 +820,12 @@ RETURNS TABLE (
     strategy_id INT,
     strategy_version INT,
     timeframe timeframe_type,
-    start_date TIMESTAMP,
-    end_date TIMESTAMP,
+    start_date TIMESTAMPTZ,
+    end_date TIMESTAMPTZ,
     initial_capital NUMERIC(20,8),
     status VARCHAR(20),
-    created_at TIMESTAMP,
-    completed_at TIMESTAMP,
+    created_at TIMESTAMPTZ,
+    completed_at TIMESTAMPTZ,
     run_results JSONB
 ) AS $$
 BEGIN
@@ -763,8 +886,8 @@ CREATE OR REPLACE FUNCTION create_backtest(
     p_name VARCHAR(100),
     p_description TEXT,
     p_timeframe timeframe_type,
-    p_start_date TIMESTAMP,
-    p_end_date TIMESTAMP,
+    p_start_date TIMESTAMPTZ,
+    p_end_date TIMESTAMPTZ,
     p_initial_capital NUMERIC(20,8),
     p_symbol_ids INT[]
 )
@@ -902,6 +1025,13 @@ BEGIN
             sharpe_ratio = p_sharpe_ratio,
             max_drawdown = p_max_drawdown,
             final_capital = p_final_capital,
+            total_trades = p_total_trades,
+            winning_trades = p_winning_trades,
+            losing_trades = p_losing_trades,
+            profit_factor = p_profit_factor,
+            sharpe_ratio = p_sharpe_ratio,
+            max_drawdown = p_max_drawdown,
+            final_capital = p_final_capital,
             total_return = p_total_return,
             annualized_return = p_annualized_return,
             results_json = p_results_json
@@ -942,128 +1072,5 @@ BEGIN
     PERFORM update_backtest_run_status(p_backtest_run_id, 'completed');
     
     RETURN result_id;
-END;
-$$ LANGUAGE plpgsql;
-
--- Add backtest trade
-CREATE OR REPLACE FUNCTION add_backtest_trade(
-    p_backtest_run_id INT,
-    p_symbol_id INT,
-    p_entry_time TIMESTAMP,
-    p_exit_time TIMESTAMP,
-    p_position_type VARCHAR(10),
-    p_entry_price NUMERIC(20,8),
-    p_exit_price NUMERIC(20,8),
-    p_quantity NUMERIC(20,8),
-    p_profit_loss NUMERIC(20,8),
-    p_profit_loss_percent NUMERIC(10,4),
-    p_exit_reason VARCHAR(50)
-)
-RETURNS INT AS $$
-DECLARE
-    new_trade_id INT;
-BEGIN
-    INSERT INTO backtest_trades (
-        backtest_run_id,
-        symbol_id,
-        entry_time,
-        exit_time,
-        position_type,
-        entry_price,
-        exit_price,
-        quantity,
-        profit_loss,
-        profit_loss_percent,
-        exit_reason
-    )
-    VALUES (
-        p_backtest_run_id,
-        p_symbol_id,
-        p_entry_time,
-        p_exit_time,
-        p_position_type,
-        p_entry_price,
-        p_exit_price,
-        p_quantity,
-        p_profit_loss,
-        p_profit_loss_percent,
-        p_exit_reason
-    )
-    RETURNING id INTO new_trade_id;
-    
-    RETURN new_trade_id;
-END;
-$$ LANGUAGE plpgsql;
-
--- Get backtest trades
-CREATE OR REPLACE FUNCTION get_backtest_trades(
-    p_backtest_run_id INT,
-    p_limit INT DEFAULT 100,
-    p_offset INT DEFAULT 0
-)
-RETURNS TABLE (
-    id INT,
-    symbol_id INT,
-    symbol VARCHAR(20),
-    entry_time TIMESTAMP,
-    exit_time TIMESTAMP,
-    position_type VARCHAR(10),
-    entry_price NUMERIC(20,8),
-    exit_price NUMERIC(20,8),
-    quantity NUMERIC(20,8),
-    profit_loss NUMERIC(20,8),
-    profit_loss_percent NUMERIC(10,4),
-    exit_reason VARCHAR(50)
-) AS $$
-BEGIN
-    RETURN QUERY
-    SELECT 
-        t.id,
-        t.symbol_id,
-        s.symbol,
-        t.entry_time,
-        t.exit_time,
-        t.position_type,
-        t.entry_price,
-        t.exit_price,
-        t.quantity,
-        t.profit_loss,
-        t.profit_loss_percent,
-        t.exit_reason
-    FROM 
-        backtest_trades t
-        JOIN symbols s ON t.symbol_id = s.id
-    WHERE 
-        t.backtest_run_id = p_backtest_run_id
-    ORDER BY 
-        t.entry_time
-    LIMIT p_limit
-    OFFSET p_offset;
-END;
-$$ LANGUAGE plpgsql;
-
--- Delete backtest
-CREATE OR REPLACE FUNCTION delete_backtest(
-    p_user_id INT,
-    p_backtest_id INT
-)
-RETURNS BOOLEAN AS $$
-DECLARE
-    affected_rows INT;
-BEGIN
-    -- Check ownership
-    PERFORM 1 FROM backtests
-    WHERE id = p_backtest_id AND user_id = p_user_id;
-    
-    IF NOT FOUND THEN
-        RETURN FALSE;
-    END IF;
-    
-    -- Delete backtest and all related data (cascade will handle related records)
-    DELETE FROM backtests
-    WHERE id = p_backtest_id;
-    
-    GET DIAGNOSTICS affected_rows = ROW_COUNT;
-    RETURN affected_rows > 0;
 END;
 $$ LANGUAGE plpgsql;
