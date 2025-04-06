@@ -35,6 +35,11 @@ type BacktestClient interface {
 	CreateBacktest(ctx context.Context, request *model.BacktestRequest, userID int) (int, error)
 }
 
+// Add this method to IndicatorService to allow direct DB access for debugging
+func (s *IndicatorService) GetDB() *sqlx.DB {
+	return s.db
+}
+
 // NewStrategyService creates a new strategy service
 func NewStrategyService(
 	db *sqlx.DB,
@@ -496,6 +501,7 @@ func (s *MarketplaceService) DeleteReview(ctx context.Context, reviewID int, use
 
 // IndicatorService handles technical indicator operations
 type IndicatorService struct {
+	db            *sqlx.DB
 	indicatorRepo *repository.IndicatorRepository
 	logger        *zap.Logger
 }
@@ -522,9 +528,24 @@ func (s *IndicatorService) GetAllIndicators(ctx context.Context, category *strin
 }
 
 // CreateIndicator creates a new technical indicator
-func (s *IndicatorService) CreateIndicator(ctx context.Context, name, description, category, formula string) (*model.TechnicalIndicator, error) {
-	// Here you would implement the logic to create a new indicator in the database
-	// This is a placeholder implementation
+func (s *IndicatorService) CreateIndicator(ctx context.Context, name, description, category, formula string, parameters []model.IndicatorParameterCreate) (*model.TechnicalIndicator, error) {
+	// Validate input
+	if name == "" {
+		return nil, errors.New("indicator name is required")
+	}
+	if category == "" {
+		return nil, errors.New("indicator category is required")
+	}
+
+	// Start a transaction
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		s.logger.Error("Failed to begin transaction", zap.Error(err))
+		return nil, err
+	}
+	defer tx.Rollback() // Rollback if we don't commit
+
+	// Create the indicator
 	indicator := &model.TechnicalIndicator{
 		Name:        name,
 		Description: description,
@@ -533,8 +554,84 @@ func (s *IndicatorService) CreateIndicator(ctx context.Context, name, descriptio
 		CreatedAt:   time.Now(),
 	}
 
-	// TODO: Implement actual database operation
-	// For now, we'll return a mock response
+	// Call the repository to insert the indicator
+	indicatorID, err := s.indicatorRepo.Create(ctx, indicator)
+	if err != nil {
+		s.logger.Error("Failed to create indicator", zap.Error(err))
+		return nil, err
+	}
+
+	// Set the ID in the returned model
+	indicator.ID = indicatorID
+
+	// Add parameters if provided
+	if parameters != nil && len(parameters) > 0 {
+		for i := range parameters {
+			// Set the indicator ID for each parameter
+			parameters[i].IndicatorID = indicatorID
+
+			// Create the parameter
+			paramID, err := s.indicatorRepo.AddParameter(ctx, &parameters[i])
+			if err != nil {
+				s.logger.Error("Failed to add parameter", zap.Error(err))
+				return nil, err
+			}
+
+			// Add the parameter to the indicator model
+			param := model.IndicatorParameter{
+				ID:            paramID,
+				IndicatorID:   indicatorID,
+				ParameterName: parameters[i].ParameterName,
+				ParameterType: parameters[i].ParameterType,
+				IsRequired:    parameters[i].IsRequired,
+				MinValue:      parameters[i].MinValue,
+				MaxValue:      parameters[i].MaxValue,
+				DefaultValue:  parameters[i].DefaultValue,
+				Description:   parameters[i].Description,
+			}
+
+			indicator.Parameters = append(indicator.Parameters, param)
+
+			// Add enum values if provided
+			if parameters[i].EnumValues != nil && len(parameters[i].EnumValues) > 0 {
+				for _, enumValue := range parameters[i].EnumValues {
+					// Set the parameter ID for the enum value
+					enumCreate := model.ParameterEnumValueCreate{
+						ParameterID: paramID,
+						EnumValue:   enumValue.EnumValue,
+						DisplayName: enumValue.DisplayName,
+					}
+
+					// Create the enum value
+					enumID, err := s.indicatorRepo.AddEnumValue(ctx, &enumCreate)
+					if err != nil {
+						s.logger.Error("Failed to add enum value", zap.Error(err))
+						return nil, err
+					}
+
+					// Add the enum value to the parameter
+					param.EnumValues = append(param.EnumValues, model.ParameterEnumValue{
+						ID:          enumID,
+						ParameterID: paramID,
+						EnumValue:   enumValue.EnumValue,
+						DisplayName: enumValue.DisplayName,
+					})
+				}
+			}
+		}
+	}
+
+	// Commit the transaction
+	if err := tx.Commit(); err != nil {
+		s.logger.Error("Failed to commit transaction", zap.Error(err))
+		return nil, err
+	}
+
+	s.logger.Info("Successfully created indicator",
+		zap.Int("id", indicatorID),
+		zap.String("name", name),
+		zap.Int("parameters_count", len(parameters)))
+
 	return indicator, nil
 }
 

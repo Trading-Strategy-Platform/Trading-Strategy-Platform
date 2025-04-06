@@ -45,6 +45,26 @@ func (s *Structure) Scan(value interface{}) error {
 	return json.Unmarshal(b, &s)
 }
 
+// IndicatorParameterCreate represents the data needed to create a parameter
+type IndicatorParameterCreate struct {
+	IndicatorID   int                        `json:"indicator_id"`
+	ParameterName string                     `json:"parameter_name" binding:"required"`
+	ParameterType string                     `json:"parameter_type" binding:"required"`
+	IsRequired    bool                       `json:"is_required"`
+	MinValue      *float64                   `json:"min_value,omitempty"`
+	MaxValue      *float64                   `json:"max_value,omitempty"`
+	DefaultValue  string                     `json:"default_value,omitempty"`
+	Description   string                     `json:"description,omitempty"`
+	EnumValues    []ParameterEnumValueCreate `json:"enum_values,omitempty"`
+}
+
+// ParameterEnumValueCreate represents the data needed to create an enum value
+type ParameterEnumValueCreate struct {
+	ParameterID int    `json:"parameter_id"`
+	EnumValue   string `json:"enum_value" binding:"required"`
+	DisplayName string `json:"display_name,omitempty"`
+}
+
 // Rule represents a single rule or group of rules in a strategy
 type Rule struct {
 	Type              string                 `json:"type"` // "rule" or "group"

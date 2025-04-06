@@ -81,6 +81,22 @@ func (h *AuthHandler) Logout(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "Successfully logged out"})
 }
 
+// Validate handles token validation
+// GET /api/v1/auth/validate
+func (h *AuthHandler) Validate(c *gin.Context) {
+	// The AuthMiddleware has already validated the token and set the userID in the context
+	userID, exists := c.Get("userID")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Not authenticated"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"valid":   true,
+		"user_id": userID,
+	})
+}
+
 // RefreshToken handles refreshing access tokens
 // POST /api/v1/auth/refresh-token
 func (h *AuthHandler) RefreshToken(c *gin.Context) {

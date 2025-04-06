@@ -177,6 +177,7 @@ func setupRouter(
 			authProtected := auth.Group("")
 			authProtected.Use(middleware.AuthMiddleware(authService, logger))
 			authProtected.POST("/logout", authHandler.Logout)
+			authProtected.GET("/validate", authHandler.Validate)
 		}
 
 		// User routes (protected)
@@ -218,6 +219,7 @@ func setupRouter(
 			admin.GET("/users", userHandler.ListUsers)
 			admin.GET("/users/:id", userHandler.GetUserByID)
 			admin.PUT("/users/:id", userHandler.UpdateUser)
+			admin.GET("/users/:id/roles", userHandler.GetUserRoles) // New roles endpoint
 		}
 	}
 

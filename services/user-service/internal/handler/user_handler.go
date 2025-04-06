@@ -231,3 +231,30 @@ func (h *UserHandler) ListUsers(c *gin.Context) {
 		},
 	})
 }
+
+// GET /api/v1/admin/users/:id/roles
+func (h *UserHandler) GetUserRoles(c *gin.Context) {
+	idStr := c.Param("id")
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid user ID"})
+		return
+	}
+
+	user, err := h.userService.GetByID(c.Request.Context(), id)
+	if err != nil {
+		h.logger.Error("failed to get user", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get user"})
+		return
+	}
+
+	if user == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "User not found"})
+		return
+	}
+
+	// Return the user's role in an array format as expected by the client
+	c.JSON(http.StatusOK, gin.H{
+		"roles": []string{user.Role},
+	})
+}
