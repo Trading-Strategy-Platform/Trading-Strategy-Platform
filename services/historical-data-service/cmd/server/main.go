@@ -49,6 +49,7 @@ func main() {
 	backtestRepo := repository.NewBacktestRepository(db, logger)
 	symbolRepo := repository.NewSymbolRepository(db, logger)
 	timeframeRepo := repository.NewTimeframeRepository(db, logger)
+	binanceRepo := repository.NewBinanceRepository(db, logger)
 
 	// Initialize clients
 	userClient := client.NewUserClient(cfg.UserService.URL, logger)
@@ -64,12 +65,19 @@ func main() {
 	)
 	symbolService := service.NewSymbolService(symbolRepo, logger)
 	timeframeService := service.NewTimeframeService(timeframeRepo, logger)
+	binanceService := service.NewBinanceService(
+		binanceRepo,
+		symbolRepo,
+		marketDataRepo,
+		logger,
+	)
 
 	// Initialize handlers
 	marketDataHandler := handler.NewMarketDataHandler(marketDataService, logger)
 	backtestHandler := handler.NewBacktestHandler(backtestService, logger)
 	symbolHandler := handler.NewSymbolHandler(symbolService, logger)
 	timeframeHandler := handler.NewTimeframeHandler(timeframeService, logger)
+	binanceHandler := handler.NewBinanceHandler(binanceService, logger)
 
 	// Set up HTTP server with Gin
 	router := setupRouter(
@@ -77,6 +85,7 @@ func main() {
 		backtestHandler,
 		symbolHandler,
 		timeframeHandler,
+		binanceHandler,
 		userClient,
 		logger,
 		cfg,
@@ -173,6 +182,7 @@ func setupRouter(
 	backtestHandler *handler.BacktestHandler,
 	symbolHandler *handler.SymbolHandler,
 	timeframeHandler *handler.TimeframeHandler,
+	binanceHandler *handler.BinanceHandler,
 	userClient *client.UserClient,
 	logger *zap.Logger,
 	cfg *config.Config,
@@ -191,9 +201,6 @@ func setupRouter(
 	// API routes
 	v1 := router.Group("/api/v1")
 	{
-		// Create Binance handler
-		binanceHandler := handler.NewBinanceHandler(marketDataHandler.GetMarketDataService(), logger)
-
 		// Binance API routes
 		binance := v1.Group("/binance")
 		{
@@ -212,20 +219,21 @@ func setupRouter(
 		// Symbol routes
 		symbols := v1.Group("/symbols")
 		{
-			symbols.GET("", symbolHandler.GetAllSymbols) // Use get_symbols
+			symbols.GET("", symbolHandler.GetAllSymbols)
 
 			// Protected symbols management
 			symbolsAuth := symbols.Group("")
 			symbolsAuth.Use(middleware.AuthMiddleware(userClient, logger))
-			symbolsAuth.POST("", symbolHandler.CreateSymbol)       // Use add_symbol
-			symbolsAuth.PUT("/:id", symbolHandler.UpdateSymbol)    // Use update_symbol
-			symbolsAuth.DELETE("/:id", symbolHandler.DeleteSymbol) // Use delete_symbol
+			symbolsAuth.POST("", symbolHandler.CreateSymbol)
+			symbolsAuth.PUT("/:id", symbolHandler.UpdateSymbol)
+			symbolsAuth.DELETE("/:id", symbolHandler.DeleteSymbol)
 		}
 
 		// Timeframes routes
 		timeframes := v1.Group("/timeframes")
 		{
-			timeframes.GET("", timeframeHandler.GetAllTimeframes) // Direct DB query
+			timeframes.GET("", timeframeHandler.GetAllTimeframes)
+			timeframes.GET("/validate/:timeframe", timeframeHandler.ValidateTimeframe)
 		}
 
 		// Market data routes
@@ -234,12 +242,12 @@ func setupRouter(
 			// Only authenticated users can access market data
 			marketData.Use(middleware.AuthMiddleware(userClient, logger))
 
-			marketData.GET("/candles", marketDataHandler.GetCandles)                // Use get_candles
-			marketData.POST("/candles/batch", marketDataHandler.BatchImportCandles) // Use insert_candles
+			marketData.GET("/candles", marketDataHandler.GetCandles)
+			marketData.POST("/candles/batch", marketDataHandler.BatchImportCandles)
 
 			// Asset types and exchanges
-			marketData.GET("/asset-types", marketDataHandler.GetAssetTypes) // Use get_asset_types
-			marketData.GET("/exchanges", marketDataHandler.GetExchanges)    // Use get_exchanges
+			marketData.GET("/asset-types", marketDataHandler.GetAssetTypes)
+			marketData.GET("/exchanges", marketDataHandler.GetExchanges)
 		}
 
 		// Backtest routes
@@ -247,10 +255,10 @@ func setupRouter(
 		{
 			backtests.Use(middleware.AuthMiddleware(userClient, logger))
 
-			backtests.GET("", backtestHandler.ListBacktests)         // Use get_backtest_summary
-			backtests.POST("", backtestHandler.CreateBacktest)       // Use create_backtest
-			backtests.GET("/:id", backtestHandler.GetBacktest)       // Use get_backtest_details
-			backtests.DELETE("/:id", backtestHandler.DeleteBacktest) // Use delete_backtest
+			backtests.GET("", backtestHandler.ListBacktests)
+			backtests.POST("", backtestHandler.CreateBacktest)
+			backtests.GET("/:id", backtestHandler.GetBacktest)
+			backtests.DELETE("/:id", backtestHandler.DeleteBacktest)
 		}
 
 		// Backtest run management
@@ -258,10 +266,10 @@ func setupRouter(
 		{
 			backtestRuns.Use(middleware.AuthMiddleware(userClient, logger))
 
-			backtestRuns.PUT("/:id/status", backtestHandler.UpdateBacktestRunStatus) // Use update_backtest_run_status
-			backtestRuns.POST("/:id/results", backtestHandler.SaveBacktestResults)   // Use save_backtest_result
-			backtestRuns.POST("/:id/trades", backtestHandler.AddBacktestTrade)       // Use add_backtest_trade
-			backtestRuns.GET("/:id/trades", backtestHandler.GetBacktestTrades)       // Use get_backtest_trades
+			backtestRuns.PUT("/:id/status", backtestHandler.UpdateBacktestRunStatus)
+			backtestRuns.POST("/:id/results", backtestHandler.SaveBacktestResults)
+			backtestRuns.POST("/:id/trades", backtestHandler.AddBacktestTrade)
+			backtestRuns.GET("/:id/trades", backtestHandler.GetBacktestTrades)
 		}
 
 		// Service-to-service routes (requires service key)

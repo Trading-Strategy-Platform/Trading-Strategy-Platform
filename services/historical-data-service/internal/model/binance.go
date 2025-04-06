@@ -36,12 +36,6 @@ type BinanceKline struct {
 	CloseTime time.Time
 }
 
-// DateRange represents a range of dates
-type DateRange struct {
-	Start time.Time `json:"start"`
-	End   time.Time `json:"end"`
-}
-
 // SymbolDataStatus represents the status of a symbol's data
 type SymbolDataStatus struct {
 	Symbol        string      `json:"symbol"`

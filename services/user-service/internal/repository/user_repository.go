@@ -4,7 +4,6 @@ package repository
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 
 	"services/user-service/internal/model"
@@ -51,13 +50,9 @@ func (r *UserRepository) Create(ctx context.Context, user *model.UserCreate, pas
 	return id, nil
 }
 
-// GetByID retrieves a user by ID
+// GetByID retrieves a user by ID using get_user_by_id function
 func (r *UserRepository) GetByID(ctx context.Context, id int) (*model.User, error) {
-	query := `
-		SELECT id, username, email, password_hash, role, is_active, last_login, created_at, updated_at
-		FROM users
-		WHERE id = $1
-	`
+	query := `SELECT * FROM get_user_by_id($1)`
 
 	var user model.User
 	if err := r.db.GetContext(ctx, &user, query, id); err != nil {
@@ -71,7 +66,7 @@ func (r *UserRepository) GetByID(ctx context.Context, id int) (*model.User, erro
 	return &user, nil
 }
 
-// GetUserDetails retrieves detailed user information including preferences using get_user_details
+// GetUserDetails retrieves detailed user information using get_user_details function
 func (r *UserRepository) GetUserDetails(ctx context.Context, id int) (*model.UserDetails, error) {
 	query := `SELECT * FROM get_user_details($1)`
 
@@ -87,13 +82,9 @@ func (r *UserRepository) GetUserDetails(ctx context.Context, id int) (*model.Use
 	return &details, nil
 }
 
-// GetByEmail retrieves a user by email
+// GetByEmail retrieves a user by email using get_user_by_email function
 func (r *UserRepository) GetByEmail(ctx context.Context, email string) (*model.User, error) {
-	query := `
-		SELECT id, username, email, password_hash, role, is_active, last_login, created_at, updated_at
-		FROM users
-		WHERE email = $1
-	`
+	query := `SELECT * FROM get_user_by_email($1)`
 
 	var user model.User
 	if err := r.db.GetContext(ctx, &user, query, email); err != nil {
@@ -114,12 +105,9 @@ func (r *UserRepository) UpdateUser(
 	username *string,
 	email *string,
 	profilePhotoURL *string,
-	theme *string,
-	defaultTimeframe *string,
-	chartPreferences json.RawMessage,
-	notificationSettings json.RawMessage,
+	isActive *bool,
 ) (bool, error) {
-	query := `SELECT update_user($1, $2, $3, $4, $5, $6, $7, $8)`
+	query := `SELECT update_user($1, $2, $3, $4, $5)`
 
 	var success bool
 	err := r.db.GetContext(
@@ -130,28 +118,11 @@ func (r *UserRepository) UpdateUser(
 		username,
 		email,
 		profilePhotoURL,
-		theme,
-		defaultTimeframe,
-		chartPreferences,
-		notificationSettings,
+		isActive,
 	)
 
 	if err != nil {
 		r.logger.Error("failed to update user", zap.Error(err), zap.Int("id", userID))
-		return false, err
-	}
-
-	return success, nil
-}
-
-// UpdateUserPassword updates a user's password using update_user_password function
-func (r *UserRepository) UpdateUserPassword(ctx context.Context, id int, passwordHash string) (bool, error) {
-	query := `SELECT update_user_password($1, $2)`
-
-	var success bool
-	err := r.db.GetContext(ctx, &success, query, id, passwordHash)
-	if err != nil {
-		r.logger.Error("failed to update password", zap.Error(err), zap.Int("id", id))
 		return false, err
 	}
 
@@ -172,32 +143,9 @@ func (r *UserRepository) DeleteUser(ctx context.Context, id int) (bool, error) {
 	return success, nil
 }
 
-// UpdateLastLogin updates a user's last login timestamp using update_last_login function
-func (r *UserRepository) UpdateLastLogin(ctx context.Context, id int) error {
-	query := `SELECT update_last_login($1)`
-
-	var success bool
-	err := r.db.GetContext(ctx, &success, query, id)
-	if err != nil {
-		r.logger.Error("failed to update last login", zap.Error(err), zap.Int("id", id))
-		return err
-	}
-
-	if !success {
-		return errors.New("failed to update last login")
-	}
-
-	return nil
-}
-
-// List retrieves a paginated list of users
+// List retrieves a paginated list of users using list_users function
 func (r *UserRepository) List(ctx context.Context, offset, limit int) ([]model.User, error) {
-	query := `
-		SELECT id, username, email, role, is_active, last_login, created_at, updated_at
-		FROM users
-		ORDER BY id
-		LIMIT $1 OFFSET $2
-	`
+	query := `SELECT * FROM list_users($1, $2)`
 
 	var users []model.User
 	if err := r.db.SelectContext(ctx, &users, query, limit, offset); err != nil {
@@ -208,9 +156,9 @@ func (r *UserRepository) List(ctx context.Context, offset, limit int) ([]model.U
 	return users, nil
 }
 
-// Count returns the total number of users
+// Count returns the total number of users using get_user_count function
 func (r *UserRepository) Count(ctx context.Context) (int, error) {
-	query := `SELECT COUNT(*) FROM users`
+	query := `SELECT get_user_count()`
 
 	var count int
 	if err := r.db.GetContext(ctx, &count, query); err != nil {
@@ -219,4 +167,20 @@ func (r *UserRepository) Count(ctx context.Context) (int, error) {
 	}
 
 	return count, nil
+}
+
+// GetRole returns the role of a user using get_user_role function
+func (r *UserRepository) GetRole(ctx context.Context, id int) (string, error) {
+	query := `SELECT get_user_role($1)`
+
+	var role string
+	if err := r.db.GetContext(ctx, &role, query, id); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", nil
+		}
+		r.logger.Error("failed to get user role", zap.Error(err), zap.Int("id", id))
+		return "", err
+	}
+
+	return role, nil
 }

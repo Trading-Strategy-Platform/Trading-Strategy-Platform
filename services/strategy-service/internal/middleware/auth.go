@@ -1,4 +1,3 @@
-// services/strategy-service/internal/middleware/auth.go
 package middleware
 
 import (
@@ -17,68 +16,6 @@ import (
 type UserClient interface {
 	ValidateUserAccess(ctx context.Context, userID int, token string) (bool, error)
 	CheckUserRole(ctx context.Context, userID int, role string, token string) (bool, error)
-}
-
-// RequireRole checks if the user has the specified role
-func RequireRole(userClient UserClient, requiredRole string) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		userID, exists := c.Get("userID")
-		if !exists {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
-			c.Abort()
-			return
-		}
-
-		// Get the authorization token from the request
-		token := extractTokenFromHeader(c.GetHeader("Authorization"))
-
-		// Log that we're checking roles
-		logger, _ := zap.NewProduction()
-		logger.Info("Checking user role",
-			zap.Int("userID", userID.(int)),
-			zap.String("role", requiredRole),
-			zap.Bool("has_token", token != ""))
-
-		// Get user roles from user service
-		hasRole, err := userClient.CheckUserRole(c.Request.Context(), userID.(int), requiredRole, token)
-		if err != nil {
-			logger.Error("Failed to verify user role", zap.Error(err))
-
-			// FALLBACK FOR DEVELOPMENT ONLY
-			// If there's an error checking roles, check if this is user ID 1 (admin)
-			if userID.(int) == 1 && (requiredRole == "admin" || requiredRole == "user") {
-				logger.Warn("Using fallback admin check", zap.Int("userID", userID.(int)))
-				c.Next()
-				return
-			}
-
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to verify user role"})
-			c.Abort()
-			return
-		}
-
-		if !hasRole {
-			c.JSON(http.StatusForbidden, gin.H{"error": "Insufficient permissions"})
-			c.Abort()
-			return
-		}
-
-		c.Next()
-	}
-}
-
-// extractTokenFromHeader extracts the token from the Authorization header
-func extractTokenFromHeader(authHeader string) string {
-	if authHeader == "" {
-		return ""
-	}
-
-	parts := strings.Split(authHeader, " ")
-	if len(parts) != 2 || parts[0] != "Bearer" {
-		return ""
-	}
-
-	return parts[1]
 }
 
 // AuthMiddleware authenticates requests against the user service
@@ -150,6 +87,68 @@ func AuthMiddleware(userClient UserClient, logger *zap.Logger) gin.HandlerFunc {
 		c.Set("userID", userId)
 		c.Next()
 	}
+}
+
+// RequireRole checks if the user has the specified role
+func RequireRole(userClient UserClient, requiredRole string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		userID, exists := c.Get("userID")
+		if !exists {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+			c.Abort()
+			return
+		}
+
+		// Get the authorization token from the request
+		token := extractTokenFromHeader(c.GetHeader("Authorization"))
+
+		// Log that we're checking roles
+		logger, _ := zap.NewProduction()
+		logger.Info("Checking user role",
+			zap.Int("userID", userID.(int)),
+			zap.String("role", requiredRole),
+			zap.Bool("has_token", token != ""))
+
+		// Get user roles from user service
+		hasRole, err := userClient.CheckUserRole(c.Request.Context(), userID.(int), requiredRole, token)
+		if err != nil {
+			logger.Error("Failed to verify user role", zap.Error(err))
+
+			// FALLBACK FOR DEVELOPMENT ONLY
+			// If there's an error checking roles, check if this is user ID 1 (admin)
+			if userID.(int) == 1 && (requiredRole == "admin" || requiredRole == "user") {
+				logger.Warn("Using fallback admin check", zap.Int("userID", userID.(int)))
+				c.Next()
+				return
+			}
+
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to verify user role"})
+			c.Abort()
+			return
+		}
+
+		if !hasRole {
+			c.JSON(http.StatusForbidden, gin.H{"error": "Insufficient permissions"})
+			c.Abort()
+			return
+		}
+
+		c.Next()
+	}
+}
+
+// extractTokenFromHeader extracts the token from the Authorization header
+func extractTokenFromHeader(authHeader string) string {
+	if authHeader == "" {
+		return ""
+	}
+
+	parts := strings.Split(authHeader, " ")
+	if len(parts) != 2 || parts[0] != "Bearer" {
+		return ""
+	}
+
+	return parts[1]
 }
 
 // extractUserIdFromToken extracts the user ID from a JWT token

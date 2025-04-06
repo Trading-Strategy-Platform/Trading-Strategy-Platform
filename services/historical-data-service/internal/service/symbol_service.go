@@ -1,4 +1,3 @@
-// internal/service/symbol_service.go
 package service
 
 import (

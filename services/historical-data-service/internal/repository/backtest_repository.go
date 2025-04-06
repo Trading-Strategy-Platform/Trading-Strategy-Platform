@@ -1,4 +1,3 @@
-// internal/repository/backtest_repository.go
 package repository
 
 import (
@@ -254,45 +253,22 @@ func (r *BacktestRepository) DeleteBacktest(
 	return true, nil
 }
 
-// GetQueuedBacktests retrieves backtests in queued status
-func (r *BacktestRepository) GetQueuedBacktests(
+// GetBacktestUserID gets the user ID associated with a backtest
+func (r *BacktestRepository) GetBacktestUserID(
 	ctx context.Context,
-	limit int,
-) ([]model.BacktestSummary, error) {
-	// Using direct query as there's no specific function for this
-	query := `
-		SELECT 
-			b.id AS backtest_id,
-			b.name,
-			s.name AS strategy_name,
-			b.created_at AS date,
-			b.status,
-			NULL AS symbol_results,
-			0 AS completed_runs,
-			COUNT(br.id) AS total_runs
-		FROM 
-			backtests b
-		JOIN 
-			strategies s ON b.strategy_id = s.id
-		LEFT JOIN
-			backtest_runs br ON b.id = br.backtest_id
-		WHERE 
-			b.status = 'pending'
-		GROUP BY
-			b.id, b.name, s.name, b.created_at, b.status
-		ORDER BY 
-			b.created_at ASC
-		LIMIT $1
-	`
+	backtestID int,
+) (int, error) {
+	query := "SELECT user_id FROM backtests WHERE id = $1"
 
-	var backtests []model.BacktestSummary
-	err := r.db.SelectContext(ctx, &backtests, query, limit)
+	var userID int
+	err := r.db.GetContext(ctx, &userID, query, backtestID)
 	if err != nil {
-		r.logger.Error("Failed to get queued backtests", zap.Error(err))
-		return nil, err
+		r.logger.Error("Failed to get backtest user ID",
+			zap.Error(err),
+			zap.Int("backtestID", backtestID))
+		return 0, err
 	}
-
-	return backtests, nil
+	return userID, nil
 }
 
 // GetBacktestRunIDBySymbol finds the run ID for a specific backtest and symbol
@@ -317,6 +293,62 @@ func (r *BacktestRepository) GetBacktestRunIDBySymbol(
 	}
 
 	return runID, nil
+}
+
+// GetBacktestSymbolIDs gets all symbol IDs for a backtest
+func (r *BacktestRepository) GetBacktestSymbolIDs(
+	ctx context.Context,
+	backtestID int,
+) ([]int, error) {
+	query := `SELECT symbol_id FROM backtest_runs WHERE backtest_id = $1`
+
+	var symbolIDs []int
+	err := r.db.SelectContext(ctx, &symbolIDs, query, backtestID)
+	if err != nil {
+		r.logger.Error("Failed to get backtest symbol IDs",
+			zap.Error(err),
+			zap.Int("backtestID", backtestID))
+		return nil, err
+	}
+	return symbolIDs, err
+}
+
+// GetQueuedBacktests retrieves backtests in queued status
+func (r *BacktestRepository) GetQueuedBacktests(
+	ctx context.Context,
+	limit int,
+) ([]model.BacktestSummary, error) {
+	query := `
+		SELECT 
+			b.id AS backtest_id,
+			b.name,
+			b.strategy_id,
+			b.created_at AS date,
+			b.status,
+			NULL AS symbol_results,
+			0 AS completed_runs,
+			COUNT(br.id) AS total_runs
+		FROM 
+			backtests b
+		LEFT JOIN
+			backtest_runs br ON b.id = br.backtest_id
+		WHERE 
+			b.status = 'pending'
+		GROUP BY
+			b.id, b.name, b.strategy_id, b.created_at, b.status
+		ORDER BY 
+			b.created_at ASC
+		LIMIT $1
+	`
+
+	var backtests []model.BacktestSummary
+	err := r.db.SelectContext(ctx, &backtests, query, limit)
+	if err != nil {
+		r.logger.Error("Failed to get queued backtests", zap.Error(err))
+		return nil, err
+	}
+
+	return backtests, nil
 }
 
 // UpdateBacktestRunsStatusBulk updates all runs for a backtest to the given status
@@ -360,42 +392,6 @@ func (r *BacktestRepository) UpdateBacktestStatus(
 			zap.String("status", status))
 	}
 	return err
-}
-
-// GetBacktestUserID gets the user ID associated with a backtest
-func (r *BacktestRepository) GetBacktestUserID(
-	ctx context.Context,
-	backtestID int,
-) (int, error) {
-	query := "SELECT user_id FROM backtests WHERE id = $1"
-
-	var userID int
-	err := r.db.GetContext(ctx, &userID, query, backtestID)
-	if err != nil {
-		r.logger.Error("Failed to get backtest user ID",
-			zap.Error(err),
-			zap.Int("backtestID", backtestID))
-		return 0, err
-	}
-	return userID, nil
-}
-
-// GetBacktestSymbolIDs gets all symbol IDs for a backtest
-func (r *BacktestRepository) GetBacktestSymbolIDs(
-	ctx context.Context,
-	backtestID int,
-) ([]int, error) {
-	query := `SELECT symbol_id FROM backtest_runs WHERE backtest_id = $1`
-
-	var symbolIDs []int
-	err := r.db.SelectContext(ctx, &symbolIDs, query, backtestID)
-	if err != nil {
-		r.logger.Error("Failed to get backtest symbol IDs",
-			zap.Error(err),
-			zap.Int("backtestID", backtestID))
-		return nil, err
-	}
-	return symbolIDs, err
 }
 
 // GetBacktestDetails gets detailed information about a backtest

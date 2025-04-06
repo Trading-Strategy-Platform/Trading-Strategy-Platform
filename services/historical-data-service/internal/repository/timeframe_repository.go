@@ -2,7 +2,6 @@ package repository
 
 import (
 	"context"
-	"database/sql"
 	"time"
 
 	"services/historical-data-service/internal/model"
@@ -73,38 +72,6 @@ func (r *TimeframeRepository) GetAllTimeframes(ctx context.Context) ([]model.Tim
 	}
 
 	return result, nil
-}
-
-// GetTimeframeByID retrieves a timeframe by name (used as ID)
-func (r *TimeframeRepository) GetTimeframeByID(ctx context.Context, id int) (*model.Timeframe, error) {
-	timeframes, err := r.GetAllTimeframes(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	for _, tf := range timeframes {
-		if tf.ID == id {
-			return &tf, nil
-		}
-	}
-
-	return nil, sql.ErrNoRows
-}
-
-// GetTimeframeByName retrieves a timeframe by name
-func (r *TimeframeRepository) GetTimeframeByName(ctx context.Context, name string) (*model.Timeframe, error) {
-	timeframes, err := r.GetAllTimeframes(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	for _, tf := range timeframes {
-		if tf.Name == name {
-			return &tf, nil
-		}
-	}
-
-	return nil, sql.ErrNoRows
 }
 
 // ValidateTimeframe checks if a timeframe is valid

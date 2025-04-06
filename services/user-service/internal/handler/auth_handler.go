@@ -2,6 +2,7 @@ package handler
 
 import (
 	"net/http"
+	"strings"
 
 	"services/user-service/internal/model"
 	"services/user-service/internal/service"
@@ -65,13 +66,18 @@ func (h *AuthHandler) Login(c *gin.Context) {
 // Logout handles user logout
 // POST /api/v1/auth/logout
 func (h *AuthHandler) Logout(c *gin.Context) {
-	userID, exists := c.Get("userID")
-	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Not authenticated"})
+	// Get the refresh token from the request body
+	var request struct {
+		RefreshToken string `json:"refresh_token" binding:"required"`
+	}
+
+	if err := c.ShouldBindJSON(&request); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Refresh token is required"})
 		return
 	}
 
-	err := h.authService.Logout(c.Request.Context(), userID.(int))
+	// Invalidate the refresh token
+	err := h.authService.Logout(c.Request.Context(), request.RefreshToken)
 	if err != nil {
 		h.logger.Error("logout failed", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to logout"})
@@ -79,6 +85,28 @@ func (h *AuthHandler) Logout(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "Successfully logged out"})
+}
+
+// LogoutAll handles logging out all devices for a user
+// POST /api/v1/auth/logout-all
+func (h *AuthHandler) LogoutAll(c *gin.Context) {
+	userID, exists := c.Get("userID")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Not authenticated"})
+		return
+	}
+
+	count, err := h.authService.LogoutAll(c.Request.Context(), userID.(int))
+	if err != nil {
+		h.logger.Error("logout all failed", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to logout from all devices"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message":       "Successfully logged out from all devices",
+		"session_count": count,
+	})
 }
 
 // Validate handles token validation
@@ -100,9 +128,7 @@ func (h *AuthHandler) Validate(c *gin.Context) {
 // RefreshToken handles refreshing access tokens
 // POST /api/v1/auth/refresh-token
 func (h *AuthHandler) RefreshToken(c *gin.Context) {
-	var request struct {
-		RefreshToken string `json:"refresh_token" binding:"required"`
-	}
+	var request model.RefreshRequest
 	if err := c.ShouldBindJSON(&request); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -116,4 +142,19 @@ func (h *AuthHandler) RefreshToken(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, response)
+}
+
+// AuthHeader extracts the token from the Authorization header
+func AuthHeader(c *gin.Context) (string, error) {
+	authHeader := c.GetHeader("Authorization")
+	if authHeader == "" {
+		return "", nil
+	}
+
+	parts := strings.SplitN(authHeader, " ", 2)
+	if len(parts) != 2 || parts[0] != "Bearer" {
+		return "", nil
+	}
+
+	return parts[1], nil
 }

@@ -13,22 +13,22 @@ import (
 
 // BinanceHandler handles Binance API related HTTP requests
 type BinanceHandler struct {
-	marketDataService *service.MarketDataService
-	logger            *zap.Logger
+	binanceService *service.BinanceService
+	logger         *zap.Logger
 }
 
 // NewBinanceHandler creates a new Binance handler
-func NewBinanceHandler(marketDataService *service.MarketDataService, logger *zap.Logger) *BinanceHandler {
+func NewBinanceHandler(binanceService *service.BinanceService, logger *zap.Logger) *BinanceHandler {
 	return &BinanceHandler{
-		marketDataService: marketDataService,
-		logger:            logger,
+		binanceService: binanceService,
+		logger:         logger,
 	}
 }
 
 // GetAvailableSymbols handles retrieving all available symbols from Binance
 // GET /api/v1/binance/symbols
 func (h *BinanceHandler) GetAvailableSymbols(c *gin.Context) {
-	symbols, err := h.marketDataService.GetBinanceSymbols(c.Request.Context())
+	symbols, err := h.binanceService.GetAvailableSymbols(c.Request.Context())
 	if err != nil {
 		h.logger.Error("Failed to get available symbols from Binance", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get symbols from Binance"})
@@ -44,7 +44,7 @@ func (h *BinanceHandler) CheckSymbolStatus(c *gin.Context) {
 	symbol := c.Param("symbol")
 	timeframe := c.DefaultQuery("timeframe", "1h")
 
-	status, err := h.marketDataService.CheckSymbolDataStatus(c.Request.Context(), symbol, timeframe)
+	status, err := h.binanceService.CheckSymbolStatus(c.Request.Context(), symbol, timeframe)
 	if err != nil {
 		h.logger.Error("Failed to check symbol status",
 			zap.Error(err),
@@ -72,7 +72,7 @@ func (h *BinanceHandler) InitiateDataDownload(c *gin.Context) {
 		return
 	}
 
-	jobID, err := h.marketDataService.StartBinanceDataDownload(c.Request.Context(), &request)
+	jobID, err := h.binanceService.InitiateDataDownload(c.Request.Context(), &request)
 	if err != nil {
 		h.logger.Error("Failed to start Binance data download",
 			zap.Error(err),
@@ -98,7 +98,7 @@ func (h *BinanceHandler) GetDownloadStatus(c *gin.Context) {
 		return
 	}
 
-	status, err := h.marketDataService.GetBinanceDownloadStatus(c.Request.Context(), id)
+	status, err := h.binanceService.GetDownloadStatus(c.Request.Context(), id)
 	if err != nil {
 		h.logger.Error("Failed to get download status", zap.Error(err), zap.Int("jobID", id))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get download status"})
@@ -116,7 +116,7 @@ func (h *BinanceHandler) GetDownloadStatus(c *gin.Context) {
 // GetActiveDownloads handles retrieving all active download jobs
 // GET /api/v1/binance/downloads/active
 func (h *BinanceHandler) GetActiveDownloads(c *gin.Context) {
-	jobs, err := h.marketDataService.GetActiveBinanceDownloads(c.Request.Context())
+	jobs, err := h.binanceService.GetActiveDownloads(c.Request.Context())
 	if err != nil {
 		h.logger.Error("Failed to get active downloads", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get active downloads"})
@@ -136,7 +136,7 @@ func (h *BinanceHandler) CancelDownload(c *gin.Context) {
 		return
 	}
 
-	success, err := h.marketDataService.CancelBinanceDownload(c.Request.Context(), id)
+	success, err := h.binanceService.CancelDownload(c.Request.Context(), id)
 	if err != nil {
 		h.logger.Error("Failed to cancel download", zap.Error(err), zap.Int("jobID", id))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to cancel download"})

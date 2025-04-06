@@ -1,4 +1,3 @@
-// internal/handler/market_data_handler.go
 package handler
 
 import (
@@ -143,11 +142,6 @@ func (h *MarketDataHandler) GetAssetTypes(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, assetTypes)
-}
-
-// GetMarketDataService returns the market data service for use by other handlers
-func (h *MarketDataHandler) GetMarketDataService() *service.MarketDataService {
-	return h.marketDataService
 }
 
 // GetExchanges handles retrieving available exchanges

@@ -11,7 +11,7 @@ import (
 	"go.uber.org/zap"
 )
 
-// UserHandler handles user requests
+// UserHandler handles user-related HTTP requests
 type UserHandler struct {
 	userService *service.UserService
 	logger      *zap.Logger
@@ -72,26 +72,6 @@ func (h *UserHandler) UpdateCurrentUser(c *gin.Context) {
 	c.JSON(http.StatusOK, user)
 }
 
-// ChangePassword handles changing user's password
-// PUT /api/v1/users/me/password
-func (h *UserHandler) ChangePassword(c *gin.Context) {
-	var request model.UserChangePassword
-	if err := c.ShouldBindJSON(&request); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	userID, _ := c.Get("userID")
-	err := h.userService.ChangePassword(c.Request.Context(), userID.(int), &request)
-	if err != nil {
-		h.logger.Debug("password change failed", zap.Error(err))
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	c.JSON(http.StatusNoContent, nil)
-}
-
 // DeleteCurrentUser handles deleting the current user (deactivating)
 // DELETE /api/v1/users/me
 func (h *UserHandler) DeleteCurrentUser(c *gin.Context) {
@@ -105,49 +85,6 @@ func (h *UserHandler) DeleteCurrentUser(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "User successfully deactivated"})
-}
-
-// GetUserPreferences handles fetching user preferences
-// GET /api/v1/users/me/preferences
-func (h *UserHandler) GetUserPreferences(c *gin.Context) {
-	userID, _ := c.Get("userID")
-
-	preferences, err := h.userService.GetPreferences(c.Request.Context(), userID.(int))
-	if err != nil {
-		h.logger.Error("failed to get user preferences", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get preferences"})
-		return
-	}
-
-	c.JSON(http.StatusOK, preferences)
-}
-
-// UpdateUserPreferences handles updating user preferences
-// PUT /api/v1/users/me/preferences
-func (h *UserHandler) UpdateUserPreferences(c *gin.Context) {
-	var request model.PreferencesUpdate
-	if err := c.ShouldBindJSON(&request); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	userID, _ := c.Get("userID")
-	err := h.userService.UpdatePreferences(c.Request.Context(), userID.(int), &request)
-	if err != nil {
-		h.logger.Error("failed to update preferences", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update preferences"})
-		return
-	}
-
-	// Return updated preferences
-	preferences, err := h.userService.GetPreferences(c.Request.Context(), userID.(int))
-	if err != nil {
-		h.logger.Error("failed to get updated preferences", zap.Error(err))
-		c.JSON(http.StatusOK, gin.H{"message": "Preferences updated successfully"})
-		return
-	}
-
-	c.JSON(http.StatusOK, preferences)
 }
 
 // GetUserByID handles fetching a user by ID (admin only)
@@ -232,7 +169,8 @@ func (h *UserHandler) ListUsers(c *gin.Context) {
 	})
 }
 
-// GET /api/v1/admin/users/:id/roles
+// GetUserRoles gets a user's roles (admin only)
+// GET /api/v1/admin/users/{id}/roles
 func (h *UserHandler) GetUserRoles(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.Atoi(idStr)
@@ -241,20 +179,14 @@ func (h *UserHandler) GetUserRoles(c *gin.Context) {
 		return
 	}
 
-	user, err := h.userService.GetByID(c.Request.Context(), id)
+	role, err := h.userService.GetRole(c.Request.Context(), id)
 	if err != nil {
-		h.logger.Error("failed to get user", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get user"})
+		h.logger.Error("failed to get user role", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get user role"})
 		return
 	}
 
-	if user == nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "User not found"})
-		return
-	}
-
-	// Return the user's role in an array format as expected by the client
 	c.JSON(http.StatusOK, gin.H{
-		"roles": []string{user.Role},
+		"roles": []string{role},
 	})
 }

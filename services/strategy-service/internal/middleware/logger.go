@@ -1,4 +1,3 @@
-// services/strategy-service/internal/middleware/logger.go
 package middleware
 
 import (

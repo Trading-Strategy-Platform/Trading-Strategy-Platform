@@ -1,4 +1,3 @@
-// internal/service/auth_service.go
 package service
 
 import (
@@ -18,20 +17,27 @@ import (
 // AuthService handles authentication and token generation
 type AuthService struct {
 	userRepo *repository.UserRepository
+	authRepo *repository.AuthRepository
 	cfg      *config.Config
 	logger   *zap.Logger
 }
 
 // NewAuthService creates a new authentication service
-func NewAuthService(userRepo *repository.UserRepository, cfg *config.Config, logger *zap.Logger) *AuthService {
+func NewAuthService(
+	userRepo *repository.UserRepository,
+	authRepo *repository.AuthRepository,
+	cfg *config.Config,
+	logger *zap.Logger,
+) *AuthService {
 	return &AuthService{
 		userRepo: userRepo,
+		authRepo: authRepo,
 		cfg:      cfg,
 		logger:   logger,
 	}
 }
 
-// Register creates a new user account using the create_user database function
+// Register creates a new user account
 func (s *AuthService) Register(ctx context.Context, userCreate *model.UserCreate) (*model.TokenResponse, error) {
 	// Check if email already exists
 	existingUser, err := s.userRepo.GetByEmail(ctx, userCreate.Email)
@@ -73,7 +79,7 @@ func (s *AuthService) Register(ctx context.Context, userCreate *model.UserCreate
 	}
 
 	// Update last login time
-	if err := s.userRepo.UpdateLastLogin(ctx, userID); err != nil {
+	if err := s.authRepo.UpdateLastLogin(ctx, userID); err != nil {
 		s.logger.Warn("failed to update last login", zap.Error(err), zap.Int("userID", userID))
 	}
 
@@ -113,8 +119,16 @@ func (s *AuthService) Login(ctx context.Context, login *model.UserLogin) (*model
 		return nil, err
 	}
 
+	// Store session info
+	ip := ""
+	ua := ""
+	_, err = s.authRepo.CreateUserSession(ctx, user.ID, refreshToken, expiresAt, ip, ua)
+	if err != nil {
+		s.logger.Warn("failed to create user session", zap.Error(err))
+	}
+
 	// Update last login time
-	if err := s.userRepo.UpdateLastLogin(ctx, user.ID); err != nil {
+	if err := s.authRepo.UpdateLastLogin(ctx, user.ID); err != nil {
 		s.logger.Warn("failed to update last login", zap.Error(err), zap.Int("userID", user.ID))
 	}
 
@@ -159,6 +173,15 @@ func (s *AuthService) RefreshToken(ctx context.Context, refreshToken string) (*m
 	}
 	userID := int(userIDFloat)
 
+	// Check if session exists
+	session, err := s.authRepo.GetUserSession(ctx, refreshToken)
+	if err != nil {
+		return nil, err
+	}
+	if session == nil {
+		return nil, errors.New("session not found or expired")
+	}
+
 	// Get user
 	user, err := s.userRepo.GetByID(ctx, userID)
 	if err != nil {
@@ -174,6 +197,17 @@ func (s *AuthService) RefreshToken(ctx context.Context, refreshToken string) (*m
 		return nil, err
 	}
 
+	// Delete old session and create new one
+	_, err = s.authRepo.DeleteUserSession(ctx, refreshToken)
+	if err != nil {
+		s.logger.Warn("failed to delete old session", zap.Error(err))
+	}
+
+	// Store session info
+	ip := ""
+	ua := ""
+	_, err = s.authRepo.CreateUserSession(ctx, user.ID, refreshToken, expiresAt, ip, ua)
+
 	return &model.TokenResponse{
 		AccessToken:  accessToken,
 		RefreshToken: newRefreshToken,
@@ -183,13 +217,61 @@ func (s *AuthService) RefreshToken(ctx context.Context, refreshToken string) (*m
 }
 
 // Logout invalidates a user's session
-// Note: In a stateless JWT setup, we can't really "invalidate" a token.
-// This would require a token blacklist, typically stored in Redis.
-// For this example, we'll just return success.
-func (s *AuthService) Logout(ctx context.Context, userID int) error {
-	// In a production environment, you would add the token to a blacklist
-	// or use a database-based session strategy.
-	s.logger.Info("user logged out", zap.Int("userID", userID))
+func (s *AuthService) Logout(ctx context.Context, token string) error {
+	success, err := s.authRepo.DeleteUserSession(ctx, token)
+	if err != nil {
+		return err
+	}
+	if !success {
+		return errors.New("session not found")
+	}
+	return nil
+}
+
+// LogoutAll invalidates all of a user's sessions
+func (s *AuthService) LogoutAll(ctx context.Context, userID int) (int, error) {
+	return s.authRepo.DeleteUserSessions(ctx, userID)
+}
+
+// ChangePassword changes a user's password
+func (s *AuthService) ChangePassword(ctx context.Context, id int, change *model.UserChangePassword) error {
+	// Get password hash to verify current password
+	passwordHash, err := s.authRepo.GetUserPasswordByID(ctx, id)
+	if err != nil {
+		return err
+	}
+	if passwordHash == "" {
+		return errors.New("user not found")
+	}
+
+	// Verify current password
+	if err := bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte(change.CurrentPassword)); err != nil {
+		return errors.New("current password is incorrect")
+	}
+
+	// Hash new password
+	newHash, err := bcrypt.GenerateFromPassword([]byte(change.NewPassword), bcrypt.DefaultCost)
+	if err != nil {
+		s.logger.Error("failed to hash password", zap.Error(err))
+		return errors.New("failed to process new password")
+	}
+
+	// Update password in database
+	success, err := s.authRepo.UpdateUserPassword(ctx, id, string(newHash))
+	if err != nil {
+		return err
+	}
+
+	if !success {
+		return errors.New("failed to update password")
+	}
+
+	// Invalidate all sessions to force re-login with new password
+	_, err = s.authRepo.DeleteUserSessions(ctx, id)
+	if err != nil {
+		s.logger.Warn("failed to delete user sessions after password change", zap.Error(err))
+	}
+
 	return nil
 }
 
@@ -267,4 +349,9 @@ func (s *AuthService) ValidateToken(tokenString string) (int, error) {
 	}
 
 	return int(userIDFloat), nil
+}
+
+// ValidateServiceKey validates a service key
+func (s *AuthService) ValidateServiceKey(ctx context.Context, serviceName, keyHash string) (bool, error) {
+	return s.authRepo.ValidateServiceKey(ctx, serviceName, keyHash)
 }

@@ -57,6 +57,7 @@ func main() {
 	// Initialize clients
 	userClient := client.NewUserClient(cfg.UserService.URL, logger)
 	historicalClient := client.NewHistoricalClient(cfg.HistoricalService.URL, logger)
+	mediaClient := client.NewMediaClient(cfg.MediaService.URL, cfg.MediaService.ServiceKey, logger)
 
 	// Initialize services
 	strategyService := service.NewStrategyService(
@@ -86,6 +87,7 @@ func main() {
 	tagHandler := handler.NewTagHandler(tagService, logger)
 	indicatorHandler := handler.NewIndicatorHandler(indicatorService, logger)
 	marketplaceHandler := handler.NewMarketplaceHandler(marketplaceService, logger)
+	thumbnailHandler := handler.NewThumbnailHandler(strategyService, mediaClient, logger)
 
 	// Set up HTTP server with Gin
 	router := setupRouter(
@@ -93,6 +95,7 @@ func main() {
 		tagHandler,
 		indicatorHandler,
 		marketplaceHandler,
+		thumbnailHandler,
 		userClient,
 		logger,
 	)
@@ -188,6 +191,7 @@ func setupRouter(
 	tagHandler *handler.TagHandler,
 	indicatorHandler *handler.IndicatorHandler,
 	marketplaceHandler *handler.MarketplaceHandler,
+	thumbnailHandler *handler.ThumbnailHandler,
 	userClient *client.UserClient,
 	logger *zap.Logger,
 ) *gin.Engine {
@@ -216,6 +220,7 @@ func setupRouter(
 			strategies.DELETE("/:id", strategyHandler.DeleteStrategy)                  // DELETE /api/v1/strategies/{id}
 			strategies.GET("/:id/versions", strategyHandler.GetVersions)               // GET /api/v1/strategies/{id}/versions
 			strategies.PUT("/:id/active-version", strategyHandler.UpdateActiveVersion) // PUT /api/v1/strategies/{id}/active-version
+			strategies.POST("/:id/thumbnail", thumbnailHandler.UploadThumbnail)        // POST /api/v1/strategies/{id}/thumbnail
 		}
 
 		// Strategy tags routes

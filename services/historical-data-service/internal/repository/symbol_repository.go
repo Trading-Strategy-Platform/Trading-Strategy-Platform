@@ -72,7 +72,6 @@ func (r *SymbolRepository) GetSymbolsByFilter(ctx context.Context, searchTerm, a
 }
 
 // GetSymbolByID retrieves a symbol by ID
-// This uses a direct query since there's no specific function in the database for getting by ID
 func (r *SymbolRepository) GetSymbolByID(ctx context.Context, id int) (*model.Symbol, error) {
 	query := `
 		SELECT 
@@ -194,4 +193,20 @@ func (r *SymbolRepository) GetExchanges(ctx context.Context) ([]struct {
 	}
 
 	return exchanges, nil
+}
+
+// UpdateDataAvailability updates the data_available flag for a symbol
+func (r *SymbolRepository) UpdateDataAvailability(ctx context.Context, symbolID int, available bool) (bool, error) {
+	query := `SELECT update_symbol_data_availability($1, $2)`
+
+	var success bool
+	err := r.db.GetContext(ctx, &success, query, symbolID, available)
+	if err != nil {
+		r.logger.Error("Failed to update symbol data availability",
+			zap.Error(err),
+			zap.Int("symbolID", symbolID))
+		return false, err
+	}
+
+	return success, nil
 }

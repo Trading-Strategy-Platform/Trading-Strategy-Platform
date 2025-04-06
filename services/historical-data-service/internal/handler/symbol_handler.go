@@ -26,6 +26,7 @@ func NewSymbolHandler(symbolService *service.SymbolService, logger *zap.Logger) 
 }
 
 // GetAllSymbols handles retrieving all symbols
+// GET /api/v1/symbols
 func (h *SymbolHandler) GetAllSymbols(c *gin.Context) {
 	// Get query parameters for filtering
 	searchTerm := c.Query("search")
@@ -62,6 +63,7 @@ func (h *SymbolHandler) GetAllSymbols(c *gin.Context) {
 }
 
 // GetSymbol handles retrieving a symbol by ID
+// GET /api/v1/symbols/:id
 func (h *SymbolHandler) GetSymbol(c *gin.Context) {
 	// Parse path parameter
 	idStr := c.Param("id")
@@ -88,6 +90,7 @@ func (h *SymbolHandler) GetSymbol(c *gin.Context) {
 }
 
 // CreateSymbol handles creating a new symbol
+// POST /api/v1/symbols
 func (h *SymbolHandler) CreateSymbol(c *gin.Context) {
 	var symbol model.Symbol
 	if err := c.ShouldBindJSON(&symbol); err != nil {
@@ -110,6 +113,7 @@ func (h *SymbolHandler) CreateSymbol(c *gin.Context) {
 }
 
 // UpdateSymbol handles updating an existing symbol
+// PUT /api/v1/symbols/:id
 func (h *SymbolHandler) UpdateSymbol(c *gin.Context) {
 	// Parse path parameter
 	idStr := c.Param("id")
@@ -145,6 +149,7 @@ func (h *SymbolHandler) UpdateSymbol(c *gin.Context) {
 }
 
 // DeleteSymbol handles deleting a symbol (marking as inactive)
+// DELETE /api/v1/symbols/:id
 func (h *SymbolHandler) DeleteSymbol(c *gin.Context) {
 	// Parse path parameter
 	idStr := c.Param("id")
@@ -168,56 +173,4 @@ func (h *SymbolHandler) DeleteSymbol(c *gin.Context) {
 	}
 
 	c.Status(http.StatusNoContent)
-}
-
-// TimeframeHandler handles timeframe HTTP requests
-type TimeframeHandler struct {
-	timeframeService *service.TimeframeService
-	logger           *zap.Logger
-}
-
-// NewTimeframeHandler creates a new timeframe handler
-func NewTimeframeHandler(timeframeService *service.TimeframeService, logger *zap.Logger) *TimeframeHandler {
-	return &TimeframeHandler{
-		timeframeService: timeframeService,
-		logger:           logger,
-	}
-}
-
-// GetAllTimeframes handles retrieving all timeframes
-func (h *TimeframeHandler) GetAllTimeframes(c *gin.Context) {
-	timeframes, err := h.timeframeService.GetAllTimeframes(c.Request.Context())
-	if err != nil {
-		h.logger.Error("Failed to get all timeframes", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve timeframes"})
-		return
-	}
-
-	c.JSON(http.StatusOK, timeframes)
-}
-
-// GetTimeframe handles retrieving a timeframe by ID
-func (h *TimeframeHandler) GetTimeframe(c *gin.Context) {
-	// Parse path parameter
-	idStr := c.Param("id")
-	id, err := strconv.Atoi(idStr)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid timeframe ID"})
-		return
-	}
-
-	// Get timeframe
-	timeframe, err := h.timeframeService.GetTimeframeByID(c.Request.Context(), id)
-	if err != nil {
-		h.logger.Error("Failed to get timeframe", zap.Error(err), zap.Int("id", id))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve timeframe"})
-		return
-	}
-
-	if timeframe == nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Timeframe not found"})
-		return
-	}
-
-	c.JSON(http.StatusOK, timeframe)
 }

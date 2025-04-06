@@ -46,18 +46,30 @@ func main() {
 
 	// Create repositories
 	userRepo := repository.NewUserRepository(db, logger)
+	authRepo := repository.NewAuthRepository(db, logger)
 	notificationRepo := repository.NewNotificationRepository(db, logger)
-	preferencesRepo := repository.NewPreferencesRepository(db, logger)
+	preferenceRepo := repository.NewPreferenceRepository(db, logger)
+	profileRepo := repository.NewProfileRepository(db, logger)
 
 	// Create clients
 	mediaClient := client.NewMediaClient(cfg.Media.URL, cfg.Media.ServiceKey, logger)
 
 	// Create services
-	authService := service.NewAuthService(userRepo, cfg, logger)
-	userService := service.NewUserService(userRepo, notificationRepo, preferencesRepo, logger)
+	authService := service.NewAuthService(userRepo, authRepo, cfg, logger)
+	userService := service.NewUserService(userRepo, logger)
+	notificationService := service.NewNotificationService(notificationRepo, userRepo, logger)
+	preferenceService := service.NewPreferenceService(preferenceRepo, userRepo, logger)
+	profileService := service.NewProfileService(profileRepo, userRepo, mediaClient, logger)
 
 	// Create HTTP server
-	router := setupRouter(authService, userService, mediaClient, logger)
+	router := setupRouter(
+		authService,
+		userService,
+		notificationService,
+		preferenceService,
+		profileService,
+		logger,
+	)
 
 	srv := &http.Server{
 		Addr:         ":" + cfg.Server.Port,
@@ -148,7 +160,9 @@ func connectToDB(dbConfig config.DatabaseConfig) (*sqlx.DB, error) {
 func setupRouter(
 	authService *service.AuthService,
 	userService *service.UserService,
-	mediaClient *client.MediaClient,
+	notificationService *service.NotificationService,
+	preferenceService *service.PreferenceService,
+	profileService *service.ProfileService,
 	logger *zap.Logger,
 ) *gin.Engine {
 	router := gin.New()
@@ -173,10 +187,11 @@ func setupRouter(
 			auth.POST("/login", authHandler.Login)
 			auth.POST("/refresh-token", authHandler.RefreshToken)
 
-			// Protected logout route
+			// Protected auth routes
 			authProtected := auth.Group("")
 			authProtected.Use(middleware.AuthMiddleware(authService, logger))
 			authProtected.POST("/logout", authHandler.Logout)
+			authProtected.POST("/logout-all", authHandler.LogoutAll)
 			authProtected.GET("/validate", authHandler.Validate)
 		}
 
@@ -190,23 +205,30 @@ func setupRouter(
 			userHandler := handler.NewUserHandler(userService, logger)
 			users.GET("/me", userHandler.GetCurrentUser)
 			users.PUT("/me", userHandler.UpdateCurrentUser)
-			users.PUT("/me/password", userHandler.ChangePassword)
 			users.DELETE("/me", userHandler.DeleteCurrentUser)
 
+			// Password management
+			passwordHandler := handler.NewPasswordHandler(authService, logger)
+			users.PUT("/me/password", passwordHandler.ChangePassword)
+
 			// User preferences handlers
-			users.GET("/me/preferences", userHandler.GetUserPreferences)
-			users.PUT("/me/preferences", userHandler.UpdateUserPreferences)
+			prefHandler := handler.NewPreferenceHandler(preferenceService, logger)
+			users.GET("/me/preferences", prefHandler.GetUserPreferences)
+			users.PUT("/me/preferences", prefHandler.UpdateUserPreferences)
+			users.POST("/me/preferences/reset", prefHandler.ResetUserPreferences)
 
 			// User notifications handlers
-			notificationHandler := handler.NewNotificationHandler(userService, logger)
-			users.GET("/me/notifications", notificationHandler.GetNotifications)
-			users.GET("/me/notifications/count", notificationHandler.GetUnreadCount)
-			users.PUT("/me/notifications/:id/read", notificationHandler.MarkNotificationAsRead)
-			users.PUT("/me/notifications/read-all", notificationHandler.MarkAllAsRead)
+			notifHandler := handler.NewNotificationHandler(notificationService, logger)
+			users.GET("/me/notifications", notifHandler.GetNotifications)
+			users.GET("/me/notifications/count", notifHandler.GetUnreadCount)
+			users.PUT("/me/notifications/:id/read", notifHandler.MarkNotificationAsRead)
+			users.PUT("/me/notifications/read-all", notifHandler.MarkAllAsRead)
 
-			// Profile photo handler
-			profilePhotoHandler := handler.NewProfilePhotoHandler(userService, mediaClient, logger)
-			users.POST("/me/profile-photo", profilePhotoHandler.UploadProfilePhoto)
+			// Profile photo handlers
+			profileHandler := handler.NewProfileHandler(profileService, logger)
+			users.GET("/me/profile-photo", profileHandler.GetProfilePhoto)
+			users.POST("/me/profile-photo", profileHandler.UploadProfilePhoto)
+			users.DELETE("/me/profile-photo", profileHandler.DeleteProfilePhoto)
 		}
 
 		// Admin routes (protected with role check)
@@ -215,12 +237,24 @@ func setupRouter(
 			admin.Use(middleware.AuthMiddleware(authService, logger))
 			admin.Use(middleware.RequireRole(userService, "admin"))
 
+			// User management (admin)
 			userHandler := handler.NewUserHandler(userService, logger)
 			admin.GET("/users", userHandler.ListUsers)
 			admin.GET("/users/:id", userHandler.GetUserByID)
 			admin.PUT("/users/:id", userHandler.UpdateUser)
-			admin.GET("/users/:id/roles", userHandler.GetUserRoles) // New roles endpoint
+			admin.GET("/users/:id/roles", userHandler.GetUserRoles)
+
+			// Notification management (admin)
+			notifHandler := handler.NewNotificationHandler(notificationService, logger)
+			admin.POST("/notifications", notifHandler.CreateNotification)
 		}
+
+		// // Service-to-service API
+		// service := v1.Group("/service")
+		// {
+		// 	// TODO: Implement service-to-service authentication middleware
+		// 	// This would validate the service key in the request header
+		// }
 	}
 
 	return router

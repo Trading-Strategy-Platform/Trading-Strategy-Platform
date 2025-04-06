@@ -1,9 +1,7 @@
-// internal/repository/market_data_repository.go
 package repository
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"time"
 
@@ -87,37 +85,10 @@ func (r *MarketDataRepository) GetCandles(
 
 // GetDataRanges returns all available data ranges for a symbol and timeframe
 func (r *MarketDataRepository) GetDataRanges(ctx context.Context, symbolID int, timeframe string) ([]model.DateRange, error) {
-	// Query to find continuous blocks of data
-	query := `
-		WITH dates AS (
-			SELECT 
-				time,
-				LEAD(time) OVER (ORDER BY time) as next_time
-			FROM candles
-			WHERE symbol_id = $1
-			ORDER BY time
-		)
-		SELECT 
-			MIN(time) as start_date,
-			MAX(time) as end_date
-		FROM (
-			SELECT 
-				time,
-				next_time,
-				CASE WHEN next_time IS NULL OR next_time > time + INTERVAL '1 day' THEN 1 ELSE 0 END as is_gap,
-				SUM(CASE WHEN next_time IS NULL OR next_time > time + INTERVAL '1 day' THEN 1 ELSE 0 END) OVER (ORDER BY time) as group_id
-			FROM dates
-		) t
-		GROUP BY group_id
-		ORDER BY start_date
-	`
+	query := `SELECT * FROM get_symbol_data_ranges($1, $2)`
 
-	var ranges []struct {
-		StartDate time.Time `db:"start_date"`
-		EndDate   time.Time `db:"end_date"`
-	}
-
-	err := r.db.SelectContext(ctx, &ranges, query, symbolID)
+	var ranges []model.DateRange
+	err := r.db.SelectContext(ctx, &ranges, query, symbolID, timeframe)
 	if err != nil {
 		r.logger.Error("Failed to get data ranges",
 			zap.Error(err),
@@ -126,134 +97,7 @@ func (r *MarketDataRepository) GetDataRanges(ctx context.Context, symbolID int, 
 		return nil, err
 	}
 
-	// Convert to the model format
-	result := make([]model.DateRange, len(ranges))
-	for i, r := range ranges {
-		result[i] = model.DateRange{
-			Start: r.StartDate,
-			End:   r.EndDate,
-		}
-	}
-
-	return result, nil
-}
-
-// CreateBinanceDownloadJob creates a new job for downloading data from Binance
-func (r *MarketDataRepository) CreateBinanceDownloadJob(
-	ctx context.Context,
-	symbolID int,
-	symbol string,
-	timeframe string,
-	startDate time.Time,
-	endDate time.Time,
-) (int, error) {
-	query := `
-		INSERT INTO binance_download_jobs (
-			symbol_id, 
-			symbol, 
-			timeframe, 
-			start_date, 
-			end_date, 
-			status, 
-			progress, 
-			created_at, 
-			updated_at
-		)
-		VALUES ($1, $2, $3, $4, $5, 'pending', 0, NOW(), NOW())
-		RETURNING id
-	`
-
-	var id int
-	err := r.db.GetContext(
-		ctx,
-		&id,
-		query,
-		symbolID,
-		symbol,
-		timeframe,
-		startDate,
-		endDate,
-	)
-
-	if err != nil {
-		r.logger.Error("Failed to create Binance download job",
-			zap.Error(err),
-			zap.Int("symbolID", symbolID),
-			zap.String("symbol", symbol),
-			zap.String("timeframe", timeframe))
-		return 0, err
-	}
-
-	return id, nil
-}
-
-// GetBinanceDownloadJob gets a Binance download job by ID
-func (r *MarketDataRepository) GetBinanceDownloadJob(ctx context.Context, jobID int) (*model.BinanceDownloadJob, error) {
-	query := `
-		SELECT * FROM binance_download_jobs WHERE id = $1
-	`
-
-	var job model.BinanceDownloadJob
-	err := r.db.GetContext(ctx, &job, query, jobID)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, nil
-		}
-		r.logger.Error("Failed to get Binance download job",
-			zap.Error(err),
-			zap.Int("jobID", jobID))
-		return nil, err
-	}
-
-	return &job, nil
-}
-
-// UpdateBinanceDownloadJobStatus updates the status of a Binance download job
-func (r *MarketDataRepository) UpdateBinanceDownloadJobStatus(
-	ctx context.Context,
-	jobID int,
-	status string,
-	progress float64,
-	errorMsg string,
-) error {
-	query := `
-		UPDATE binance_download_jobs
-		SET 
-			status = $2, 
-			progress = $3, 
-			error = $4, 
-			updated_at = NOW()
-		WHERE id = $1
-	`
-
-	_, err := r.db.ExecContext(ctx, query, jobID, status, progress, errorMsg)
-	if err != nil {
-		r.logger.Error("Failed to update Binance download job status",
-			zap.Error(err),
-			zap.Int("jobID", jobID),
-			zap.String("status", status))
-		return err
-	}
-
-	return nil
-}
-
-// GetActiveBinanceDownloadJobs gets all active Binance download jobs
-func (r *MarketDataRepository) GetActiveBinanceDownloadJobs(ctx context.Context) ([]model.BinanceDownloadJob, error) {
-	query := `
-		SELECT * FROM binance_download_jobs
-		WHERE status IN ('pending', 'in_progress')
-		ORDER BY created_at DESC
-	`
-
-	var jobs []model.BinanceDownloadJob
-	err := r.db.SelectContext(ctx, &jobs, query)
-	if err != nil {
-		r.logger.Error("Failed to get active Binance download jobs", zap.Error(err))
-		return nil, err
-	}
-
-	return jobs, nil
+	return ranges, nil
 }
 
 // CalculateMissingDataRanges calculates date ranges that are missing from our database
@@ -338,7 +182,8 @@ func (r *MarketDataRepository) HasData(
 	timeframe string,
 ) (bool, error) {
 	// Get a single candle to check if data exists
-	candles, err := r.GetCandles(ctx, symbolID, timeframe, nil, nil, &[]int{1}[0])
+	limit := 1
+	candles, err := r.GetCandles(ctx, symbolID, timeframe, nil, nil, &limit)
 	if err != nil {
 		r.logger.Error("Failed to check if market data exists",
 			zap.Error(err),
@@ -359,8 +204,8 @@ func (r *MarketDataRepository) GetDataRange(
 	// Using get_candles with extreme dates to find boundaries
 	query := `
 		SELECT
-			MIN(time) as start_date,
-			MAX(time) as end_date
+			MIN(candle_time) as start_date,
+			MAX(candle_time) as end_date
 		FROM (
 			SELECT * FROM get_candles($1, $2, $3, $4, NULL)
 		) as candles
@@ -385,27 +230,4 @@ func (r *MarketDataRepository) GetDataRange(
 	}
 
 	return result.StartDate, result.EndDate, nil
-}
-
-// UpdateSymbolDataAvailability updates the data_available flag for a symbol
-func (r *MarketDataRepository) UpdateSymbolDataAvailability(
-	ctx context.Context,
-	symbolID int,
-	available bool,
-) error {
-	query := `
-		UPDATE symbols
-		SET data_available = $1, updated_at = CURRENT_TIMESTAMP
-		WHERE id = $2
-	`
-
-	_, err := r.db.ExecContext(ctx, query, available, symbolID)
-	if err != nil {
-		r.logger.Error("Failed to update symbol data availability",
-			zap.Error(err),
-			zap.Int("symbolID", symbolID))
-		return err
-	}
-
-	return nil
 }

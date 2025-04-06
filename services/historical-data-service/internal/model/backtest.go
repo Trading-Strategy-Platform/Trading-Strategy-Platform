@@ -7,56 +7,11 @@ import (
 	"time"
 )
 
-// Candle represents a price candle returned by the get_candles function
-type Candle struct {
-	SymbolID int       `json:"symbol_id" db:"symbol_id"`
-	Time     time.Time `json:"time" db:"time"`
-	Open     float64   `json:"open" db:"open"`
-	High     float64   `json:"high" db:"high"`
-	Low      float64   `json:"low" db:"low"`
-	Close    float64   `json:"close" db:"close"`
-	Volume   float64   `json:"volume" db:"volume"`
-}
-
-// CandleBatch represents a batch of candles for database import
-type CandleBatch struct {
-	SymbolID int       `json:"symbol_id"`
-	Time     time.Time `json:"time"`
-	Open     float64   `json:"open"`
-	High     float64   `json:"high"`
-	Low      float64   `json:"low"`
-	Close    float64   `json:"close"`
-	Volume   float64   `json:"volume"`
-}
-
-// Symbol represents a tradable market symbol
-type Symbol struct {
-	ID            int        `json:"id" db:"id"`
-	Symbol        string     `json:"symbol" db:"symbol"`
-	Name          string     `json:"name" db:"name"`
-	Exchange      string     `json:"exchange" db:"exchange"`
-	AssetType     string     `json:"asset_type" db:"asset_type"`
-	IsActive      bool       `json:"is_active" db:"is_active"`
-	DataAvailable bool       `json:"data_available" db:"data_available"`
-	CreatedAt     time.Time  `json:"created_at" db:"created_at"`
-	UpdatedAt     *time.Time `json:"updated_at,omitempty" db:"updated_at"`
-}
-
-// Timeframe represents a data timeframe (1m, 5m, 1h, 1d, etc)
-type Timeframe struct {
-	ID          int        `json:"id" db:"id"`
-	Name        string     `json:"name" db:"name"`
-	Minutes     int        `json:"minutes" db:"minutes"`
-	DisplayName string     `json:"display_name" db:"display_name"`
-	CreatedAt   time.Time  `json:"created_at" db:"created_at"`
-	UpdatedAt   *time.Time `json:"updated_at,omitempty" db:"updated_at"`
-}
-
 // BacktestSummary represents the summary view of a backtest
 type BacktestSummary struct {
 	BacktestID    int             `json:"backtest_id" db:"backtest_id"`
 	Name          string          `json:"name" db:"name"`
-	StrategyName  string          `json:"strategy_name" db:"strategy_name"`
+	StrategyID    int             `json:"strategy_id" db:"strategy_id"`
 	Date          time.Time       `json:"date" db:"date"`
 	Status        string          `json:"status" db:"status"`
 	SymbolResults json.RawMessage `json:"symbol_results" db:"symbol_results"`
@@ -69,7 +24,6 @@ type BacktestDetails struct {
 	BacktestID      int             `json:"backtest_id" db:"backtest_id"`
 	Name            string          `json:"name" db:"name"`
 	Description     string          `json:"description" db:"description"`
-	StrategyName    string          `json:"strategy_name" db:"strategy_name"`
 	StrategyID      int             `json:"strategy_id" db:"strategy_id"`
 	StrategyVersion int             `json:"strategy_version" db:"strategy_version"`
 	Timeframe       string          `json:"timeframe" db:"timeframe"`
@@ -138,20 +92,4 @@ type BacktestRequest struct {
 	StartDate       time.Time `json:"start_date" binding:"required"`
 	EndDate         time.Time `json:"end_date" binding:"required"`
 	InitialCapital  float64   `json:"initial_capital" binding:"required,min=1"`
-}
-
-// MarketDataQuery represents a query for candle data
-type MarketDataQuery struct {
-	SymbolID  int        `json:"symbol_id" form:"symbol_id" binding:"required"`
-	Timeframe string     `json:"timeframe" form:"timeframe" binding:"required"`
-	StartDate *time.Time `json:"start_date" form:"start_date"`
-	EndDate   *time.Time `json:"end_date" form:"end_date"`
-	Limit     *int       `json:"limit" form:"limit"`
-}
-
-// SymbolFilter represents filter parameters for symbol queries
-type SymbolFilter struct {
-	SearchTerm string `json:"search_term" form:"search_term"`
-	AssetType  string `json:"asset_type" form:"asset_type"`
-	Exchange   string `json:"exchange" form:"exchange"`
 }
