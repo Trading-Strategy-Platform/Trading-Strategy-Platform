@@ -3,11 +3,13 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"time"
 
 	"services/strategy-service/internal/model"
 
 	"github.com/jmoiron/sqlx"
+	"github.com/lib/pq"
 	"go.uber.org/zap"
 )
 
@@ -25,26 +27,25 @@ func NewIndicatorRepository(db *sqlx.DB, logger *zap.Logger) *IndicatorRepositor
 	}
 }
 
-// GetAll retrieves all indicators with optional category filter
-func (r *IndicatorRepository) GetAll(ctx context.Context, category *string, page, limit int) ([]model.TechnicalIndicator, int, error) {
-	var query string
-	var args []interface{}
+// GetAll retrieves all indicators with filtering options
+func (r *IndicatorRepository) GetAll(ctx context.Context, searchTerm string, categories []string, page, limit int) ([]model.TechnicalIndicator, int, error) {
+	// Use the new get_indicators function with enhanced parameters
+	query := `
+        SELECT id, name, description, category, formula, created_at, updated_at 
+        FROM get_indicators($1, $2)
+    `
 
-	// Build query with explicit column selection
-	if category != nil {
-		query = `
-			SELECT id, name, description, category, formula, created_at, updated_at 
-			FROM get_indicators($1::VARCHAR)
-		`
-		args = append(args, *category)
+	var args []interface{}
+	args = append(args, searchTerm) // Can be empty string
+
+	// Convert categories slice to PostgreSQL array
+	if len(categories) > 0 {
+		args = append(args, pq.Array(categories))
 	} else {
-		query = `
-			SELECT id, name, description, category, formula, created_at, updated_at 
-			FROM get_indicators(NULL::VARCHAR)
-		`
+		args = append(args, nil) // NULL for empty categories
 	}
 
-	// Execute query using QueryContext instead of SelectContext
+	// Execute query
 	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		r.logger.Error("Failed to execute get indicators query", zap.Error(err))
@@ -52,13 +53,12 @@ func (r *IndicatorRepository) GetAll(ctx context.Context, category *string, page
 	}
 	defer rows.Close()
 
-	// Manually scan rows into slices
+	// Scan rows into indicator objects
 	var allIndicators []model.TechnicalIndicator
 	for rows.Next() {
 		var indicator model.TechnicalIndicator
 		var updatedAt sql.NullTime
 
-		// Scan row data into variables
 		err := rows.Scan(
 			&indicator.ID,
 			&indicator.Name,
@@ -81,7 +81,6 @@ func (r *IndicatorRepository) GetAll(ctx context.Context, category *string, page
 		allIndicators = append(allIndicators, indicator)
 	}
 
-	// Check for any errors encountered during iteration
 	if err = rows.Err(); err != nil {
 		r.logger.Error("Error iterating indicator rows", zap.Error(err))
 		return nil, 0, err
@@ -105,17 +104,18 @@ func (r *IndicatorRepository) GetAll(ctx context.Context, category *string, page
 	return allIndicators[start:end], total, nil
 }
 
-// GetByID retrieves an indicator by ID
+// GetByID retrieves an indicator by ID using the get_indicator_by_id function
 func (r *IndicatorRepository) GetByID(ctx context.Context, id int) (*model.TechnicalIndicator, error) {
-	// Use explicit column selection to avoid the parameters column
+	// Use the get_indicator_by_id function that includes parameters
 	query := `
-		SELECT id, name, description, category, formula, created_at, updated_at
-		FROM get_indicator_by_id($1)
-	`
+        SELECT id, name, description, category, formula, created_at, updated_at, parameters
+        FROM get_indicator_by_id($1)
+    `
 
 	// Execute query
 	var indicator model.TechnicalIndicator
 	var updatedAt sql.NullTime
+	var parametersJSON []byte // To store the JSON array of parameters
 
 	row := r.db.QueryRowContext(ctx, query, id)
 	err := row.Scan(
@@ -126,6 +126,7 @@ func (r *IndicatorRepository) GetByID(ctx context.Context, id int) (*model.Techn
 		&indicator.Formula,
 		&indicator.CreatedAt,
 		&updatedAt,
+		&parametersJSON,
 	)
 
 	if err != nil {
@@ -139,6 +140,17 @@ func (r *IndicatorRepository) GetByID(ctx context.Context, id int) (*model.Techn
 	// Convert nullable time
 	if updatedAt.Valid {
 		indicator.UpdatedAt = &updatedAt.Time
+	}
+
+	// Parse parameters JSON
+	if parametersJSON != nil {
+		var params []model.IndicatorParameter
+
+		if err := json.Unmarshal(parametersJSON, &params); err != nil {
+			r.logger.Error("Failed to unmarshal parameters JSON", zap.Error(err))
+		} else {
+			indicator.Parameters = params
+		}
 	}
 
 	return &indicator, nil

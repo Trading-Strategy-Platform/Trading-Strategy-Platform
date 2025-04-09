@@ -39,7 +39,10 @@ FROM
     indicators i;
 
 -- Create the get_indicators function
-CREATE OR REPLACE FUNCTION get_indicators(p_category VARCHAR)
+CREATE OR REPLACE FUNCTION get_indicators(
+    p_search VARCHAR,
+    p_categories VARCHAR[]
+)
 RETURNS TABLE (
     id INT,
     name VARCHAR(50),
@@ -86,13 +89,14 @@ BEGIN
     FROM 
         indicators i
     WHERE
-        p_category IS NULL OR i.category = p_category
+        (p_search IS NULL OR i.name ILIKE '%' || p_search || '%' OR i.description ILIKE '%' || p_search || '%')
+        AND (p_categories IS NULL OR array_length(p_categories, 1) IS NULL OR i.category = ANY(p_categories))
     ORDER BY 
         i.name;
 END;
 $$ LANGUAGE plpgsql;
 
--- Get indicator details by ID
+-- Update get_indicator_by_id to be compatible with the new get_indicators function
 CREATE OR REPLACE FUNCTION get_indicator_by_id(p_indicator_id INT)
 RETURNS TABLE (
     id INT,
@@ -114,9 +118,31 @@ BEGIN
         i.formula,
         i.created_at,
         i.updated_at,
-        i.parameters
+        ARRAY(
+            SELECT jsonb_build_object(
+                'id', p.id,
+                'name', p.parameter_name,
+                'type', p.parameter_type,
+                'is_required', p.is_required,
+                'min_value', p.min_value,
+                'max_value', p.max_value,
+                'default_value', p.default_value,
+                'description', p.description,
+                'enum_values', (
+                    SELECT jsonb_agg(jsonb_build_object(
+                        'id', ev.id,
+                        'value', ev.enum_value,
+                        'display_name', ev.display_name
+                    ))
+                    FROM parameter_enum_values ev
+                    WHERE ev.parameter_id = p.id
+                )
+            )
+            FROM indicator_parameters p
+            WHERE p.indicator_id = i.id
+        ) AS parameters
     FROM 
-        v_indicators_with_parameters i
+        indicators i
     WHERE
         i.id = p_indicator_id;
 END;

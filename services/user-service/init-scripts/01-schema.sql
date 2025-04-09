@@ -99,8 +99,8 @@ ALTER TABLE "notifications" ADD FOREIGN KEY ("user_id") REFERENCES "users" ("id"
 
 -- Insert default users
 INSERT INTO users (username, email, password_hash, role, is_active, created_at) VALUES 
-('admin', 'admin@example.com', '$2a$10$G/oAFA62ZzBAEjXTDkMudegfXv5Jm5tjH9T/aO2iVrzgup2RpTswy', 'admin', true, NOW()),
-('user', 'user@example.com', '$2a$10$G/oAFA62ZzBAEjXTDkMudegfXv5Jm5tjH9T/aO2iVrzgup2RpTswy', 'user', true, NOW())
+('admin', 'admin@example.com', '$2a$10$RViVMeSSFklziKBzn8aVyOFGS/nQEfqNSQRg/RAUrgpvmjMc4jtvO', 'admin', true, NOW()),
+('user', 'user@example.com', '$2a$10$RViVMeSSFklziKBzn8aVyOFGS/nQEfqNSQRg/RAUrgpvmjMc4jtvO', 'user', true, NOW())
 ON CONFLICT DO NOTHING;
 
 -- Insert default service keys

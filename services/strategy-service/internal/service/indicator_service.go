@@ -33,7 +33,7 @@ func (s *IndicatorService) GetDB() *sqlx.DB {
 }
 
 // GetAllIndicators retrieves all technical indicators using get_indicators function
-func (s *IndicatorService) GetAllIndicators(ctx context.Context, category *string, page, limit int) ([]model.TechnicalIndicator, int, error) {
+func (s *IndicatorService) GetAllIndicators(ctx context.Context, searchTerm string, categories []string, page, limit int) ([]model.TechnicalIndicator, int, error) {
 	// Validate pagination
 	if page < 1 {
 		page = 1
@@ -42,7 +42,7 @@ func (s *IndicatorService) GetAllIndicators(ctx context.Context, category *strin
 		limit = 20
 	}
 
-	return s.indicatorRepo.GetAll(ctx, category, page, limit)
+	return s.indicatorRepo.GetAll(ctx, searchTerm, categories, page, limit)
 }
 
 // CreateIndicator creates a new technical indicator

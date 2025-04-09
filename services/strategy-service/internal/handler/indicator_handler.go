@@ -3,6 +3,7 @@ package handler
 import (
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"services/strategy-service/internal/model"
@@ -26,13 +27,16 @@ func NewIndicatorHandler(indicatorService *service.IndicatorService, logger *zap
 	}
 }
 
-// GetAllIndicators handles retrieving all indicators
+// GetAllIndicators handles retrieving all indicators with filtering options
 // GET /api/v1/indicators
 func (h *IndicatorHandler) GetAllIndicators(c *gin.Context) {
-	// Parse category filter
-	var category *string
-	if categoryStr := c.Query("category"); categoryStr != "" {
-		category = &categoryStr
+	// Parse search parameter
+	searchTerm := c.Query("search")
+
+	// Parse categories filter (comma-separated)
+	var categories []string
+	if categoriesStr := c.Query("categories"); categoriesStr != "" {
+		categories = strings.Split(categoriesStr, ",")
 	}
 
 	// Parse pagination parameters
@@ -45,7 +49,7 @@ func (h *IndicatorHandler) GetAllIndicators(c *gin.Context) {
 		limit = 20
 	}
 
-	indicators, total, err := h.indicatorService.GetAllIndicators(c.Request.Context(), category, page, limit)
+	indicators, total, err := h.indicatorService.GetAllIndicators(c.Request.Context(), searchTerm, categories, page, limit)
 	if err != nil {
 		h.logger.Error("Failed to get indicators", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch indicators"})
