@@ -27,18 +27,15 @@ func NewIndicatorRepository(db *sqlx.DB, logger *zap.Logger) *IndicatorRepositor
 	}
 }
 
-// GetAll retrieves all indicators with filtering options
+// GetAll retrieves all indicators with parameters and enum values using get_indicators function
 func (r *IndicatorRepository) GetAll(ctx context.Context, searchTerm string, categories []string, page, limit int) ([]model.TechnicalIndicator, int, error) {
-	// Use the new get_indicators function with enhanced parameters
-	query := `
-        SELECT id, name, description, category, formula, created_at, updated_at 
-        FROM get_indicators($1, $2)
-    `
+	// Use the get_indicators function directly
+	query := `SELECT * FROM get_indicators($1, $2)`
 
 	var args []interface{}
-	args = append(args, searchTerm) // Can be empty string
+	args = append(args, searchTerm)
 
-	// Convert categories slice to PostgreSQL array
+	// Handle categories
 	if len(categories) > 0 {
 		args = append(args, pq.Array(categories))
 	} else {
@@ -58,6 +55,7 @@ func (r *IndicatorRepository) GetAll(ctx context.Context, searchTerm string, cat
 	for rows.Next() {
 		var indicator model.TechnicalIndicator
 		var updatedAt sql.NullTime
+		var parametersJSON []byte
 
 		err := rows.Scan(
 			&indicator.ID,
@@ -67,6 +65,7 @@ func (r *IndicatorRepository) GetAll(ctx context.Context, searchTerm string, cat
 			&indicator.Formula,
 			&indicator.CreatedAt,
 			&updatedAt,
+			&parametersJSON,
 		)
 		if err != nil {
 			r.logger.Error("Failed to scan indicator row", zap.Error(err))
@@ -76,6 +75,51 @@ func (r *IndicatorRepository) GetAll(ctx context.Context, searchTerm string, cat
 		// Convert nullable time
 		if updatedAt.Valid {
 			indicator.UpdatedAt = &updatedAt.Time
+		}
+
+		// Parse parameters from JSON
+		if len(parametersJSON) > 0 {
+			var paramsArray []json.RawMessage
+			err = json.Unmarshal(parametersJSON, &paramsArray)
+			if err != nil {
+				r.logger.Error("Failed to unmarshal parameters array", zap.Error(err))
+				continue
+			}
+
+			indicator.Parameters = make([]model.IndicatorParameter, 0, len(paramsArray))
+
+			for _, paramJSON := range paramsArray {
+				var param struct {
+					ID           int                        `json:"id"`
+					Name         string                     `json:"name"`
+					Type         string                     `json:"type"`
+					IsRequired   bool                       `json:"is_required"`
+					MinValue     *float64                   `json:"min_value,omitempty"`
+					MaxValue     *float64                   `json:"max_value,omitempty"`
+					DefaultValue string                     `json:"default_value,omitempty"`
+					Description  string                     `json:"description,omitempty"`
+					EnumValues   []model.ParameterEnumValue `json:"enum_values,omitempty"`
+				}
+
+				err = json.Unmarshal(paramJSON, &param)
+				if err != nil {
+					r.logger.Error("Failed to unmarshal parameter", zap.Error(err))
+					continue
+				}
+
+				indicator.Parameters = append(indicator.Parameters, model.IndicatorParameter{
+					ID:            param.ID,
+					IndicatorID:   indicator.ID,
+					ParameterName: param.Name,
+					ParameterType: param.Type,
+					IsRequired:    param.IsRequired,
+					MinValue:      param.MinValue,
+					MaxValue:      param.MaxValue,
+					DefaultValue:  param.DefaultValue,
+					Description:   param.Description,
+					EnumValues:    param.EnumValues,
+				})
+			}
 		}
 
 		allIndicators = append(allIndicators, indicator)
@@ -104,21 +148,28 @@ func (r *IndicatorRepository) GetAll(ctx context.Context, searchTerm string, cat
 	return allIndicators[start:end], total, nil
 }
 
-// GetByID retrieves an indicator by ID using the get_indicator_by_id function
+// GetByID retrieves an indicator by ID with parameters and enum values
 func (r *IndicatorRepository) GetByID(ctx context.Context, id int) (*model.TechnicalIndicator, error) {
-	// Use the get_indicator_by_id function that includes parameters
-	query := `
-        SELECT id, name, description, category, formula, created_at, updated_at, parameters
-        FROM get_indicator_by_id($1)
-    `
+	// Use the get_indicator_by_id function
+	query := `SELECT * FROM get_indicator_by_id($1)`
 
-	// Execute query
+	rows, err := r.db.QueryContext(ctx, query, id)
+	if err != nil {
+		r.logger.Error("Failed to execute get indicator by ID query", zap.Error(err))
+		return nil, err
+	}
+	defer rows.Close()
+
+	// We should get only one row
+	if !rows.Next() {
+		return nil, nil // No indicator found
+	}
+
 	var indicator model.TechnicalIndicator
 	var updatedAt sql.NullTime
-	var parametersJSON []byte // To store the JSON array of parameters
+	var parametersJSON []byte
 
-	row := r.db.QueryRowContext(ctx, query, id)
-	err := row.Scan(
+	err = rows.Scan(
 		&indicator.ID,
 		&indicator.Name,
 		&indicator.Description,
@@ -130,10 +181,7 @@ func (r *IndicatorRepository) GetByID(ctx context.Context, id int) (*model.Techn
 	)
 
 	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, nil
-		}
-		r.logger.Error("Failed to get indicator by ID", zap.Error(err), zap.Int("id", id))
+		r.logger.Error("Failed to scan indicator row", zap.Error(err))
 		return nil, err
 	}
 
@@ -142,38 +190,51 @@ func (r *IndicatorRepository) GetByID(ctx context.Context, id int) (*model.Techn
 		indicator.UpdatedAt = &updatedAt.Time
 	}
 
-	// Parse parameters JSON
-	if parametersJSON != nil {
-		var params []model.IndicatorParameter
-
-		if err := json.Unmarshal(parametersJSON, &params); err != nil {
-			r.logger.Error("Failed to unmarshal parameters JSON", zap.Error(err))
+	// Parse parameters from JSON
+	if len(parametersJSON) > 0 {
+		var paramsArray []json.RawMessage
+		err = json.Unmarshal(parametersJSON, &paramsArray)
+		if err != nil {
+			r.logger.Error("Failed to unmarshal parameters array", zap.Error(err))
 		} else {
-			indicator.Parameters = params
+			indicator.Parameters = make([]model.IndicatorParameter, 0, len(paramsArray))
+
+			for _, paramJSON := range paramsArray {
+				var param struct {
+					ID           int                        `json:"id"`
+					Name         string                     `json:"name"`
+					Type         string                     `json:"type"`
+					IsRequired   bool                       `json:"is_required"`
+					MinValue     *float64                   `json:"min_value,omitempty"`
+					MaxValue     *float64                   `json:"max_value,omitempty"`
+					DefaultValue string                     `json:"default_value,omitempty"`
+					Description  string                     `json:"description,omitempty"`
+					EnumValues   []model.ParameterEnumValue `json:"enum_values,omitempty"`
+				}
+
+				err = json.Unmarshal(paramJSON, &param)
+				if err != nil {
+					r.logger.Error("Failed to unmarshal parameter", zap.Error(err))
+					continue
+				}
+
+				indicator.Parameters = append(indicator.Parameters, model.IndicatorParameter{
+					ID:            param.ID,
+					IndicatorID:   indicator.ID,
+					ParameterName: param.Name,
+					ParameterType: param.Type,
+					IsRequired:    param.IsRequired,
+					MinValue:      param.MinValue,
+					MaxValue:      param.MaxValue,
+					DefaultValue:  param.DefaultValue,
+					Description:   param.Description,
+					EnumValues:    param.EnumValues,
+				})
+			}
 		}
 	}
 
 	return &indicator, nil
-}
-
-// GetCategories retrieves indicator categories using get_indicator_categories function
-func (r *IndicatorRepository) GetCategories(ctx context.Context) ([]struct {
-	Category string `db:"category"`
-	Count    int    `db:"count"`
-}, error) {
-	query := `SELECT * FROM get_indicator_categories()`
-
-	var categories []struct {
-		Category string `db:"category"`
-		Count    int    `db:"count"`
-	}
-	err := r.db.SelectContext(ctx, &categories, query)
-	if err != nil {
-		r.logger.Error("Failed to get indicator categories", zap.Error(err))
-		return nil, err
-	}
-
-	return categories, nil
 }
 
 // Create adds a new indicator to the database
@@ -203,8 +264,8 @@ func (r *IndicatorRepository) Create(ctx context.Context, indicator *model.Techn
 	return id, nil
 }
 
-// AddParameter adds a parameter to an indicator
-func (r *IndicatorRepository) AddParameter(ctx context.Context, parameterCreate *model.IndicatorParameterCreate) (int, error) {
+// CreateParameter adds a parameter to an indicator
+func (r *IndicatorRepository) CreateParameter(ctx context.Context, parameter *model.IndicatorParameterCreate) (int, error) {
 	query := `
 		INSERT INTO indicator_parameters (
 			indicator_id, parameter_name, parameter_type, is_required, 
@@ -218,26 +279,26 @@ func (r *IndicatorRepository) AddParameter(ctx context.Context, parameterCreate 
 	err := r.db.QueryRowContext(
 		ctx,
 		query,
-		parameterCreate.IndicatorID,
-		parameterCreate.ParameterName,
-		parameterCreate.ParameterType,
-		parameterCreate.IsRequired,
-		parameterCreate.MinValue,
-		parameterCreate.MaxValue,
-		parameterCreate.DefaultValue,
-		parameterCreate.Description,
+		parameter.IndicatorID,
+		parameter.ParameterName,
+		parameter.ParameterType,
+		parameter.IsRequired,
+		parameter.MinValue,
+		parameter.MaxValue,
+		parameter.DefaultValue,
+		parameter.Description,
 	).Scan(&id)
 
 	if err != nil {
-		r.logger.Error("Failed to add parameter", zap.Error(err))
+		r.logger.Error("Failed to create parameter", zap.Error(err))
 		return 0, err
 	}
 
 	return id, nil
 }
 
-// AddEnumValue adds an enum value to a parameter
-func (r *IndicatorRepository) AddEnumValue(ctx context.Context, enumCreate *model.ParameterEnumValueCreate) (int, error) {
+// CreateEnumValue adds an enum value to a parameter
+func (r *IndicatorRepository) CreateEnumValue(ctx context.Context, enumValue *model.ParameterEnumValueCreate) (int, error) {
 	query := `
 		INSERT INTO parameter_enum_values (parameter_id, enum_value, display_name)
 		VALUES ($1, $2, $3)
@@ -248,15 +309,35 @@ func (r *IndicatorRepository) AddEnumValue(ctx context.Context, enumCreate *mode
 	err := r.db.QueryRowContext(
 		ctx,
 		query,
-		enumCreate.ParameterID,
-		enumCreate.EnumValue,
-		enumCreate.DisplayName,
+		enumValue.ParameterID,
+		enumValue.EnumValue,
+		enumValue.DisplayName,
 	).Scan(&id)
 
 	if err != nil {
-		r.logger.Error("Failed to add enum value", zap.Error(err))
+		r.logger.Error("Failed to create enum value", zap.Error(err))
 		return 0, err
 	}
 
 	return id, nil
+}
+
+// GetCategories retrieves indicator categories
+func (r *IndicatorRepository) GetCategories(ctx context.Context) ([]struct {
+	Category string `db:"category"`
+	Count    int    `db:"count"`
+}, error) {
+	query := `SELECT * FROM get_indicator_categories()`
+
+	var categories []struct {
+		Category string `db:"category"`
+		Count    int    `db:"count"`
+	}
+	err := r.db.SelectContext(ctx, &categories, query)
+	if err != nil {
+		r.logger.Error("Failed to get indicator categories", zap.Error(err))
+		return nil, err
+	}
+
+	return categories, nil
 }

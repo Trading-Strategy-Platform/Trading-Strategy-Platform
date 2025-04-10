@@ -17,7 +17,7 @@ database:
 
 auth:
   jwtSecret: your_super_secret_key_for_development_only
-  accessTokenDuration: 15m
+  accessTokenDuration: 12h
   refreshTokenDuration: 168h  # 7 days in hours (7*24h)
 
 kafka:

@@ -4,7 +4,6 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"time"
 
 	"services/strategy-service/internal/model"
 	"services/strategy-service/internal/service"
@@ -152,7 +151,7 @@ func (h *IndicatorHandler) AddEnumValue(c *gin.Context) {
 // CreateIndicator handles creating a new indicator
 // POST /api/v1/indicators
 func (h *IndicatorHandler) CreateIndicator(c *gin.Context) {
-	// Get user ID for debugging
+	// Get user ID from context
 	userID, _ := c.Get("userID")
 	h.logger.Info("Creating indicator by user", zap.Int("userID", userID.(int)))
 
@@ -184,53 +183,53 @@ func (h *IndicatorHandler) CreateIndicator(c *gin.Context) {
 	}
 
 	// Log what we're trying to insert
-	h.logger.Info("Attempting to create indicator",
+	h.logger.Info("Creating indicator",
 		zap.String("name", request.Name),
 		zap.String("category", request.Category),
 		zap.Int("parameters_count", len(request.Parameters)))
 
-	// DIRECT DATABASE INSERT FOR DEBUGGING
-	// Get direct access to database from the service
-	db := h.indicatorService.GetDB()
-	if db == nil {
-		h.logger.Error("Database connection is nil")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Database connection error"})
-		return
+	// Convert request parameters to model parameters
+	var parameters []model.IndicatorParameterCreate
+	for _, param := range request.Parameters {
+		// Convert enum values if present
+		var enumValues []model.ParameterEnumValueCreate
+		for _, enum := range param.EnumValues {
+			enumValues = append(enumValues, model.ParameterEnumValueCreate{
+				EnumValue:   enum.Value,
+				DisplayName: enum.DisplayName,
+			})
+		}
+
+		// Create parameter
+		parameters = append(parameters, model.IndicatorParameterCreate{
+			ParameterName: param.Name,
+			ParameterType: param.Type,
+			IsRequired:    param.IsRequired,
+			MinValue:      param.MinValue,
+			MaxValue:      param.MaxValue,
+			DefaultValue:  param.DefaultValue,
+			Description:   param.Description,
+			EnumValues:    enumValues,
+		})
 	}
 
-	// Try direct insert
-	h.logger.Info("Executing direct database insert")
-	now := time.Now()
-	var id int
-	err := db.QueryRowContext(
+	// Create the indicator using the service
+	indicator, err := h.indicatorService.CreateIndicator(
 		c.Request.Context(),
-		`INSERT INTO indicators (name, description, category, formula, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $5) RETURNING id`,
 		request.Name,
 		request.Description,
 		request.Category,
 		request.Formula,
-		now,
-	).Scan(&id)
+		parameters,
+	)
 
 	if err != nil {
-		h.logger.Error("Failed direct database insert", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Database error: " + err.Error()})
+		h.logger.Error("Failed to create indicator", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create indicator: " + err.Error()})
 		return
 	}
 
-	h.logger.Info("Direct database insert succeeded", zap.Int("indicator_id", id))
-
-	// Create a response
-	indicator := &model.TechnicalIndicator{
-		ID:          id,
-		Name:        request.Name,
-		Description: request.Description,
-		Category:    request.Category,
-		Formula:     request.Formula,
-		CreatedAt:   now,
-	}
-
+	h.logger.Info("Successfully created indicator", zap.Int("id", indicator.ID))
 	c.JSON(http.StatusCreated, indicator)
 }
 

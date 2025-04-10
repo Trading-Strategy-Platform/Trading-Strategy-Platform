@@ -71,7 +71,7 @@ func main() {
 	)
 
 	tagService := service.NewTagService(tagRepo, logger)
-	indicatorService := service.NewIndicatorService(indicatorRepo, logger)
+	indicatorService := service.NewIndicatorService(db, indicatorRepo, logger)
 	marketplaceService := service.NewMarketplaceService(
 		db,
 		marketplaceRepo,

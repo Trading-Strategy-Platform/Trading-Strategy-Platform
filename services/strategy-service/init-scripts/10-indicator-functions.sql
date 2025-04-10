@@ -15,8 +15,8 @@ SELECT
     ARRAY(
         SELECT jsonb_build_object(
             'id', p.id,
-            'name', p.parameter_name,
-            'type', p.parameter_type,
+            'parameter_name', p.parameter_name,
+            'parameter_type', p.parameter_type,
             'is_required', p.is_required,
             'min_value', p.min_value,
             'max_value', p.max_value,
@@ -25,7 +25,7 @@ SELECT
             'enum_values', (
                 SELECT jsonb_agg(jsonb_build_object(
                     'id', ev.id,
-                    'value', ev.enum_value,
+                    'enum_value', ev.enum_value,
                     'display_name', ev.display_name
                 ))
                 FROM parameter_enum_values ev

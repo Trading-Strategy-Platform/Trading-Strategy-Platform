@@ -20,8 +20,9 @@ type IndicatorService struct {
 }
 
 // NewIndicatorService creates a new indicator service
-func NewIndicatorService(indicatorRepo *repository.IndicatorRepository, logger *zap.Logger) *IndicatorService {
+func NewIndicatorService(db *sqlx.DB, indicatorRepo *repository.IndicatorRepository, logger *zap.Logger) *IndicatorService {
 	return &IndicatorService{
+		db:            db,
 		indicatorRepo: indicatorRepo,
 		logger:        logger,
 	}
@@ -32,7 +33,7 @@ func (s *IndicatorService) GetDB() *sqlx.DB {
 	return s.db
 }
 
-// GetAllIndicators retrieves all technical indicators using get_indicators function
+// GetAllIndicators retrieves all technical indicators with their parameters and enum values
 func (s *IndicatorService) GetAllIndicators(ctx context.Context, searchTerm string, categories []string, page, limit int) ([]model.TechnicalIndicator, int, error) {
 	// Validate pagination
 	if page < 1 {
@@ -45,7 +46,7 @@ func (s *IndicatorService) GetAllIndicators(ctx context.Context, searchTerm stri
 	return s.indicatorRepo.GetAll(ctx, searchTerm, categories, page, limit)
 }
 
-// CreateIndicator creates a new technical indicator
+// CreateIndicator creates a new technical indicator with parameters and enum values
 func (s *IndicatorService) CreateIndicator(ctx context.Context, name, description, category, formula string, parameters []model.IndicatorParameterCreate) (*model.TechnicalIndicator, error) {
 	// Validate input
 	if name == "" {
@@ -55,8 +56,8 @@ func (s *IndicatorService) CreateIndicator(ctx context.Context, name, descriptio
 		return nil, errors.New("indicator category is required")
 	}
 
-	// Start a transaction
-	tx, err := s.db.BeginTx(ctx, nil)
+	// Create a transaction
+	tx, err := s.db.BeginTxx(ctx, nil)
 	if err != nil {
 		s.logger.Error("Failed to begin transaction", zap.Error(err))
 		return nil, err
@@ -72,7 +73,7 @@ func (s *IndicatorService) CreateIndicator(ctx context.Context, name, descriptio
 		CreatedAt:   time.Now(),
 	}
 
-	// Call the repository to insert the indicator
+	// Insert the indicator
 	indicatorID, err := s.indicatorRepo.Create(ctx, indicator)
 	if err != nil {
 		s.logger.Error("Failed to create indicator", zap.Error(err))
@@ -81,62 +82,57 @@ func (s *IndicatorService) CreateIndicator(ctx context.Context, name, descriptio
 
 	// Set the ID in the returned model
 	indicator.ID = indicatorID
+	indicator.Parameters = make([]model.IndicatorParameter, 0, len(parameters))
 
 	// Add parameters if provided
-	if parameters != nil && len(parameters) > 0 {
-		for i := range parameters {
-			// Set the indicator ID for each parameter
-			parameters[i].IndicatorID = indicatorID
+	for _, paramCreate := range parameters {
+		// Set the indicator ID for this parameter
+		paramCreate.IndicatorID = indicatorID
 
-			// Create the parameter
-			paramID, err := s.indicatorRepo.AddParameter(ctx, &parameters[i])
+		// Create the parameter
+		paramID, err := s.indicatorRepo.CreateParameter(ctx, &paramCreate)
+		if err != nil {
+			s.logger.Error("Failed to add parameter", zap.Error(err))
+			return nil, err
+		}
+
+		// Create a parameter object for the response
+		param := model.IndicatorParameter{
+			ID:            paramID,
+			IndicatorID:   indicatorID,
+			ParameterName: paramCreate.ParameterName,
+			ParameterType: paramCreate.ParameterType,
+			IsRequired:    paramCreate.IsRequired,
+			MinValue:      paramCreate.MinValue,
+			MaxValue:      paramCreate.MaxValue,
+			DefaultValue:  paramCreate.DefaultValue,
+			Description:   paramCreate.Description,
+			EnumValues:    make([]model.ParameterEnumValue, 0),
+		}
+
+		// Add enum values if provided
+		for _, enumValueCreate := range paramCreate.EnumValues {
+			// Set the parameter ID for this enum value
+			enumValueCreate.ParameterID = paramID
+
+			// Create the enum value
+			enumID, err := s.indicatorRepo.CreateEnumValue(ctx, &enumValueCreate)
 			if err != nil {
-				s.logger.Error("Failed to add parameter", zap.Error(err))
+				s.logger.Error("Failed to add enum value", zap.Error(err))
 				return nil, err
 			}
 
-			// Add the parameter to the indicator model
-			param := model.IndicatorParameter{
-				ID:            paramID,
-				IndicatorID:   indicatorID,
-				ParameterName: parameters[i].ParameterName,
-				ParameterType: parameters[i].ParameterType,
-				IsRequired:    parameters[i].IsRequired,
-				MinValue:      parameters[i].MinValue,
-				MaxValue:      parameters[i].MaxValue,
-				DefaultValue:  parameters[i].DefaultValue,
-				Description:   parameters[i].Description,
-			}
-
-			indicator.Parameters = append(indicator.Parameters, param)
-
-			// Add enum values if provided
-			if parameters[i].EnumValues != nil && len(parameters[i].EnumValues) > 0 {
-				for _, enumValue := range parameters[i].EnumValues {
-					// Set the parameter ID for the enum value
-					enumCreate := model.ParameterEnumValueCreate{
-						ParameterID: paramID,
-						EnumValue:   enumValue.EnumValue,
-						DisplayName: enumValue.DisplayName,
-					}
-
-					// Create the enum value
-					enumID, err := s.indicatorRepo.AddEnumValue(ctx, &enumCreate)
-					if err != nil {
-						s.logger.Error("Failed to add enum value", zap.Error(err))
-						return nil, err
-					}
-
-					// Add the enum value to the parameter
-					param.EnumValues = append(param.EnumValues, model.ParameterEnumValue{
-						ID:          enumID,
-						ParameterID: paramID,
-						EnumValue:   enumValue.EnumValue,
-						DisplayName: enumValue.DisplayName,
-					})
-				}
-			}
+			// Add the enum value to the parameter
+			param.EnumValues = append(param.EnumValues, model.ParameterEnumValue{
+				ID:          enumID,
+				ParameterID: paramID,
+				EnumValue:   enumValueCreate.EnumValue,
+				DisplayName: enumValueCreate.DisplayName,
+			})
 		}
+
+		// Add the parameter to the indicator
+		indicator.Parameters = append(indicator.Parameters, param)
 	}
 
 	// Commit the transaction
@@ -165,6 +161,15 @@ func (s *IndicatorService) AddParameter(
 	defaultValue string,
 	description string,
 ) (*model.IndicatorParameter, error) {
+	// Validate indicator exists
+	indicator, err := s.indicatorRepo.GetByID(ctx, indicatorID)
+	if err != nil {
+		return nil, err
+	}
+	if indicator == nil {
+		return nil, errors.New("indicator not found")
+	}
+
 	// Create parameter object
 	parameterCreate := &model.IndicatorParameterCreate{
 		IndicatorID:   indicatorID,
@@ -178,7 +183,7 @@ func (s *IndicatorService) AddParameter(
 	}
 
 	// Add parameter to database
-	paramID, err := s.indicatorRepo.AddParameter(ctx, parameterCreate)
+	paramID, err := s.indicatorRepo.CreateParameter(ctx, parameterCreate)
 	if err != nil {
 		return nil, err
 	}
@@ -194,6 +199,7 @@ func (s *IndicatorService) AddParameter(
 		MaxValue:      maxValue,
 		DefaultValue:  defaultValue,
 		Description:   description,
+		EnumValues:    []model.ParameterEnumValue{},
 	}, nil
 }
 
@@ -212,7 +218,7 @@ func (s *IndicatorService) AddEnumValue(
 	}
 
 	// Add enum value to database
-	enumID, err := s.indicatorRepo.AddEnumValue(ctx, enumCreate)
+	enumID, err := s.indicatorRepo.CreateEnumValue(ctx, enumCreate)
 	if err != nil {
 		return nil, err
 	}
@@ -226,7 +232,7 @@ func (s *IndicatorService) AddEnumValue(
 	}, nil
 }
 
-// GetIndicator retrieves a specific indicator by ID using get_indicator_by_id function
+// GetIndicator retrieves a specific indicator by ID with parameters and enum values
 func (s *IndicatorService) GetIndicator(ctx context.Context, id int) (*model.TechnicalIndicator, error) {
 	indicator, err := s.indicatorRepo.GetByID(ctx, id)
 	if err != nil {
@@ -240,7 +246,7 @@ func (s *IndicatorService) GetIndicator(ctx context.Context, id int) (*model.Tec
 	return indicator, nil
 }
 
-// GetCategories retrieves indicator categories using get_indicator_categories function
+// GetCategories retrieves indicator categories
 func (s *IndicatorService) GetCategories(ctx context.Context) ([]struct {
 	Category string `db:"category"`
 	Count    int    `db:"count"`
