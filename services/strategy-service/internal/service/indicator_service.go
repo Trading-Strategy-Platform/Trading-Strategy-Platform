@@ -247,9 +247,125 @@ func (s *IndicatorService) GetIndicator(ctx context.Context, id int) (*model.Tec
 }
 
 // GetCategories retrieves indicator categories
-func (s *IndicatorService) GetCategories(ctx context.Context) ([]struct {
-	Category string `db:"category"`
-	Count    int    `db:"count"`
-}, error) {
-	return s.indicatorRepo.GetCategories(ctx)
+type CategoryInfo struct {
+	Category string `json:"category"`
+	Count    int64  `json:"count"`
+}
+
+// GetCategories retrieves indicator categories
+func (s *IndicatorService) GetCategories(ctx context.Context) ([]CategoryInfo, error) {
+	repoCategories, err := s.indicatorRepo.GetCategories(ctx)
+	if err != nil {
+		s.logger.Error("Failed to get indicator categories", zap.Error(err))
+		return nil, err
+	}
+
+	// Convert repository type to service type
+	serviceCategories := make([]CategoryInfo, len(repoCategories))
+	for i, cat := range repoCategories {
+		serviceCategories[i] = CategoryInfo{
+			Category: cat.Category,
+			Count:    cat.Count,
+		}
+	}
+
+	// If no categories found, return empty array
+	if len(serviceCategories) == 0 {
+		return []CategoryInfo{}, nil
+	}
+
+	return serviceCategories, nil
+}
+
+// DeleteIndicator deletes an indicator by ID
+func (s *IndicatorService) DeleteIndicator(ctx context.Context, id int) error {
+	// Check if indicator exists
+	indicator, err := s.indicatorRepo.GetByID(ctx, id)
+	if err != nil {
+		return err
+	}
+
+	if indicator == nil {
+		return errors.New("indicator not found")
+	}
+
+	return s.indicatorRepo.Delete(ctx, id)
+}
+
+// UpdateIndicator updates an indicator
+func (s *IndicatorService) UpdateIndicator(ctx context.Context, id int, update *model.TechnicalIndicator) (*model.TechnicalIndicator, error) {
+	// Check if indicator exists
+	indicator, err := s.indicatorRepo.GetByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+
+	if indicator == nil {
+		return nil, errors.New("indicator not found")
+	}
+
+	// Update indicator
+	err = s.indicatorRepo.Update(ctx, id, update)
+	if err != nil {
+		return nil, err
+	}
+
+	// Get the updated indicator
+	updatedIndicator, err := s.indicatorRepo.GetByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+
+	return updatedIndicator, nil
+}
+
+// DeleteParameter deletes a parameter by ID
+func (s *IndicatorService) DeleteParameter(ctx context.Context, id int) error {
+	return s.indicatorRepo.DeleteParameter(ctx, id)
+}
+
+// UpdateParameter updates a parameter
+func (s *IndicatorService) UpdateParameter(ctx context.Context, id int, param *model.IndicatorParameter) (*model.IndicatorParameter, error) {
+	// Update parameter
+	err := s.indicatorRepo.UpdateParameter(ctx, id, param)
+	if err != nil {
+		return nil, err
+	}
+
+	// Get the indicator that this parameter belongs to
+	indicator, err := s.indicatorRepo.GetByID(ctx, param.IndicatorID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Find the updated parameter in the indicator's parameters
+	for _, p := range indicator.Parameters {
+		if p.ID == id {
+			return &p, nil
+		}
+	}
+
+	return nil, errors.New("parameter not found after update")
+}
+
+// DeleteEnumValue deletes an enum value by ID
+func (s *IndicatorService) DeleteEnumValue(ctx context.Context, id int) error {
+	return s.indicatorRepo.DeleteEnumValue(ctx, id)
+}
+
+// UpdateEnumValue updates an enum value
+func (s *IndicatorService) UpdateEnumValue(ctx context.Context, id int, enumVal *model.ParameterEnumValue) (*model.ParameterEnumValue, error) {
+	// Update enum value
+	err := s.indicatorRepo.UpdateEnumValue(ctx, id, enumVal)
+	if err != nil {
+		return nil, err
+	}
+
+	// Get the updated enum value
+	// Since there's no direct method to get an enum value by ID, we return the enum value that was passed in
+	// with the ID that was specified
+	result := *enumVal
+	result.ID = id
+
+	return &result, nil
 }

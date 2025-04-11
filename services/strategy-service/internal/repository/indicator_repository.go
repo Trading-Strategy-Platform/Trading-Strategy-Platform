@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"time"
 
 	"services/strategy-service/internal/model"
@@ -77,37 +78,43 @@ func (r *IndicatorRepository) GetAll(ctx context.Context, searchTerm string, cat
 			indicator.UpdatedAt = &updatedAt.Time
 		}
 
-		// Parse parameters from JSON
-		if len(parametersJSON) > 0 {
+		// Parse parameters from JSON - now we expect a direct JSON array instead of an array type
+		indicator.Parameters = []model.IndicatorParameter{} // Initialize with empty array
+
+		if len(parametersJSON) > 0 && string(parametersJSON) != "[]" && string(parametersJSON) != "null" {
+			// Parse the JSON array of parameters
 			var paramsArray []json.RawMessage
 			err = json.Unmarshal(parametersJSON, &paramsArray)
 			if err != nil {
-				r.logger.Error("Failed to unmarshal parameters array", zap.Error(err))
-				continue
+				r.logger.Error("Failed to unmarshal parameters array",
+					zap.Error(err),
+					zap.String("parametersJSON", string(parametersJSON)))
+				continue // Skip but don't fail completely
 			}
-
-			indicator.Parameters = make([]model.IndicatorParameter, 0, len(paramsArray))
 
 			for _, paramJSON := range paramsArray {
 				var param struct {
-					ID           int                        `json:"id"`
-					Name         string                     `json:"name"`
-					Type         string                     `json:"type"`
-					IsRequired   bool                       `json:"is_required"`
-					MinValue     *float64                   `json:"min_value,omitempty"`
-					MaxValue     *float64                   `json:"max_value,omitempty"`
-					DefaultValue string                     `json:"default_value,omitempty"`
-					Description  string                     `json:"description,omitempty"`
-					EnumValues   []model.ParameterEnumValue `json:"enum_values,omitempty"`
+					ID           int             `json:"id"`
+					Name         string          `json:"name"`
+					Type         string          `json:"type"`
+					IsRequired   bool            `json:"is_required"`
+					MinValue     *float64        `json:"min_value,omitempty"`
+					MaxValue     *float64        `json:"max_value,omitempty"`
+					DefaultValue string          `json:"default_value,omitempty"`
+					Description  string          `json:"description,omitempty"`
+					EnumValues   json.RawMessage `json:"enum_values,omitempty"`
 				}
 
 				err = json.Unmarshal(paramJSON, &param)
 				if err != nil {
-					r.logger.Error("Failed to unmarshal parameter", zap.Error(err))
+					r.logger.Error("Failed to unmarshal parameter",
+						zap.Error(err),
+						zap.String("paramJSON", string(paramJSON)))
 					continue
 				}
 
-				indicator.Parameters = append(indicator.Parameters, model.IndicatorParameter{
+				// Create parameter with basic properties
+				parameterObj := model.IndicatorParameter{
 					ID:            param.ID,
 					IndicatorID:   indicator.ID,
 					ParameterName: param.Name,
@@ -117,8 +124,34 @@ func (r *IndicatorRepository) GetAll(ctx context.Context, searchTerm string, cat
 					MaxValue:      param.MaxValue,
 					DefaultValue:  param.DefaultValue,
 					Description:   param.Description,
-					EnumValues:    param.EnumValues,
-				})
+					EnumValues:    []model.ParameterEnumValue{},
+				}
+
+				// Parse enum values separately if they exist
+				if len(param.EnumValues) > 0 && string(param.EnumValues) != "null" && string(param.EnumValues) != "[]" {
+					var enumValues []struct {
+						ID          int    `json:"id"`
+						EnumValue   string `json:"enum_value"`
+						DisplayName string `json:"display_name"`
+					}
+
+					if err := json.Unmarshal(param.EnumValues, &enumValues); err != nil {
+						r.logger.Warn("Failed to unmarshal enum values",
+							zap.Error(err),
+							zap.String("enum_values_json", string(param.EnumValues)))
+					} else {
+						for _, ev := range enumValues {
+							parameterObj.EnumValues = append(parameterObj.EnumValues, model.ParameterEnumValue{
+								ID:          ev.ID,
+								ParameterID: param.ID,
+								EnumValue:   ev.EnumValue,
+								DisplayName: ev.DisplayName,
+							})
+						}
+					}
+				}
+
+				indicator.Parameters = append(indicator.Parameters, parameterObj)
 			}
 		}
 
@@ -190,47 +223,81 @@ func (r *IndicatorRepository) GetByID(ctx context.Context, id int) (*model.Techn
 		indicator.UpdatedAt = &updatedAt.Time
 	}
 
-	// Parse parameters from JSON
-	if len(parametersJSON) > 0 {
+	// Initialize parameters with empty array
+	indicator.Parameters = []model.IndicatorParameter{}
+
+	// Parse parameters from JSON - now we expect a direct JSON array
+	if len(parametersJSON) > 0 && string(parametersJSON) != "[]" && string(parametersJSON) != "null" {
+		// Parse the JSON array of parameters
 		var paramsArray []json.RawMessage
 		err = json.Unmarshal(parametersJSON, &paramsArray)
 		if err != nil {
-			r.logger.Error("Failed to unmarshal parameters array", zap.Error(err))
-		} else {
-			indicator.Parameters = make([]model.IndicatorParameter, 0, len(paramsArray))
+			r.logger.Error("Failed to unmarshal parameters array",
+				zap.Error(err),
+				zap.String("parametersJSON", string(parametersJSON)))
+			return &indicator, nil // Return indicator without parameters rather than failing
+		}
 
-			for _, paramJSON := range paramsArray {
-				var param struct {
-					ID           int                        `json:"id"`
-					Name         string                     `json:"name"`
-					Type         string                     `json:"type"`
-					IsRequired   bool                       `json:"is_required"`
-					MinValue     *float64                   `json:"min_value,omitempty"`
-					MaxValue     *float64                   `json:"max_value,omitempty"`
-					DefaultValue string                     `json:"default_value,omitempty"`
-					Description  string                     `json:"description,omitempty"`
-					EnumValues   []model.ParameterEnumValue `json:"enum_values,omitempty"`
-				}
-
-				err = json.Unmarshal(paramJSON, &param)
-				if err != nil {
-					r.logger.Error("Failed to unmarshal parameter", zap.Error(err))
-					continue
-				}
-
-				indicator.Parameters = append(indicator.Parameters, model.IndicatorParameter{
-					ID:            param.ID,
-					IndicatorID:   indicator.ID,
-					ParameterName: param.Name,
-					ParameterType: param.Type,
-					IsRequired:    param.IsRequired,
-					MinValue:      param.MinValue,
-					MaxValue:      param.MaxValue,
-					DefaultValue:  param.DefaultValue,
-					Description:   param.Description,
-					EnumValues:    param.EnumValues,
-				})
+		for _, paramJSON := range paramsArray {
+			var param struct {
+				ID           int             `json:"id"`
+				Name         string          `json:"name"`
+				Type         string          `json:"type"`
+				IsRequired   bool            `json:"is_required"`
+				MinValue     *float64        `json:"min_value,omitempty"`
+				MaxValue     *float64        `json:"max_value,omitempty"`
+				DefaultValue string          `json:"default_value,omitempty"`
+				Description  string          `json:"description,omitempty"`
+				EnumValues   json.RawMessage `json:"enum_values,omitempty"`
 			}
+
+			err = json.Unmarshal(paramJSON, &param)
+			if err != nil {
+				r.logger.Error("Failed to unmarshal parameter",
+					zap.Error(err),
+					zap.String("paramJSON", string(paramJSON)))
+				continue
+			}
+
+			// Create parameter with basic properties
+			parameterObj := model.IndicatorParameter{
+				ID:            param.ID,
+				IndicatorID:   indicator.ID,
+				ParameterName: param.Name,
+				ParameterType: param.Type,
+				IsRequired:    param.IsRequired,
+				MinValue:      param.MinValue,
+				MaxValue:      param.MaxValue,
+				DefaultValue:  param.DefaultValue,
+				Description:   param.Description,
+				EnumValues:    []model.ParameterEnumValue{},
+			}
+
+			// Parse enum values separately if they exist
+			if len(param.EnumValues) > 0 && string(param.EnumValues) != "null" && string(param.EnumValues) != "[]" {
+				var enumValues []struct {
+					ID          int    `json:"id"`
+					EnumValue   string `json:"enum_value"`
+					DisplayName string `json:"display_name"`
+				}
+
+				if err := json.Unmarshal(param.EnumValues, &enumValues); err != nil {
+					r.logger.Warn("Failed to unmarshal enum values",
+						zap.Error(err),
+						zap.String("enum_values_json", string(param.EnumValues)))
+				} else {
+					for _, ev := range enumValues {
+						parameterObj.EnumValues = append(parameterObj.EnumValues, model.ParameterEnumValue{
+							ID:          ev.ID,
+							ParameterID: param.ID,
+							EnumValue:   ev.EnumValue,
+							DisplayName: ev.DisplayName,
+						})
+					}
+				}
+			}
+
+			indicator.Parameters = append(indicator.Parameters, parameterObj)
 		}
 	}
 
@@ -323,21 +390,163 @@ func (r *IndicatorRepository) CreateEnumValue(ctx context.Context, enumValue *mo
 }
 
 // GetCategories retrieves indicator categories
-func (r *IndicatorRepository) GetCategories(ctx context.Context) ([]struct {
-	Category string `db:"category"`
-	Count    int    `db:"count"`
-}, error) {
+type CategoryData struct {
+	Category string `db:"category" json:"category"`
+	Count    int64  `db:"count" json:"count"`
+}
+
+// GetCategories retrieves indicator categories
+func (r *IndicatorRepository) GetCategories(ctx context.Context) ([]CategoryData, error) {
 	query := `SELECT * FROM get_indicator_categories()`
 
-	var categories []struct {
-		Category string `db:"category"`
-		Count    int    `db:"count"`
-	}
+	var categories []CategoryData
+
 	err := r.db.SelectContext(ctx, &categories, query)
 	if err != nil {
 		r.logger.Error("Failed to get indicator categories", zap.Error(err))
 		return nil, err
 	}
 
+	// Return an empty array instead of nil if no categories found
+	if categories == nil {
+		categories = []CategoryData{}
+	}
+
 	return categories, nil
+}
+
+// Delete an indicator by ID
+func (r *IndicatorRepository) Delete(ctx context.Context, id int) error {
+	query := `SELECT delete_indicator($1)`
+
+	var success bool
+	err := r.db.QueryRowContext(ctx, query, id).Scan(&success)
+	if err != nil {
+		r.logger.Error("Failed to delete indicator", zap.Error(err), zap.Int("id", id))
+		return err
+	}
+
+	if !success {
+		return errors.New("indicator not found")
+	}
+
+	return nil
+}
+
+// Update an indicator
+func (r *IndicatorRepository) Update(ctx context.Context, id int, indicator *model.TechnicalIndicator) error {
+	query := `SELECT update_indicator($1, $2, $3, $4, $5)`
+
+	var success bool
+	err := r.db.QueryRowContext(
+		ctx,
+		query,
+		id,
+		indicator.Name,
+		indicator.Description,
+		indicator.Category,
+		indicator.Formula,
+	).Scan(&success)
+
+	if err != nil {
+		r.logger.Error("Failed to update indicator", zap.Error(err), zap.Int("id", id))
+		return err
+	}
+
+	if !success {
+		return errors.New("indicator not found")
+	}
+
+	return nil
+}
+
+// Delete a parameter by ID
+func (r *IndicatorRepository) DeleteParameter(ctx context.Context, id int) error {
+	query := `SELECT delete_parameter($1)`
+
+	var success bool
+	err := r.db.QueryRowContext(ctx, query, id).Scan(&success)
+	if err != nil {
+		r.logger.Error("Failed to delete parameter", zap.Error(err), zap.Int("id", id))
+		return err
+	}
+
+	if !success {
+		return errors.New("parameter not found")
+	}
+
+	return nil
+}
+
+// Update a parameter
+func (r *IndicatorRepository) UpdateParameter(ctx context.Context, id int, param *model.IndicatorParameter) error {
+	query := `SELECT update_parameter($1, $2, $3, $4, $5, $6, $7, $8)`
+
+	var success bool
+	err := r.db.QueryRowContext(
+		ctx,
+		query,
+		id,
+		param.ParameterName,
+		param.ParameterType,
+		param.IsRequired,
+		param.MinValue,
+		param.MaxValue,
+		param.DefaultValue,
+		param.Description,
+	).Scan(&success)
+
+	if err != nil {
+		r.logger.Error("Failed to update parameter", zap.Error(err), zap.Int("id", id))
+		return err
+	}
+
+	if !success {
+		return errors.New("parameter not found")
+	}
+
+	return nil
+}
+
+// Delete an enum value by ID
+func (r *IndicatorRepository) DeleteEnumValue(ctx context.Context, id int) error {
+	query := `SELECT delete_enum_value($1)`
+
+	var success bool
+	err := r.db.QueryRowContext(ctx, query, id).Scan(&success)
+	if err != nil {
+		r.logger.Error("Failed to delete enum value", zap.Error(err), zap.Int("id", id))
+		return err
+	}
+
+	if !success {
+		return errors.New("enum value not found")
+	}
+
+	return nil
+}
+
+// Update an enum value
+func (r *IndicatorRepository) UpdateEnumValue(ctx context.Context, id int, enumVal *model.ParameterEnumValue) error {
+	query := `SELECT update_enum_value($1, $2, $3)`
+
+	var success bool
+	err := r.db.QueryRowContext(
+		ctx,
+		query,
+		id,
+		enumVal.EnumValue,
+		enumVal.DisplayName,
+	).Scan(&success)
+
+	if err != nil {
+		r.logger.Error("Failed to update enum value", zap.Error(err), zap.Int("id", id))
+		return err
+	}
+
+	if !success {
+		return errors.New("enum value not found")
+	}
+
+	return nil
 }

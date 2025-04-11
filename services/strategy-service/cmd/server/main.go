@@ -1,4 +1,3 @@
-// services/strategy-service/cmd/server/main.go
 package main
 
 import (
@@ -82,7 +81,7 @@ func main() {
 		logger,
 	)
 
-	// Initialize handlers - NOTE: passing userClient to strategyHandler
+	// Initialize handlers
 	strategyHandler := handler.NewStrategyHandler(strategyService, userClient, logger)
 	tagHandler := handler.NewTagHandler(tagService, logger)
 	indicatorHandler := handler.NewIndicatorHandler(indicatorService, logger)
@@ -209,12 +208,41 @@ func setupRouter(
 	// API routes
 	v1 := router.Group("/api/v1")
 	{
-		// Strategy routes
+		// ==================== INDICATOR ROUTES ====================
+		// IMPORTANT: Order matters - specific routes must come before parameter routes
+		indicators := v1.Group("/indicators")
+		{
+			// 1. Base endpoint
+			indicators.GET("", indicatorHandler.GetAllIndicators) // GET /api/v1/indicators
+
+			// 2. Static/enum routes - must come before parameter routes!
+			indicators.GET("/categories", indicatorHandler.GetCategories) // GET /api/v1/indicators/categories
+
+			// 3. Parameter routes - these come last!
+			indicators.GET("/:id", indicatorHandler.GetIndicator) // GET /api/v1/indicators/{id}
+
+			// Admin-only routes for managing indicators
+			adminIndicators := indicators.Group("")
+			adminIndicators.Use(middleware.AuthMiddleware(userClient, logger))
+			adminIndicators.Use(middleware.RequireRole(userClient, "admin"))
+
+			adminIndicators.POST("", indicatorHandler.CreateIndicator)             // POST /api/v1/indicators
+			adminIndicators.POST("/:id/parameters", indicatorHandler.AddParameter) // POST /api/v1/indicators/{id}/parameters
+		}
+
+		// Parameter enum values route - separate from indicators to avoid conflicts
+		v1.POST("/parameters/:id/enum-values", indicatorHandler.AddEnumValue) // POST /api/v1/parameters/{id}/enum-values
+
+		// ==================== STRATEGY ROUTES ====================
 		strategies := v1.Group("/strategies")
 		{
 			strategies.Use(middleware.AuthMiddleware(userClient, logger))
-			strategies.GET("", strategyHandler.ListUserStrategies)                     // GET /api/v1/strategies
-			strategies.POST("", strategyHandler.CreateStrategy)                        // POST /api/v1/strategies
+
+			// Base route
+			strategies.GET("", strategyHandler.ListUserStrategies) // GET /api/v1/strategies
+			strategies.POST("", strategyHandler.CreateStrategy)    // POST /api/v1/strategies
+
+			// Parameter routes
 			strategies.GET("/:id", strategyHandler.GetStrategy)                        // GET /api/v1/strategies/{id}
 			strategies.PUT("/:id", strategyHandler.UpdateStrategy)                     // PUT /api/v1/strategies/{id}
 			strategies.DELETE("/:id", strategyHandler.DeleteStrategy)                  // DELETE /api/v1/strategies/{id}
@@ -223,35 +251,21 @@ func setupRouter(
 			strategies.POST("/:id/thumbnail", thumbnailHandler.UploadThumbnail)        // POST /api/v1/strategies/{id}/thumbnail
 		}
 
-		// Strategy tags routes
+		// ==================== TAG ROUTES ====================
 		tags := v1.Group("/strategy-tags")
 		{
+			// Public route
 			tags.GET("", tagHandler.GetAllTags) // GET /api/v1/strategy-tags
 
+			// Protected routes
 			tags.Use(middleware.AuthMiddleware(userClient, logger))
 			tags.POST("", tagHandler.CreateTag) // POST /api/v1/strategy-tags
 		}
 
-		// Indicator routes
-		indicators := v1.Group("/indicators")
-		{
-			indicators.GET("", indicatorHandler.GetAllIndicators)         // GET /api/v1/indicators
-			indicators.GET("/:id", indicatorHandler.GetIndicator)         // GET /api/v1/indicators/{id}
-			indicators.GET("/categories", indicatorHandler.GetCategories) // GET /api/v1/indicators/categories
-
-			// Admin-only routes for managing indicators
-			adminIndicators := indicators.Group("")
-			adminIndicators.Use(middleware.AuthMiddleware(userClient, logger))
-			adminIndicators.Use(middleware.RequireRole(userClient, "admin"))
-
-			adminIndicators.POST("", indicatorHandler.CreateIndicator)                         // POST /api/v1/indicators
-			adminIndicators.POST("/:id/parameters", indicatorHandler.AddParameter)             // POST /api/v1/indicators/{id}/parameters
-			adminIndicators.POST("/parameters/:id/enum-values", indicatorHandler.AddEnumValue) // POST /api/v1/parameters/{id}/enum-values
-		}
-
-		// Marketplace routes
+		// ==================== MARKETPLACE ROUTES ====================
 		marketplace := v1.Group("/marketplace")
 		{
+			// Public routes
 			marketplace.GET("", marketplaceHandler.ListListings)           // GET /api/v1/marketplace
 			marketplace.GET("/:id/reviews", marketplaceHandler.GetReviews) // GET /api/v1/marketplace/{id}/reviews
 

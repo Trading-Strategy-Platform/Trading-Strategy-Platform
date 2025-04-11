@@ -256,6 +256,15 @@ func (h *IndicatorHandler) GetIndicator(c *gin.Context) {
 // GetCategories handles retrieving indicator categories
 // GET /api/v1/indicators/categories
 func (h *IndicatorHandler) GetCategories(c *gin.Context) {
+	// Log the request with a distinctive message
+	h.logger.Info("CATEGORIES ENDPOINT EXPLICITLY CALLED",
+		zap.String("path", c.Request.URL.Path),
+		zap.String("query", c.Request.URL.RawQuery),
+		zap.String("client_ip", c.ClientIP()))
+
+	// Get the timestamp (will be ignored, just for cache busting)
+	_ = c.Query("t")
+
 	categories, err := h.indicatorService.GetCategories(c.Request.Context())
 	if err != nil {
 		h.logger.Error("Failed to get indicator categories", zap.Error(err))
@@ -263,5 +272,211 @@ func (h *IndicatorHandler) GetCategories(c *gin.Context) {
 		return
 	}
 
+	// Add cache control headers here too for good measure
+	c.Header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+	c.Header("Pragma", "no-cache")
+	c.Header("Expires", "0")
+
+	// Log what we're returning
+	h.logger.Info("Returning categories data", zap.Any("categories", categories))
+
 	c.JSON(http.StatusOK, gin.H{"categories": categories})
+}
+
+// DeleteIndicator handles deleting an indicator
+// DELETE /api/v1/indicators/{id}
+func (h *IndicatorHandler) DeleteIndicator(c *gin.Context) {
+	// Parse indicator ID
+	idStr := c.Param("id")
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid indicator ID"})
+		return
+	}
+
+	// Delete the indicator
+	err = h.indicatorService.DeleteIndicator(c.Request.Context(), id)
+	if err != nil {
+		h.logger.Error("Failed to delete indicator", zap.Error(err), zap.Int("id", id))
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.Status(http.StatusNoContent)
+}
+
+// UpdateIndicator handles updating an indicator
+// PUT /api/v1/indicators/{id}
+func (h *IndicatorHandler) UpdateIndicator(c *gin.Context) {
+	// Parse indicator ID
+	idStr := c.Param("id")
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid indicator ID"})
+		return
+	}
+
+	// Bind request body
+	var request struct {
+		Name        string `json:"name" binding:"required"`
+		Description string `json:"description"`
+		Category    string `json:"category" binding:"required"`
+		Formula     string `json:"formula"`
+	}
+
+	if err := c.ShouldBindJSON(&request); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Create indicator object
+	indicator := &model.TechnicalIndicator{
+		Name:        request.Name,
+		Description: request.Description,
+		Category:    request.Category,
+		Formula:     request.Formula,
+	}
+
+	// Update the indicator
+	updatedIndicator, err := h.indicatorService.UpdateIndicator(c.Request.Context(), id, indicator)
+	if err != nil {
+		h.logger.Error("Failed to update indicator", zap.Error(err), zap.Int("id", id))
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, updatedIndicator)
+}
+
+// DeleteParameter handles deleting a parameter
+// DELETE /api/v1/parameters/{id}
+func (h *IndicatorHandler) DeleteParameter(c *gin.Context) {
+	// Parse parameter ID
+	idStr := c.Param("id")
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid parameter ID"})
+		return
+	}
+
+	// Delete the parameter
+	err = h.indicatorService.DeleteParameter(c.Request.Context(), id)
+	if err != nil {
+		h.logger.Error("Failed to delete parameter", zap.Error(err), zap.Int("id", id))
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.Status(http.StatusNoContent)
+}
+
+// UpdateParameter handles updating a parameter
+// PUT /api/v1/parameters/{id}
+func (h *IndicatorHandler) UpdateParameter(c *gin.Context) {
+	// Parse parameter ID
+	idStr := c.Param("id")
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid parameter ID"})
+		return
+	}
+
+	// Bind request body
+	var request struct {
+		ParameterName string   `json:"parameter_name" binding:"required"`
+		ParameterType string   `json:"parameter_type" binding:"required"`
+		IsRequired    bool     `json:"is_required"`
+		MinValue      *float64 `json:"min_value"`
+		MaxValue      *float64 `json:"max_value"`
+		DefaultValue  string   `json:"default_value"`
+		Description   string   `json:"description"`
+	}
+
+	if err := c.ShouldBindJSON(&request); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Create parameter object
+	parameter := &model.IndicatorParameter{
+		ID:            id,
+		ParameterName: request.ParameterName,
+		ParameterType: request.ParameterType,
+		IsRequired:    request.IsRequired,
+		MinValue:      request.MinValue,
+		MaxValue:      request.MaxValue,
+		DefaultValue:  request.DefaultValue,
+		Description:   request.Description,
+	}
+
+	// Update the parameter
+	updatedParameter, err := h.indicatorService.UpdateParameter(c.Request.Context(), id, parameter)
+	if err != nil {
+		h.logger.Error("Failed to update parameter", zap.Error(err), zap.Int("id", id))
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, updatedParameter)
+}
+
+// DeleteEnumValue handles deleting an enum value
+// DELETE /api/v1/enum-values/{id}
+func (h *IndicatorHandler) DeleteEnumValue(c *gin.Context) {
+	// Parse enum value ID
+	idStr := c.Param("id")
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid enum value ID"})
+		return
+	}
+
+	// Delete the enum value
+	err = h.indicatorService.DeleteEnumValue(c.Request.Context(), id)
+	if err != nil {
+		h.logger.Error("Failed to delete enum value", zap.Error(err), zap.Int("id", id))
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.Status(http.StatusNoContent)
+}
+
+// UpdateEnumValue handles updating an enum value
+// PUT /api/v1/enum-values/{id}
+func (h *IndicatorHandler) UpdateEnumValue(c *gin.Context) {
+	// Parse enum value ID
+	idStr := c.Param("id")
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid enum value ID"})
+		return
+	}
+
+	// Bind request body
+	var request struct {
+		EnumValue   string `json:"enum_value" binding:"required"`
+		DisplayName string `json:"display_name"`
+	}
+
+	if err := c.ShouldBindJSON(&request); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Create enum value object
+	enumValue := &model.ParameterEnumValue{
+		EnumValue:   request.EnumValue,
+		DisplayName: request.DisplayName,
+	}
+
+	// Update the enum value
+	updatedEnumValue, err := h.indicatorService.UpdateEnumValue(c.Request.Context(), id, enumValue)
+	if err != nil {
+		h.logger.Error("Failed to update enum value", zap.Error(err), zap.Int("id", id))
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, updatedEnumValue)
 }

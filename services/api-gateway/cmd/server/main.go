@@ -140,33 +140,78 @@ func setupRouter(
 	// API routes
 	api := router.Group("/api")
 	{
-		// User service routes
-		api.Any("/v1/auth/*path", gatewayHandler.ProxyUserService)
-		api.Any("/v1/users/*path", gatewayHandler.ProxyUserService)
-		api.Any("/v1/admin/*path", gatewayHandler.ProxyUserService)
-		api.Any("/v1/notifications/*path", gatewayHandler.ProxyUserService)
+		// ==================== USER SERVICE ROUTES ====================
+		// Auth routes
+		api.Any("/v1/auth/login", gatewayHandler.ProxyUserService)
+		api.Any("/v1/auth/register", gatewayHandler.ProxyUserService)
+		api.Any("/v1/auth/refresh", gatewayHandler.ProxyUserService)
+		api.Any("/v1/auth/validate", gatewayHandler.ProxyUserService)
 
-		// Strategy service routes
-		api.Any("/v1/strategies/*path", gatewayHandler.ProxyStrategyService)
-		api.Any("/v1/strategy-tags/*path", gatewayHandler.ProxyStrategyService)
-		api.Any("/v1/indicators/*path", gatewayHandler.ProxyStrategyService)
-		api.Any("/v1/marketplace/*path", gatewayHandler.ProxyStrategyService)
-		api.Any("/v1/reviews/*path", gatewayHandler.ProxyStrategyService)
+		// User routes
+		api.Any("/v1/users/me", gatewayHandler.ProxyUserService)  // Specific route first
+		api.Any("/v1/users", gatewayHandler.ProxyUserService)     // Base route next
+		api.Any("/v1/users/:id", gatewayHandler.ProxyUserService) // Parameter routes last
 
-		// Routes without path wildcards
-		api.Any("/v1/indicators", gatewayHandler.ProxyStrategyService)
+		// Admin routes
+		api.Any("/v1/admin/users", gatewayHandler.ProxyUserService)
+		api.Any("/v1/admin/users/:id", gatewayHandler.ProxyUserService)
+		api.Any("/v1/admin/users/:id/roles", gatewayHandler.ProxyUserService)
+
+		// Notifications routes
+		api.Any("/v1/notifications", gatewayHandler.ProxyUserService)
+		api.Any("/v1/notifications/:id", gatewayHandler.ProxyUserService)
+
+		// ==================== STRATEGY SERVICE ROUTES ====================
+		// Indicator routes - ORDER MATTERS!
+		api.Any("/v1/indicators", gatewayHandler.ProxyStrategyService)            // Base route
+		api.Any("/v1/indicators/categories", gatewayHandler.ProxyStrategyService) // Static/enum route first
+		api.Any("/v1/indicators/:id", gatewayHandler.ProxyStrategyService)        // Parameter route last
+		api.Any("/v1/indicators/:id/parameters", gatewayHandler.ProxyStrategyService)
+
+		// Parameter enum routes
+		api.Any("/v1/parameters/:id/enum-values", gatewayHandler.ProxyStrategyService)
+
+		// Strategy routes
 		api.Any("/v1/strategies", gatewayHandler.ProxyStrategyService)
+		api.Any("/v1/strategies/:id", gatewayHandler.ProxyStrategyService)
+		api.Any("/v1/strategies/:id/versions", gatewayHandler.ProxyStrategyService)
+		api.Any("/v1/strategies/:id/active-version", gatewayHandler.ProxyStrategyService)
+		api.Any("/v1/strategies/:id/thumbnail", gatewayHandler.ProxyStrategyService)
+
+		// Strategy tags routes
 		api.Any("/v1/strategy-tags", gatewayHandler.ProxyStrategyService)
+		api.Any("/v1/strategy-tags/:id", gatewayHandler.ProxyStrategyService)
+
+		// Marketplace routes
 		api.Any("/v1/marketplace", gatewayHandler.ProxyStrategyService)
+		api.Any("/v1/marketplace/:id", gatewayHandler.ProxyStrategyService)
+		api.Any("/v1/marketplace/:id/reviews", gatewayHandler.ProxyStrategyService)
+		api.Any("/v1/marketplace/:id/purchase", gatewayHandler.ProxyStrategyService)
+		api.Any("/v1/marketplace/purchases/:id/cancel", gatewayHandler.ProxyStrategyService)
+
+		// Reviews routes
 		api.Any("/v1/reviews", gatewayHandler.ProxyStrategyService)
+		api.Any("/v1/reviews/:id", gatewayHandler.ProxyStrategyService)
 
-		// Historical data service routes
-		api.Any("/v1/market-data/*path", gatewayHandler.ProxyHistoricalService)
-		api.Any("/v1/backtests/*path", gatewayHandler.ProxyHistoricalService)
-		api.Any("/v1/backtest-runs/*path", gatewayHandler.ProxyHistoricalService)
-		api.Any("/v1/symbols/*path", gatewayHandler.ProxyHistoricalService)
-		api.Any("/v1/timeframes/*path", gatewayHandler.ProxyHistoricalService)
+		// ==================== HISTORICAL SERVICE ROUTES ====================
+		// Market data routes
+		api.Any("/v1/market-data", gatewayHandler.ProxyHistoricalService)
+		api.Any("/v1/market-data/:id", gatewayHandler.ProxyHistoricalService)
 
+		// Backtest routes
+		api.Any("/v1/backtests", gatewayHandler.ProxyHistoricalService)
+		api.Any("/v1/backtests/:id", gatewayHandler.ProxyHistoricalService)
+		api.Any("/v1/backtest-runs", gatewayHandler.ProxyHistoricalService)
+		api.Any("/v1/backtest-runs/:id", gatewayHandler.ProxyHistoricalService)
+
+		// Symbol routes
+		api.Any("/v1/symbols", gatewayHandler.ProxyHistoricalService)
+		api.Any("/v1/symbols/:id", gatewayHandler.ProxyHistoricalService)
+
+		// Timeframe routes
+		api.Any("/v1/timeframes", gatewayHandler.ProxyHistoricalService)
+		api.Any("/v1/timeframes/:id", gatewayHandler.ProxyHistoricalService)
 	}
+
 	return router
 }

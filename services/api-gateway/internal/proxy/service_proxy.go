@@ -40,18 +40,19 @@ func (p *ServiceProxy) ProxyRequest(c *gin.Context, path string) {
 		return
 	}
 
-	// Handle path with or without leading slash
-	if !strings.HasPrefix(path, "/") {
-		path = "/" + path
-	}
-
-	// Set the target URL path
+	// Set path for target URL - NO PATH MODIFICATION
 	targetURL.Path = path
 
 	// Add query string if any
 	if c.Request.URL.RawQuery != "" {
 		targetURL.RawQuery = c.Request.URL.RawQuery
 	}
+
+	// Log the proxy details for debugging
+	p.logger.Debug("Proxying request",
+		zap.String("method", c.Request.Method),
+		zap.String("path", path),
+		zap.String("target", targetURL.String()))
 
 	// Create a new request
 	req, err := http.NewRequest(c.Request.Method, targetURL.String(), c.Request.Body)

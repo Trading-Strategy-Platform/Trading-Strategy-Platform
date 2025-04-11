@@ -38,7 +38,7 @@ SELECT
 FROM 
     indicators i;
 
--- Create the get_indicators function
+-- Get indicators with parameters and enum values
 CREATE OR REPLACE FUNCTION get_indicators(
     p_search VARCHAR,
     p_categories VARCHAR[]
@@ -51,7 +51,7 @@ RETURNS TABLE (
     formula TEXT,
     created_at TIMESTAMP,
     updated_at TIMESTAMP,
-    parameters JSONB[]
+    parameters JSONB
 ) AS $$
 BEGIN
     RETURN QUERY
@@ -63,8 +63,8 @@ BEGIN
         i.formula,
         i.created_at,
         i.updated_at,
-        ARRAY(
-            SELECT jsonb_build_object(
+        COALESCE(
+            (SELECT jsonb_agg(jsonb_build_object(
                 'id', p.id,
                 'name', p.parameter_name,
                 'type', p.parameter_type,
@@ -73,18 +73,18 @@ BEGIN
                 'max_value', p.max_value,
                 'default_value', p.default_value,
                 'description', p.description,
-                'enum_values', (
-                    SELECT jsonb_agg(jsonb_build_object(
+                'enum_values', COALESCE(
+                    (SELECT jsonb_agg(jsonb_build_object(
                         'id', ev.id,
-                        'value', ev.enum_value,
+                        'enum_value', ev.enum_value,
                         'display_name', ev.display_name
                     ))
                     FROM parameter_enum_values ev
-                    WHERE ev.parameter_id = p.id
-                )
-            )
+                    WHERE ev.parameter_id = p.id), '[]'::jsonb)
+            ))
             FROM indicator_parameters p
             WHERE p.indicator_id = i.id
+            ), '[]'::jsonb
         ) AS parameters
     FROM 
         indicators i
@@ -96,7 +96,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- Update get_indicator_by_id to be compatible with the new get_indicators function
+-- Get indicator categories by id 
 CREATE OR REPLACE FUNCTION get_indicator_by_id(p_indicator_id INT)
 RETURNS TABLE (
     id INT,
@@ -106,7 +106,7 @@ RETURNS TABLE (
     formula TEXT,
     created_at TIMESTAMP,
     updated_at TIMESTAMP,
-    parameters JSONB[]
+    parameters JSONB
 ) AS $$
 BEGIN
     RETURN QUERY
@@ -118,8 +118,8 @@ BEGIN
         i.formula,
         i.created_at,
         i.updated_at,
-        ARRAY(
-            SELECT jsonb_build_object(
+        COALESCE(
+            (SELECT jsonb_agg(jsonb_build_object(
                 'id', p.id,
                 'name', p.parameter_name,
                 'type', p.parameter_type,
@@ -128,18 +128,18 @@ BEGIN
                 'max_value', p.max_value,
                 'default_value', p.default_value,
                 'description', p.description,
-                'enum_values', (
-                    SELECT jsonb_agg(jsonb_build_object(
+                'enum_values', COALESCE(
+                    (SELECT jsonb_agg(jsonb_build_object(
                         'id', ev.id,
-                        'value', ev.enum_value,
+                        'enum_value', ev.enum_value,
                         'display_name', ev.display_name
                     ))
                     FROM parameter_enum_values ev
-                    WHERE ev.parameter_id = p.id
-                )
-            )
+                    WHERE ev.parameter_id = p.id), '[]'::jsonb)
+            ))
             FROM indicator_parameters p
             WHERE p.indicator_id = i.id
+            ), '[]'::jsonb
         ) AS parameters
     FROM 
         indicators i
@@ -157,13 +157,127 @@ RETURNS TABLE (
 BEGIN
     RETURN QUERY
     SELECT 
-        i.category,
+        COALESCE(i.category, 'Uncategorized') AS category,
         COUNT(*) AS count
     FROM 
         indicators i
     GROUP BY 
-        i.category
+        COALESCE(i.category, 'Uncategorized')
     ORDER BY 
-        i.category;
+        category;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Delete indicator
+CREATE OR REPLACE FUNCTION delete_indicator(p_id INT) 
+RETURNS BOOLEAN AS $$
+DECLARE
+    affected_rows INT;
+BEGIN
+    DELETE FROM indicators WHERE id = p_id;
+    GET DIAGNOSTICS affected_rows = ROW_COUNT;
+    RETURN affected_rows > 0;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Update indicator
+CREATE OR REPLACE FUNCTION update_indicator(
+    p_id INT,
+    p_name VARCHAR(50),
+    p_description TEXT,
+    p_category VARCHAR(50),
+    p_formula TEXT
+) 
+RETURNS BOOLEAN AS $$
+DECLARE
+    affected_rows INT;
+BEGIN
+    UPDATE indicators 
+    SET 
+        name = p_name,
+        description = p_description,
+        category = p_category,
+        formula = p_formula,
+        updated_at = NOW()
+    WHERE id = p_id;
+    
+    GET DIAGNOSTICS affected_rows = ROW_COUNT;
+    RETURN affected_rows > 0;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Delete parameter
+CREATE OR REPLACE FUNCTION delete_parameter(p_id INT) 
+RETURNS BOOLEAN AS $$
+DECLARE
+    affected_rows INT;
+BEGIN
+    DELETE FROM indicator_parameters WHERE id = p_id;
+    GET DIAGNOSTICS affected_rows = ROW_COUNT;
+    RETURN affected_rows > 0;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Update parameter
+CREATE OR REPLACE FUNCTION update_parameter(
+    p_id INT,
+    p_parameter_name VARCHAR(50),
+    p_parameter_type VARCHAR(20),
+    p_is_required BOOLEAN,
+    p_min_value FLOAT,
+    p_max_value FLOAT,
+    p_default_value VARCHAR(50),
+    p_description TEXT
+) 
+RETURNS BOOLEAN AS $$
+DECLARE
+    affected_rows INT;
+BEGIN
+    UPDATE indicator_parameters 
+    SET 
+        parameter_name = p_parameter_name,
+        parameter_type = p_parameter_type,
+        is_required = p_is_required,
+        min_value = p_min_value,
+        max_value = p_max_value,
+        default_value = p_default_value,
+        description = p_description
+    WHERE id = p_id;
+    
+    GET DIAGNOSTICS affected_rows = ROW_COUNT;
+    RETURN affected_rows > 0;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Delete enum value
+CREATE OR REPLACE FUNCTION delete_enum_value(p_id INT) 
+RETURNS BOOLEAN AS $$
+DECLARE
+    affected_rows INT;
+BEGIN
+    DELETE FROM parameter_enum_values WHERE id = p_id;
+    GET DIAGNOSTICS affected_rows = ROW_COUNT;
+    RETURN affected_rows > 0;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Update enum value
+CREATE OR REPLACE FUNCTION update_enum_value(
+    p_id INT,
+    p_enum_value VARCHAR(50),
+    p_display_name VARCHAR(100)
+) 
+RETURNS BOOLEAN AS $$
+DECLARE
+    affected_rows INT;
+BEGIN
+    UPDATE parameter_enum_values 
+    SET 
+        enum_value = p_enum_value,
+        display_name = p_display_name
+    WHERE id = p_id;
+    
+    GET DIAGNOSTICS affected_rows = ROW_COUNT;
+    RETURN affected_rows > 0;
 END;
 $$ LANGUAGE plpgsql;

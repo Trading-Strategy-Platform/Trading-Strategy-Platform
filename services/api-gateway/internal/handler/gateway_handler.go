@@ -75,10 +75,8 @@ func (h *GatewayHandler) ProxyHistoricalService(c *gin.Context) {
 	h.historicalServiceProxy.ProxyRequest(c, path)
 }
 
-// getProxyPath extracts the path to proxy from the original request path
-// It removes the API prefix (e.g. "/api/v1") from the path
 func getProxyPath(originalPath, prefix string) string {
-
-	// If the path doesn't start with the prefix, return the original path
+	// Just return the original path - this ensures the microservices
+	// receive exactly the same path that came to the gateway
 	return originalPath
 }
