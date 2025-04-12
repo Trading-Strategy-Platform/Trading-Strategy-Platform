@@ -64,6 +64,8 @@ func (r *IndicatorRepository) GetAll(ctx context.Context, searchTerm string, cat
 			&indicator.Description,
 			&indicator.Category,
 			&indicator.Formula,
+			&indicator.MinValue,
+			&indicator.MaxValue,
 			&indicator.CreatedAt,
 			&updatedAt,
 			&parametersJSON,
@@ -208,6 +210,8 @@ func (r *IndicatorRepository) GetByID(ctx context.Context, id int) (*model.Techn
 		&indicator.Description,
 		&indicator.Category,
 		&indicator.Formula,
+		&indicator.MinValue,
+		&indicator.MaxValue,
 		&indicator.CreatedAt,
 		&updatedAt,
 		&parametersJSON,
@@ -307,8 +311,8 @@ func (r *IndicatorRepository) GetByID(ctx context.Context, id int) (*model.Techn
 // Create adds a new indicator to the database
 func (r *IndicatorRepository) Create(ctx context.Context, indicator *model.TechnicalIndicator) (int, error) {
 	query := `
-		INSERT INTO indicators (name, description, category, formula, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $5)
+		INSERT INTO indicators (name, description, category, formula, min_value, max_value, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $7)
 		RETURNING id
 	`
 
@@ -320,6 +324,8 @@ func (r *IndicatorRepository) Create(ctx context.Context, indicator *model.Techn
 		indicator.Description,
 		indicator.Category,
 		indicator.Formula,
+		indicator.MinValue,
+		indicator.MaxValue,
 		time.Now(),
 	).Scan(&id)
 
@@ -435,7 +441,7 @@ func (r *IndicatorRepository) Delete(ctx context.Context, id int) error {
 
 // Update an indicator
 func (r *IndicatorRepository) Update(ctx context.Context, id int, indicator *model.TechnicalIndicator) error {
-	query := `SELECT update_indicator($1, $2, $3, $4, $5)`
+	query := `SELECT update_indicator($1, $2, $3, $4, $5, $6, $7)`
 
 	var success bool
 	err := r.db.QueryRowContext(
@@ -446,6 +452,8 @@ func (r *IndicatorRepository) Update(ctx context.Context, id int, indicator *mod
 		indicator.Description,
 		indicator.Category,
 		indicator.Formula,
+		indicator.MinValue,
+		indicator.MaxValue,
 	).Scan(&success)
 
 	if err != nil {

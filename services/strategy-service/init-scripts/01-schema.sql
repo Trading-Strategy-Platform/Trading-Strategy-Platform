@@ -74,6 +74,8 @@ CREATE TABLE IF NOT EXISTS "indicators" (
   "description" text,
   "category" varchar(50),
   "formula" text,
+  "min_value" float,
+  "max_value" float,
   "created_at" timestamp NOT NULL DEFAULT (CURRENT_TIMESTAMP),
   "updated_at" timestamp
 );

@@ -66,6 +66,16 @@ func (h *IndicatorHandler) GetAllIndicators(c *gin.Context) {
 	})
 }
 
+type ParameterRequest struct {
+	ParameterName string   `json:"parameter_name" binding:"required"`
+	ParameterType string   `json:"parameter_type" binding:"required"`
+	IsRequired    bool     `json:"is_required"`
+	MinValue      *float64 `json:"min_value"`
+	MaxValue      *float64 `json:"max_value"`
+	DefaultValue  string   `json:"default_value"`
+	Description   string   `json:"description"`
+}
+
 // AddParameter handles adding a parameter to an indicator
 // POST /api/v1/indicators/{id}/parameters
 func (h *IndicatorHandler) AddParameter(c *gin.Context) {
@@ -76,18 +86,24 @@ func (h *IndicatorHandler) AddParameter(c *gin.Context) {
 		return
 	}
 
-	var request struct {
-		ParameterName string   `json:"parameter_name" binding:"required"`
-		ParameterType string   `json:"parameter_type" binding:"required"`
-		IsRequired    bool     `json:"is_required" binding:"required"`
-		MinValue      *float64 `json:"min_value"`
-		MaxValue      *float64 `json:"max_value"`
-		DefaultValue  string   `json:"default_value"`
-		Description   string   `json:"description"`
-	}
-
+	var request ParameterRequest
 	if err := c.ShouldBindJSON(&request); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Just add "Number" to the list of valid types
+	validTypes := map[string]bool{
+		"number":  true,
+		"boolean": true,
+		"string":  true,
+		"enum":    true,
+	}
+
+	if !validTypes[request.ParameterType] {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "Invalid parameter_type. Must be one of: integer, float, boolean, string, enum, price, timeframe",
+		})
 		return
 	}
 
@@ -157,10 +173,12 @@ func (h *IndicatorHandler) CreateIndicator(c *gin.Context) {
 
 	// Define request struct to handle parameters
 	var request struct {
-		Name        string `json:"name" binding:"required"`
-		Description string `json:"description" binding:"required"`
-		Category    string `json:"category" binding:"required"`
-		Formula     string `json:"formula"`
+		Name        string   `json:"name" binding:"required"`
+		Description string   `json:"description" binding:"required"`
+		Category    string   `json:"category" binding:"required"`
+		Formula     string   `json:"formula"`
+		MinValue    *float64 `json:"min_value"`
+		MaxValue    *float64 `json:"max_value"`
 		Parameters  []struct {
 			Name         string   `json:"name" binding:"required"`
 			Type         string   `json:"type" binding:"required"`
@@ -220,6 +238,8 @@ func (h *IndicatorHandler) CreateIndicator(c *gin.Context) {
 		request.Description,
 		request.Category,
 		request.Formula,
+		request.MinValue,
+		request.MaxValue,
 		parameters,
 	)
 
@@ -318,10 +338,12 @@ func (h *IndicatorHandler) UpdateIndicator(c *gin.Context) {
 
 	// Bind request body
 	var request struct {
-		Name        string `json:"name" binding:"required"`
-		Description string `json:"description"`
-		Category    string `json:"category" binding:"required"`
-		Formula     string `json:"formula"`
+		Name        string   `json:"name" binding:"required"`
+		Description string   `json:"description"`
+		Category    string   `json:"category" binding:"required"`
+		Formula     string   `json:"formula"`
+		MinValue    *float64 `json:"min_value"`
+		MaxValue    *float64 `json:"max_value"`
 	}
 
 	if err := c.ShouldBindJSON(&request); err != nil {
@@ -335,6 +357,8 @@ func (h *IndicatorHandler) UpdateIndicator(c *gin.Context) {
 		Description: request.Description,
 		Category:    request.Category,
 		Formula:     request.Formula,
+		MinValue:    request.MinValue,
+		MaxValue:    request.MaxValue,
 	}
 
 	// Update the indicator

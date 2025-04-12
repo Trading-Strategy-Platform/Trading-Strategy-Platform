@@ -11,6 +11,8 @@ type TechnicalIndicator struct {
 	Description string               `json:"description" db:"description"`
 	Category    string               `json:"category" db:"category"`
 	Formula     string               `json:"formula" db:"formula"`
+	MinValue    *float64             `json:"min_value,omitempty" db:"min_value"`
+	MaxValue    *float64             `json:"max_value,omitempty" db:"max_value"`
 	CreatedAt   time.Time            `json:"created_at" db:"created_at"`
 	UpdatedAt   *time.Time           `json:"updated_at,omitempty" db:"updated_at"`
 	Parameters  []IndicatorParameter `json:"parameters,omitempty" db:"-"`

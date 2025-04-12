@@ -2,7 +2,9 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"errors"
+	"fmt"
 	"time"
 
 	"services/strategy-service/internal/model"
@@ -47,7 +49,7 @@ func (s *IndicatorService) GetAllIndicators(ctx context.Context, searchTerm stri
 }
 
 // CreateIndicator creates a new technical indicator with parameters and enum values
-func (s *IndicatorService) CreateIndicator(ctx context.Context, name, description, category, formula string, parameters []model.IndicatorParameterCreate) (*model.TechnicalIndicator, error) {
+func (s *IndicatorService) CreateIndicator(ctx context.Context, name, description, category, formula string, minValue, maxValue *float64, parameters []model.IndicatorParameterCreate) (*model.TechnicalIndicator, error) {
 	// Validate input
 	if name == "" {
 		return nil, errors.New("indicator name is required")
@@ -70,6 +72,8 @@ func (s *IndicatorService) CreateIndicator(ctx context.Context, name, descriptio
 		Description: description,
 		Category:    category,
 		Formula:     formula,
+		MinValue:    minValue,
+		MaxValue:    maxValue,
 		CreatedAt:   time.Now(),
 	}
 
@@ -147,60 +151,6 @@ func (s *IndicatorService) CreateIndicator(ctx context.Context, name, descriptio
 		zap.Int("parameters_count", len(parameters)))
 
 	return indicator, nil
-}
-
-// AddParameter adds a parameter to an indicator
-func (s *IndicatorService) AddParameter(
-	ctx context.Context,
-	indicatorID int,
-	paramName string,
-	paramType string,
-	isRequired bool,
-	minValue *float64,
-	maxValue *float64,
-	defaultValue string,
-	description string,
-) (*model.IndicatorParameter, error) {
-	// Validate indicator exists
-	indicator, err := s.indicatorRepo.GetByID(ctx, indicatorID)
-	if err != nil {
-		return nil, err
-	}
-	if indicator == nil {
-		return nil, errors.New("indicator not found")
-	}
-
-	// Create parameter object
-	parameterCreate := &model.IndicatorParameterCreate{
-		IndicatorID:   indicatorID,
-		ParameterName: paramName,
-		ParameterType: paramType,
-		IsRequired:    isRequired,
-		MinValue:      minValue,
-		MaxValue:      maxValue,
-		DefaultValue:  defaultValue,
-		Description:   description,
-	}
-
-	// Add parameter to database
-	paramID, err := s.indicatorRepo.CreateParameter(ctx, parameterCreate)
-	if err != nil {
-		return nil, err
-	}
-
-	// Return the created parameter
-	return &model.IndicatorParameter{
-		ID:            paramID,
-		IndicatorID:   indicatorID,
-		ParameterName: paramName,
-		ParameterType: paramType,
-		IsRequired:    isRequired,
-		MinValue:      minValue,
-		MaxValue:      maxValue,
-		DefaultValue:  defaultValue,
-		Description:   description,
-		EnumValues:    []model.ParameterEnumValue{},
-	}, nil
 }
 
 // AddEnumValue adds an enum value to a parameter
@@ -319,33 +269,66 @@ func (s *IndicatorService) UpdateIndicator(ctx context.Context, id int, update *
 	return updatedIndicator, nil
 }
 
-// DeleteParameter deletes a parameter by ID
-func (s *IndicatorService) DeleteParameter(ctx context.Context, id int) error {
-	return s.indicatorRepo.DeleteParameter(ctx, id)
-}
-
-// UpdateParameter updates a parameter
+// UpdateParameter updates a parameter with proper error handling
 func (s *IndicatorService) UpdateParameter(ctx context.Context, id int, param *model.IndicatorParameter) (*model.IndicatorParameter, error) {
-	// Update parameter
-	err := s.indicatorRepo.UpdateParameter(ctx, id, param)
+	if param == nil {
+		return nil, errors.New("parameter data cannot be nil")
+	}
+
+	// First check if parameter exists
+	existingParam, err := s.getParameterByID(ctx, id)
 	if err != nil {
-		return nil, err
+		s.logger.Error("Failed to check if parameter exists", zap.Error(err), zap.Int("id", id))
+		return nil, fmt.Errorf("error checking parameter: %w", err)
 	}
 
-	// Get the indicator that this parameter belongs to
-	indicator, err := s.indicatorRepo.GetByID(ctx, param.IndicatorID)
+	if existingParam == nil {
+		s.logger.Warn("Parameter not found during update", zap.Int("id", id))
+		return nil, fmt.Errorf("parameter with ID %d not found", id)
+	}
+
+	// Set the indicator ID from the existing parameter to maintain relationship
+	param.IndicatorID = existingParam.IndicatorID
+
+	// Now update the parameter in the repository
+	err = s.indicatorRepo.UpdateParameter(ctx, id, param)
 	if err != nil {
-		return nil, err
+		s.logger.Error("Failed to update parameter in repository",
+			zap.Error(err),
+			zap.Int("id", id),
+			zap.String("parameter_name", param.ParameterName))
+		return nil, fmt.Errorf("failed to update parameter: %w", err)
 	}
 
-	// Find the updated parameter in the indicator's parameters
-	for _, p := range indicator.Parameters {
-		if p.ID == id {
-			return &p, nil
-		}
+	// Get the updated parameter to return
+	updatedParam, err := s.getParameterByID(ctx, id)
+	if err != nil {
+		s.logger.Error("Failed to retrieve updated parameter", zap.Error(err), zap.Int("id", id))
+		return nil, fmt.Errorf("parameter was updated but could not retrieve updated data: %w", err)
 	}
 
-	return nil, errors.New("parameter not found after update")
+	if updatedParam == nil {
+		s.logger.Error("Updated parameter not found after update", zap.Int("id", id))
+		return nil, errors.New("parameter was updated but could not be found")
+	}
+
+	// Get enum values if any
+	enumValues, err := s.getEnumValuesByParameterID(ctx, id)
+	if err != nil {
+		s.logger.Warn("Failed to retrieve enum values for parameter",
+			zap.Error(err),
+			zap.Int("parameter_id", id))
+		// Don't fail the whole operation, just log the warning
+	}
+
+	updatedParam.EnumValues = enumValues
+
+	s.logger.Info("Successfully updated parameter",
+		zap.Int("id", id),
+		zap.String("name", updatedParam.ParameterName),
+		zap.Int("indicator_id", updatedParam.IndicatorID))
+
+	return updatedParam, nil
 }
 
 // DeleteEnumValue deletes an enum value by ID
@@ -368,4 +351,165 @@ func (s *IndicatorService) UpdateEnumValue(ctx context.Context, id int, enumVal 
 	result.ID = id
 
 	return &result, nil
+}
+
+// getParameterByID retrieves a parameter by ID with proper error handling
+func (s *IndicatorService) getParameterByID(ctx context.Context, id int) (*model.IndicatorParameter, error) {
+	if id <= 0 {
+		return nil, errors.New("invalid parameter ID")
+	}
+
+	// Query to get parameter by ID
+	query := `
+        SELECT id, indicator_id, parameter_name, parameter_type, is_required, 
+               min_value, max_value, default_value, description
+        FROM indicator_parameters
+        WHERE id = $1
+    `
+
+	var param model.IndicatorParameter
+	err := s.db.GetContext(ctx, &param, query, id)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil // Parameter not found
+		}
+		s.logger.Error("Database error while getting parameter", zap.Error(err), zap.Int("id", id))
+		return nil, fmt.Errorf("database error: %w", err)
+	}
+
+	return &param, nil
+}
+
+// getEnumValuesByParameterID gets enum values for a parameter
+func (s *IndicatorService) getEnumValuesByParameterID(ctx context.Context, parameterID int) ([]model.ParameterEnumValue, error) {
+	if parameterID <= 0 {
+		return []model.ParameterEnumValue{}, nil
+	}
+
+	query := `
+        SELECT id, parameter_id, enum_value, display_name
+        FROM parameter_enum_values
+        WHERE parameter_id = $1
+        ORDER BY id
+    `
+
+	var enumValues []model.ParameterEnumValue
+	err := s.db.SelectContext(ctx, &enumValues, query, parameterID)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return []model.ParameterEnumValue{}, nil
+		}
+		return nil, fmt.Errorf("failed to retrieve enum values: %w", err)
+	}
+
+	return enumValues, nil
+}
+
+// DeleteParameter deletes a parameter with proper error handling
+func (s *IndicatorService) DeleteParameter(ctx context.Context, id int) error {
+	if id <= 0 {
+		return errors.New("invalid parameter ID")
+	}
+
+	// First check if parameter exists
+	existingParam, err := s.getParameterByID(ctx, id)
+	if err != nil {
+		s.logger.Error("Failed to check if parameter exists", zap.Error(err), zap.Int("id", id))
+		return fmt.Errorf("error checking parameter: %w", err)
+	}
+
+	if existingParam == nil {
+		s.logger.Warn("Parameter not found during delete", zap.Int("id", id))
+		return fmt.Errorf("parameter with ID %d not found", id)
+	}
+
+	// Log the operation
+	s.logger.Info("Deleting parameter",
+		zap.Int("id", id),
+		zap.String("name", existingParam.ParameterName),
+		zap.Int("indicator_id", existingParam.IndicatorID))
+
+	// Delete the parameter
+	err = s.indicatorRepo.DeleteParameter(ctx, id)
+	if err != nil {
+		s.logger.Error("Failed to delete parameter", zap.Error(err), zap.Int("id", id))
+		return fmt.Errorf("failed to delete parameter: %w", err)
+	}
+
+	return nil
+}
+
+// AddParameter adds a parameter to an indicator with proper error handling
+func (s *IndicatorService) AddParameter(
+	ctx context.Context,
+	indicatorID int,
+	paramName string,
+	paramType string,
+	isRequired bool,
+	minValue *float64,
+	maxValue *float64,
+	defaultValue string,
+	description string,
+) (*model.IndicatorParameter, error) {
+	// Validate indicator ID
+	if indicatorID <= 0 {
+		return nil, errors.New("invalid indicator ID")
+	}
+
+	// Validate parameter name
+	if paramName == "" {
+		return nil, errors.New("parameter name is required")
+	}
+
+	// Check if indicator exists
+	indicator, err := s.GetIndicator(ctx, indicatorID)
+	if err != nil {
+		s.logger.Error("Failed to get indicator", zap.Error(err), zap.Int("indicator_id", indicatorID))
+		return nil, fmt.Errorf("error checking indicator: %w", err)
+	}
+
+	if indicator == nil {
+		return nil, fmt.Errorf("indicator with ID %d not found", indicatorID)
+	}
+
+	// Create parameter object
+	paramCreate := &model.IndicatorParameterCreate{
+		IndicatorID:   indicatorID,
+		ParameterName: paramName,
+		ParameterType: paramType,
+		IsRequired:    isRequired,
+		MinValue:      minValue,
+		MaxValue:      maxValue,
+		DefaultValue:  defaultValue,
+		Description:   description,
+	}
+
+	// Add parameter to database
+	paramID, err := s.indicatorRepo.CreateParameter(ctx, paramCreate)
+	if err != nil {
+		s.logger.Error("Failed to create parameter",
+			zap.Error(err),
+			zap.Int("indicator_id", indicatorID),
+			zap.String("parameter_name", paramName))
+		return nil, fmt.Errorf("failed to create parameter: %w", err)
+	}
+
+	// Get the created parameter
+	newParam, err := s.getParameterByID(ctx, paramID)
+	if err != nil {
+		s.logger.Error("Failed to retrieve newly created parameter", zap.Error(err), zap.Int("id", paramID))
+		return nil, fmt.Errorf("parameter was created but could not retrieve: %w", err)
+	}
+
+	if newParam == nil {
+		s.logger.Error("Created parameter not found after creation", zap.Int("id", paramID))
+		return nil, errors.New("parameter was created but could not be found")
+	}
+
+	s.logger.Info("Successfully created parameter",
+		zap.Int("id", paramID),
+		zap.String("name", paramName),
+		zap.Int("indicator_id", indicatorID))
+
+	return newParam, nil
 }

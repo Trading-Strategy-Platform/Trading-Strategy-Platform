@@ -168,8 +168,12 @@ func setupRouter(
 		api.Any("/v1/indicators/:id", gatewayHandler.ProxyStrategyService)        // Parameter route last
 		api.Any("/v1/indicators/:id/parameters", gatewayHandler.ProxyStrategyService)
 
-		// Parameter enum routes
+		// Parameter routes
+		api.Any("/v1/parameters/:id", gatewayHandler.ProxyStrategyService) // For PUT and DELETE operations
 		api.Any("/v1/parameters/:id/enum-values", gatewayHandler.ProxyStrategyService)
+
+		// Enum values routes
+		api.Any("/v1/enum-values/:id", gatewayHandler.ProxyStrategyService) // For PUT and DELETE operations
 
 		// Strategy routes
 		api.Any("/v1/strategies", gatewayHandler.ProxyStrategyService)

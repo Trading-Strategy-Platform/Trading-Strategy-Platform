@@ -10,6 +10,8 @@ SELECT
     i.description,
     i.category,
     i.formula,
+    i.min_value,  
+    i.max_value,  
     i.created_at,
     i.updated_at,
     ARRAY(
@@ -49,6 +51,8 @@ RETURNS TABLE (
     description TEXT,
     category VARCHAR(50),
     formula TEXT,
+    min_value FLOAT,  
+    max_value FLOAT, 
     created_at TIMESTAMP,
     updated_at TIMESTAMP,
     parameters JSONB
@@ -61,6 +65,8 @@ BEGIN
         i.description,
         i.category,
         i.formula,
+        i.min_value,  
+        i.max_value,  
         i.created_at,
         i.updated_at,
         COALESCE(
@@ -104,6 +110,8 @@ RETURNS TABLE (
     description TEXT,
     category VARCHAR(50),
     formula TEXT,
+    min_value FLOAT, 
+    max_value FLOAT, 
     created_at TIMESTAMP,
     updated_at TIMESTAMP,
     parameters JSONB
@@ -116,6 +124,8 @@ BEGIN
         i.description,
         i.category,
         i.formula,
+        i.min_value, 
+        i.max_value,  
         i.created_at,
         i.updated_at,
         COALESCE(
@@ -186,7 +196,9 @@ CREATE OR REPLACE FUNCTION update_indicator(
     p_name VARCHAR(50),
     p_description TEXT,
     p_category VARCHAR(50),
-    p_formula TEXT
+    p_formula TEXT,
+    p_min_value FLOAT,  
+    p_max_value FLOAT   
 ) 
 RETURNS BOOLEAN AS $$
 DECLARE
@@ -198,6 +210,8 @@ BEGIN
         description = p_description,
         category = p_category,
         formula = p_formula,
+        min_value = p_min_value,  
+        max_value = p_max_value,  
         updated_at = NOW()
     WHERE id = p_id;
     

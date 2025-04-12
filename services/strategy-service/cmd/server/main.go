@@ -212,33 +212,53 @@ func setupRouter(
 		// IMPORTANT: Order matters - specific routes must come before parameter routes
 		indicators := v1.Group("/indicators")
 		{
-			// 1. Base endpoint
-			indicators.GET("", indicatorHandler.GetAllIndicators) // GET /api/v1/indicators
-
-			// 2. Static/enum routes - must come before parameter routes!
+			// 1. Base endpoint - public routes
+			indicators.GET("", indicatorHandler.GetAllIndicators)         // GET /api/v1/indicators
 			indicators.GET("/categories", indicatorHandler.GetCategories) // GET /api/v1/indicators/categories
+			indicators.GET("/:id", indicatorHandler.GetIndicator)         // GET /api/v1/indicators/{id}
 
-			// 3. Parameter routes - these come last!
-			indicators.GET("/:id", indicatorHandler.GetIndicator) // GET /api/v1/indicators/{id}
-
-			// Admin-only routes for managing indicators
+			// 2. Admin-only routes for managing indicators
 			adminIndicators := indicators.Group("")
 			adminIndicators.Use(middleware.AuthMiddleware(userClient, logger))
 			adminIndicators.Use(middleware.RequireRole(userClient, "admin"))
 
 			adminIndicators.POST("", indicatorHandler.CreateIndicator)             // POST /api/v1/indicators
+			adminIndicators.PUT("/:id", indicatorHandler.UpdateIndicator)          // PUT /api/v1/indicators/{id}
+			adminIndicators.DELETE("/:id", indicatorHandler.DeleteIndicator)       // DELETE /api/v1/indicators/{id}
 			adminIndicators.POST("/:id/parameters", indicatorHandler.AddParameter) // POST /api/v1/indicators/{id}/parameters
 		}
 
-		// Parameter enum values route - separate from indicators to avoid conflicts
-		v1.POST("/parameters/:id/enum-values", indicatorHandler.AddEnumValue) // POST /api/v1/parameters/{id}/enum-values
+		// ==================== PARAMETER ROUTES ====================
+		parameters := v1.Group("/parameters")
+		{
+			// Admin-only routes for managing parameters
+			adminParameters := parameters.Group("")
+			adminParameters.Use(middleware.AuthMiddleware(userClient, logger))
+			adminParameters.Use(middleware.RequireRole(userClient, "admin"))
+
+			adminParameters.PUT("/:id", indicatorHandler.UpdateParameter)           // PUT /api/v1/parameters/{id}
+			adminParameters.DELETE("/:id", indicatorHandler.DeleteParameter)        // DELETE /api/v1/parameters/{id}
+			adminParameters.POST("/:id/enum-values", indicatorHandler.AddEnumValue) // POST /api/v1/parameters/{id}/enum-values
+		}
+
+		// ==================== ENUM VALUES ROUTES ====================
+		enumValues := v1.Group("/enum-values")
+		{
+			// Admin-only routes for managing enum values
+			adminEnumValues := enumValues.Group("")
+			adminEnumValues.Use(middleware.AuthMiddleware(userClient, logger))
+			adminEnumValues.Use(middleware.RequireRole(userClient, "admin"))
+
+			adminEnumValues.PUT("/:id", indicatorHandler.UpdateEnumValue)    // PUT /api/v1/enum-values/{id}
+			adminEnumValues.DELETE("/:id", indicatorHandler.DeleteEnumValue) // DELETE /api/v1/enum-values/{id}
+		}
 
 		// ==================== STRATEGY ROUTES ====================
 		strategies := v1.Group("/strategies")
 		{
 			strategies.Use(middleware.AuthMiddleware(userClient, logger))
 
-			// Base route
+			// Base routes
 			strategies.GET("", strategyHandler.ListUserStrategies) // GET /api/v1/strategies
 			strategies.POST("", strategyHandler.CreateStrategy)    // POST /api/v1/strategies
 
@@ -258,8 +278,9 @@ func setupRouter(
 			tags.GET("", tagHandler.GetAllTags) // GET /api/v1/strategy-tags
 
 			// Protected routes
-			tags.Use(middleware.AuthMiddleware(userClient, logger))
-			tags.POST("", tagHandler.CreateTag) // POST /api/v1/strategy-tags
+			tagsAuth := tags.Group("")
+			tagsAuth.Use(middleware.AuthMiddleware(userClient, logger))
+			tagsAuth.POST("", tagHandler.CreateTag) // POST /api/v1/strategy-tags
 		}
 
 		// ==================== MARKETPLACE ROUTES ====================
@@ -276,15 +297,13 @@ func setupRouter(
 			marketplaceAuth.POST("", marketplaceHandler.CreateListing)                 // POST /api/v1/marketplace
 			marketplaceAuth.DELETE("/:id", marketplaceHandler.DeleteListing)           // DELETE /api/v1/marketplace/{id}
 			marketplaceAuth.POST("/:id/purchase", marketplaceHandler.PurchaseStrategy) // POST /api/v1/marketplace/{id}/purchase
-
-			// Reviews management
-			marketplaceAuth.POST("/:id/reviews", marketplaceHandler.CreateReview) // POST /api/v1/marketplace/{id}/reviews
+			marketplaceAuth.POST("/:id/reviews", marketplaceHandler.CreateReview)      // POST /api/v1/marketplace/{id}/reviews
 
 			// Purchases management
 			marketplaceAuth.PUT("/purchases/:id/cancel", marketplaceHandler.CancelSubscription) // PUT /api/v1/marketplace/purchases/{id}/cancel
 		}
 
-		// Reviews management (separate from marketplace for edit/delete)
+		// ==================== REVIEWS ROUTES ====================
 		reviews := v1.Group("/reviews")
 		{
 			reviews.Use(middleware.AuthMiddleware(userClient, logger))
