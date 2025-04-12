@@ -6,7 +6,6 @@ import (
 
 	"services/strategy-service/internal/model"
 	"services/strategy-service/internal/repository"
-	"services/strategy-service/internal/validator"
 
 	"github.com/jmoiron/sqlx"
 	"go.uber.org/zap"
@@ -71,10 +70,6 @@ func (s *StrategyService) GetUserStrategies(ctx context.Context, userID int, sea
 
 // CreateStrategy creates a new strategy
 func (s *StrategyService) CreateStrategy(ctx context.Context, strategy *model.StrategyCreate, userID int) (*model.Strategy, error) {
-	// Validate strategy structure
-	if err := validator.ValidateStrategyStructure(&strategy.Structure); err != nil {
-		return nil, err
-	}
 
 	// Create strategy using add_strategy function
 	strategyID, err := s.strategyRepo.Create(ctx, strategy, userID)
@@ -127,12 +122,7 @@ func (s *StrategyService) UpdateStrategy(ctx context.Context, id int, update *mo
 		return nil, errors.New("access denied")
 	}
 
-	// Validate strategy structure if provided
-	if update.Structure != nil {
-		if err := validator.ValidateStrategyStructure(update.Structure); err != nil {
-			return nil, err
-		}
-	}
+	// Comment out or remove this validation block:
 
 	// Update strategy using update_strategy function
 	err = s.strategyRepo.Update(ctx, id, update, userID)

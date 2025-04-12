@@ -25,23 +25,23 @@ type Strategy struct {
 
 // ExtendedStrategy is used for the get_my_strategies SQL function output
 type ExtendedStrategy struct {
-	ID            int        `json:"id" db:"id"`
-	Name          string     `json:"name" db:"name"`
-	Description   string     `json:"description" db:"description"`
-	ThumbnailURL  string     `json:"thumbnail_url" db:"thumbnail_url"`
-	OwnerID       int        `json:"owner_id" db:"owner_id"`
-	OwnerUsername string     `json:"owner_username" db:"owner_username"`
-	IsPublic      bool       `json:"is_public" db:"is_public"`
-	IsActive      bool       `json:"is_active" db:"is_active"`
-	Version       int        `json:"version" db:"version"`
-	CreatedAt     time.Time  `json:"created_at" db:"created_at"`
-	UpdatedAt     *time.Time `json:"updated_at,omitempty" db:"updated_at"`
-	AccessType    string     `json:"access_type" db:"access_type"`
-	PurchaseID    *int       `json:"purchase_id,omitempty" db:"purchase_id"`
-	PurchaseDate  *time.Time `json:"purchase_date,omitempty" db:"purchase_date"`
-	TagIDs        []int      `json:"-" db:"tag_ids"`
-	Tags          []Tag      `json:"tags,omitempty" db:"-"`
-	Structure     *Structure `json:"structure,omitempty" db:"-"`
+	ID           int        `json:"id" db:"id"`
+	Name         string     `json:"name" db:"name"`
+	Description  string     `json:"description" db:"description"`
+	ThumbnailURL string     `json:"thumbnail_url" db:"thumbnail_url"`
+	OwnerID      int        `json:"owner_id" db:"owner_id"`
+	OwnerUserID  int        `json:"owner_username" db:"owner_user_id"`
+	IsPublic     bool       `json:"is_public" db:"is_public"`
+	IsActive     bool       `json:"is_active" db:"is_active"`
+	Version      int        `json:"version" db:"version"`
+	CreatedAt    time.Time  `json:"created_at" db:"created_at"`
+	UpdatedAt    *time.Time `json:"updated_at,omitempty" db:"updated_at"`
+	AccessType   string     `json:"access_type" db:"access_type"`
+	PurchaseID   *int       `json:"purchase_id,omitempty" db:"purchase_id"`
+	PurchaseDate *time.Time `json:"purchase_date,omitempty" db:"purchase_date"`
+	TagIDs       []int      `json:"-" db:"tag_ids"`
+	Tags         []Tag      `json:"tags,omitempty" db:"-"`
+	Structure    *Structure `json:"structure,omitempty" db:"-"`
 }
 
 // ConvertToStrategy converts ExtendedStrategy to Strategy
