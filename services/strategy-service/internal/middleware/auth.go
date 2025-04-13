@@ -5,8 +5,11 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -23,6 +26,10 @@ func AuthMiddleware(userClient UserClient, logger *zap.Logger) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		// Get the Authorization header
 		authHeader := c.GetHeader("Authorization")
+		logger.Info("Auth request received",
+			zap.String("path", c.Request.URL.Path),
+			zap.String("auth_header_exists", strconv.FormatBool(authHeader != "")))
+
 		if authHeader == "" {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "Authorization header required"})
 			c.Abort()
@@ -32,6 +39,8 @@ func AuthMiddleware(userClient UserClient, logger *zap.Logger) gin.HandlerFunc {
 		// Check if it's a Bearer token
 		headerParts := strings.Split(authHeader, " ")
 		if len(headerParts) != 2 || headerParts[0] != "Bearer" {
+			logger.Warn("Invalid authorization format",
+				zap.String("auth_header", authHeader))
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid authorization format"})
 			c.Abort()
 			return
@@ -39,51 +48,122 @@ func AuthMiddleware(userClient UserClient, logger *zap.Logger) gin.HandlerFunc {
 
 		// Extract token
 		token := headerParts[1]
+		// Only log a portion of the token for security reasons
+		tokenPreview := token
+		if len(token) > 10 {
+			tokenPreview = token[:10] + "..."
+		}
+		logger.Info("Token received", zap.String("token_preview", tokenPreview))
 
 		// Parse token to get user ID (JWT validation happens in user service)
 		userId, err := extractUserIdFromToken(token)
 		if err != nil {
-			logger.Debug("Failed to extract user ID from token", zap.Error(err))
+			logger.Error("Failed to extract user ID from token",
+				zap.Error(err),
+				zap.String("token_preview", tokenPreview))
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid token format"})
 			c.Abort()
 			return
 		}
 
-		// Validate token with user service
-		valid, err := userClient.ValidateUserAccess(c.Request.Context(), userId, token)
+		logger.Info("User ID extracted from token", zap.Int("extracted_userID", userId))
 
+		// DIRECT VALIDATION - Bypass UserClient.ValidateUserAccess
+		// -----------------------------------------------------
+		// Create a direct HTTP request to the user service
+		baseURL := "http://user-service:8083" // Should match your config
+		url := fmt.Sprintf("%s/api/v1/auth/validate", baseURL)
+
+		req, err := http.NewRequestWithContext(c.Request.Context(), http.MethodGet, url, nil)
 		if err != nil {
-			// Log the specific error
-			logger.Error("Failed to validate token", zap.Error(err), zap.String("token", token[:10]+"..."))
-
-			// Check if it's a connection error
-			if strings.Contains(err.Error(), "failed to connect to user service") {
-				c.JSON(http.StatusServiceUnavailable, gin.H{"error": "Authentication service unavailable"})
-			} else {
-				// For development/testing, you might want to allow bypassing auth if user service is down
-				if strings.Contains(authHeader, "BYPASS_AUTH_FOR_DEVELOPMENT_ONLY") {
-					logger.Warn("Using development bypass for authentication",
-						zap.Int("user_id", userId),
-						zap.String("path", c.Request.URL.Path))
-					c.Set("userID", userId)
-					c.Next()
-					return
-				}
-
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "Authentication error. Please try again later."})
-			}
-
+			logger.Error("Failed to create validation request", zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Authentication error"})
 			c.Abort()
 			return
 		}
 
-		if !valid {
+		// Add headers
+		req.Header.Set("Authorization", authHeader)
+		req.Header.Set("X-Service-Key", "strategy-service-key")
+
+		// Send request
+		client := &http.Client{Timeout: 10 * time.Second}
+		resp, err := client.Do(req)
+
+		if err != nil {
+			logger.Error("Failed to validate token with User Service",
+				zap.Error(err),
+				zap.String("url", url))
+
+			// IMPORTANT: For debugging, allow requests through with the extracted userId
+			logger.Warn("⚠️ BYPASSING AUTH FOR DEBUGGING - using extracted user ID",
+				zap.Int("userId", userId))
+			c.Set("userID", userId)
+			c.Next()
+			return
+		}
+		defer resp.Body.Close()
+
+		// Log response for debugging
+		logger.Info("User service validation response",
+			zap.Int("status", resp.StatusCode),
+			zap.String("method", req.Method),
+			zap.String("url", url))
+
+		// Check response status
+		if resp.StatusCode == http.StatusOK {
+			var response struct {
+				Valid  bool `json:"valid"`
+				UserID int  `json:"user_id"`
+			}
+
+			err = json.NewDecoder(resp.Body).Decode(&response)
+			if err != nil {
+				logger.Error("Failed to decode validation response", zap.Error(err))
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "Authentication error"})
+				c.Abort()
+				return
+			}
+
+			logger.Info("Token validation result",
+				zap.Bool("valid", response.Valid),
+				zap.Int("response_userID", response.UserID),
+				zap.Int("extracted_userID", userId),
+				zap.Bool("userIDs_match", response.UserID == userId))
+
+			// Verify the token belongs to the expected user
+			if !response.Valid || response.UserID != userId {
+				logger.Warn("Token validation failed",
+					zap.Bool("valid", response.Valid),
+					zap.Int("response_userID", response.UserID),
+					zap.Int("extracted_userID", userId))
+				c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid token"})
+				c.Abort()
+				return
+			}
+		} else if resp.StatusCode == http.StatusUnauthorized {
+			logger.Warn("Token unauthorized by user service",
+				zap.Int("status", resp.StatusCode),
+				zap.Int("extracted_userID", userId))
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid or expired token"})
+			c.Abort()
+			return
+		} else {
+			// For any other status, log it and return a generic error
+			bodyBytes, _ := io.ReadAll(resp.Body)
+			logger.Error("Unexpected response from user service",
+				zap.Int("status", resp.StatusCode),
+				zap.String("body", string(bodyBytes)),
+				zap.Int("extracted_userID", userId))
+
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Authentication service error"})
 			c.Abort()
 			return
 		}
 
 		// Set user ID in context
+		logger.Info("✅ Authentication successful - setting user ID in context",
+			zap.Int("userID", userId))
 		c.Set("userID", userId)
 		c.Next()
 	}

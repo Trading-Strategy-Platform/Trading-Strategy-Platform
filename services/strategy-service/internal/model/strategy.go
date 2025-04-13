@@ -4,8 +4,57 @@ import (
 	"database/sql/driver"
 	"encoding/json"
 	"errors"
+	"strconv"
+	"strings"
 	"time"
 )
+
+// Add this custom type for handling PostgreSQL integer arrays
+type IntArray []int
+
+// Scan implements the sql.Scanner interface for IntArray
+func (a *IntArray) Scan(src interface{}) error {
+	switch src := src.(type) {
+	case []byte:
+		return a.scanBytes(src)
+	case string:
+		return a.scanBytes([]byte(src))
+	case nil:
+		*a = nil
+		return nil
+	}
+
+	return errors.New("cannot convert to []int")
+}
+
+// scanBytes handles the conversion from bytes to integer array
+func (a *IntArray) scanBytes(src []byte) error {
+	str := string(src)
+
+	// Check for empty array
+	if str == "{}" {
+		*a = []int{}
+		return nil
+	}
+
+	// Remove the curly braces
+	str = strings.Trim(str, "{}")
+
+	// Split by comma
+	elements := strings.Split(str, ",")
+
+	// Convert each element to integer
+	*a = make([]int, len(elements))
+	for i, element := range elements {
+		val, err := strconv.Atoi(strings.TrimSpace(element))
+		if err != nil {
+			return err
+		}
+		(*a)[i] = val
+	}
+
+	return nil
+}
 
 // Strategy represents a trading strategy
 type Strategy struct {
@@ -39,9 +88,9 @@ type ExtendedStrategy struct {
 	AccessType   string     `json:"access_type" db:"access_type"`
 	PurchaseID   *int       `json:"purchase_id,omitempty" db:"purchase_id"`
 	PurchaseDate *time.Time `json:"purchase_date,omitempty" db:"purchase_date"`
-	TagIDs       []int      `json:"-" db:"tag_ids"`
+	TagIDs       IntArray   `json:"-" db:"tag_ids"`
 	Tags         []Tag      `json:"tags,omitempty" db:"-"`
-	Structure    *Structure `json:"structure,omitempty" db:"-"`
+	Structure    Structure  `json:"structure" db:"structure"`
 }
 
 // ConvertToStrategy converts ExtendedStrategy to Strategy

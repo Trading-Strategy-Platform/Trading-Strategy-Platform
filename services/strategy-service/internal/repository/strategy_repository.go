@@ -29,7 +29,7 @@ func NewStrategyRepository(db *sqlx.DB, logger *zap.Logger) *StrategyRepository 
 
 // GetUserStrategies retrieves strategies using the get_my_strategies function
 func (r *StrategyRepository) GetUserStrategies(ctx context.Context, userID int, searchTerm string, purchasedOnly bool, tags []int, page, limit int) ([]model.ExtendedStrategy, int, error) {
-	// First, get all strategies using the get_my_strategies function
+	// Query using get_my_strategies function
 	query := `SELECT * FROM get_my_strategies($1, $2, $3, $4)`
 
 	var allStrategies []model.ExtendedStrategy

@@ -10,20 +10,21 @@ SELECT
     s.description, 
     s.thumbnail_url,
     s.user_id AS owner_id,
-    s.user_id AS owner_user_id, -- Using user_id instead of username
+    s.user_id AS owner_user_id,
     s.is_public,
     s.is_active,
     s.version,
     s.created_at,
     s.updated_at,
-    'owner' AS access_type,
-    NULL::INT AS purchase_id,
-    NULL::TIMESTAMP AS purchase_date,
+    'owner'::text AS access_type,
+    NULL::integer AS purchase_id,
+    NULL::timestamp AS purchase_date,
     ARRAY(
         SELECT tag_id 
         FROM strategy_tag_mappings 
         WHERE strategy_id = s.id
-    ) AS tag_ids
+    )::integer[] AS tag_ids,
+    s.structure  -- Added structure field
 FROM 
     strategies s
 WHERE 
@@ -37,25 +38,25 @@ SELECT
     s.description,
     s.thumbnail_url,
     s.user_id AS owner_id,
-    s.user_id AS owner_user_id, -- Using user_id instead of username
+    s.user_id AS owner_user_id,
     s.is_public,
     s.is_active,
-    v.version,
-    p.created_at AS purchase_date,
+    p.strategy_version AS version,
+    p.created_at,
     s.updated_at,
-    'purchased' AS access_type,
+    'purchased'::text AS access_type,
     p.id AS purchase_id,
     p.created_at AS purchase_date,
     ARRAY(
         SELECT tag_id 
         FROM strategy_tag_mappings 
         WHERE strategy_id = s.id
-    ) AS tag_ids
+    )::integer[] AS tag_ids,
+    s.structure  
 FROM 
     strategy_purchases p
     JOIN strategy_marketplace m ON p.marketplace_id = m.id
     JOIN strategies s ON m.strategy_id = s.id
-    JOIN strategy_versions v ON s.id = v.strategy_id AND v.version = p.strategy_version
 WHERE 
     s.is_active = TRUE 
     AND (
@@ -65,27 +66,28 @@ WHERE
 
 -- Get all my strategies with filtering
 CREATE OR REPLACE FUNCTION get_my_strategies(
-    p_user_id INT,
-    p_search_term VARCHAR DEFAULT NULL,
-    p_purchased_only BOOLEAN DEFAULT FALSE,
-    p_tags INT[] DEFAULT NULL
+    p_user_id integer,
+    p_search_term character varying DEFAULT NULL::character varying,
+    p_purchased_only boolean DEFAULT false,
+    p_tags integer[] DEFAULT NULL::integer[]
 )
 RETURNS TABLE (
-    id INT,
-    name VARCHAR(100),
-    description TEXT,
-    thumbnail_url VARCHAR(255),
-    owner_id INT,
-    owner_user_id INT, -- Changed from owner_username
-    is_public BOOLEAN,
-    is_active BOOLEAN,
-    version INT,
-    created_at TIMESTAMP,
-    updated_at TIMESTAMP,
-    access_type VARCHAR(20),
-    purchase_id INT,
-    purchase_date TIMESTAMP,
-    tag_ids INT[]
+    id integer,
+    name varchar(100),
+    description text,
+    thumbnail_url varchar(255),
+    owner_id integer,
+    owner_user_id integer,
+    is_public boolean,
+    is_active boolean,
+    version integer,
+    created_at timestamp,
+    updated_at timestamp,
+    access_type text,
+    purchase_id integer,
+    purchase_date timestamp,
+    tag_ids integer[],
+    structure jsonb  
 ) AS $$
 BEGIN
     RETURN QUERY
@@ -94,64 +96,28 @@ BEGIN
         s.name, 
         s.description, 
         s.thumbnail_url,
-        s.owner_id,
-        s.owner_user_id,
+        s.user_id AS owner_id,
+        s.user_id AS owner_user_id,
         s.is_public,
         s.is_active,
         s.version,
         s.created_at,
         s.updated_at,
-        s.access_type,
-        s.purchase_id,
-        s.purchase_date,
-        s.tag_ids
-    FROM 
-        v_my_strategies s
-    WHERE 
-        (s.owner_id = p_user_id OR s.access_type = 'purchased') 
-        AND (p_purchased_only = FALSE OR s.access_type = 'purchased')
-        AND (
-            p_search_term IS NULL 
-            OR s.name ILIKE '%' || p_search_term || '%' 
-            OR s.description ILIKE '%' || p_search_term || '%'
-        )
-        AND (
-            p_tags IS NULL 
-            OR s.tag_ids && p_tags
-        )
-        
-    UNION ALL
-    
-    -- Add expired subscriptions (for strategies that no longer appear in v_my_strategies due to expired subscriptions)
-    SELECT 
-        s.id, 
-        s.name, 
-        s.description,
-        s.thumbnail_url,
-        s.user_id AS owner_id,
-        s.user_id AS owner_user_id, -- Using user_id instead of username
-        s.is_public,
-        s.is_active,
-        p.strategy_version AS version,
-        p.created_at AS purchase_date,
-        s.updated_at,
-        'expired' AS access_type,
-        p.id AS purchase_id,
-        p.created_at AS purchase_date,
+        'owner'::text AS access_type,
+        NULL::integer AS purchase_id,
+        NULL::timestamp AS purchase_date,
         ARRAY(
             SELECT tag_id 
             FROM strategy_tag_mappings 
             WHERE strategy_id = s.id
-        ) AS tag_ids
+        )::integer[] AS tag_ids,
+        s.structure  
     FROM 
-        strategy_purchases p
-        JOIN strategy_marketplace m ON p.marketplace_id = m.id
-        JOIN strategies s ON m.strategy_id = s.id
+        strategies s
     WHERE 
-        p.buyer_id = p_user_id
-        AND s.is_active = TRUE 
-        AND p.subscription_end IS NOT NULL
-        AND p.subscription_end <= NOW()
+        s.user_id = p_user_id
+        AND s.is_active = TRUE
+        AND (NOT p_purchased_only)
         AND (
             p_search_term IS NULL 
             OR s.name ILIKE '%' || p_search_term || '%' 
@@ -166,10 +132,55 @@ BEGIN
                 AND tag_id = ANY(p_tags)
             )
         )
-        AND (p_purchased_only = FALSE OR TRUE)
     
-    ORDER BY 
-        created_at DESC;
+    UNION ALL
+    
+    SELECT 
+        s.id, 
+        s.name, 
+        s.description,
+        s.thumbnail_url,
+        s.user_id AS owner_id,
+        s.user_id AS owner_user_id,
+        s.is_public,
+        s.is_active,
+        p.strategy_version AS version,
+        p.created_at,
+        s.updated_at,
+        'purchased'::text AS access_type,
+        p.id AS purchase_id,
+        p.created_at AS purchase_date,
+        ARRAY(
+            SELECT tag_id 
+            FROM strategy_tag_mappings 
+            WHERE strategy_id = s.id
+        )::integer[] AS tag_ids,
+        s.structure  
+    FROM 
+        strategy_purchases p
+        JOIN strategy_marketplace m ON p.marketplace_id = m.id
+        JOIN strategies s ON m.strategy_id = s.id
+    WHERE 
+        p.buyer_id = p_user_id
+        AND s.is_active = TRUE 
+        AND (
+            p.subscription_end IS NULL
+            OR p.subscription_end > NOW()
+        )
+        AND (
+            p_search_term IS NULL 
+            OR s.name ILIKE '%' || p_search_term || '%' 
+            OR s.description ILIKE '%' || p_search_term || '%'
+        )
+        AND (
+            p_tags IS NULL 
+            OR EXISTS (
+                SELECT 1 
+                FROM strategy_tag_mappings 
+                WHERE strategy_id = s.id 
+                AND tag_id = ANY(p_tags)
+            )
+        );
 END;
 $$ LANGUAGE plpgsql;
 
