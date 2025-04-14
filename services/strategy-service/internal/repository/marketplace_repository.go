@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"time"
 
 	"services/strategy-service/internal/model"
 
@@ -32,7 +31,7 @@ func (r *MarketplaceRepository) GetAll(ctx context.Context, searchTerm string, m
 	// Calculate offset from page and limit
 	offset := (page - 1) * limit
 
-	// Prepare query to the get_marketplace_strategies function
+	// Use the SQL function
 	query := `SELECT * FROM get_marketplace_strategies($1, $2, $3, $4, $5, $6, $7, $8, $9)`
 
 	// Convert Go nil values to SQL NULL values where needed
@@ -62,27 +61,25 @@ func (r *MarketplaceRepository) GetAll(ctx context.Context, searchTerm string, m
 		tagsParam = pq.Array([]int{})
 	}
 
-	// Execute query to get listings data
-	var listings []struct {
-		MarketplaceID      int       `db:"marketplace_id"`
-		StrategyID         int       `db:"strategy_id"`
-		Name               string    `db:"name"`
-		Description        string    `db:"description"` // This comes from the view which aliases description_public as description
-		ThumbnailURL       string    `db:"thumbnail_url"`
-		OwnerID            int       `db:"owner_id"`
-		OwnerUsername      string    `db:"owner_username"`
-		OwnerPhoto         string    `db:"owner_photo"`
-		VersionID          int       `db:"version_id"`
-		Price              float64   `db:"price"`
-		IsSubscription     bool      `db:"is_subscription"`
-		SubscriptionPeriod string    `db:"subscription_period"`
-		CreatedAt          time.Time `db:"created_at"`
-		UpdatedAt          time.Time `db:"updated_at"`
-		AvgRating          float64   `db:"avg_rating"`
-		RatingCount        int       `db:"rating_count"`
-		Tags               []string  `db:"tags"`
-		TagIDs             []int     `db:"tag_ids"`
+	// Define a struct that matches the SQL function columns exactly
+	type listing struct {
+		ID                 int          `db:"id"`
+		StrategyID         int          `db:"strategy_id"`
+		Name               string       `db:"name"`
+		DescriptionPublic  string       `db:"description_public"`
+		ThumbnailURL       string       `db:"thumbnail_url"`
+		UserID             int          `db:"user_id"`
+		Price              float64      `db:"price"`
+		IsSubscription     bool         `db:"is_subscription"`
+		SubscriptionPeriod string       `db:"subscription_period"`
+		IsActive           bool         `db:"is_active"`
+		CreatedAt          sql.NullTime `db:"created_at"`
+		UpdatedAt          sql.NullTime `db:"updated_at"`
+		AverageRating      float64      `db:"average_rating"`
+		ReviewsCount       int64        `db:"reviews_count"`
 	}
+
+	var listings []listing
 
 	err := r.db.SelectContext(ctx, &listings, query,
 		searchTerm,   // p_search_term
@@ -105,43 +102,38 @@ func (r *MarketplaceRepository) GetAll(ctx context.Context, searchTerm string, m
 	items := make([]model.MarketplaceItem, len(listings))
 	for i, l := range listings {
 		items[i] = model.MarketplaceItem{
-			ID:                 l.MarketplaceID,
+			ID:                 l.ID,
 			StrategyID:         l.StrategyID,
-			UserID:             l.OwnerID,
+			UserID:             l.UserID,
 			Price:              l.Price,
 			IsSubscription:     l.IsSubscription,
 			SubscriptionPeriod: l.SubscriptionPeriod,
-			IsActive:           true,          // Assume active since the function only returns active listings
-			DescriptionPublic:  l.Description, // The view returns description_public as "description"
-			CreatedAt:          l.CreatedAt,
-			UpdatedAt:          &l.UpdatedAt,
-
-			// Additional fields from function result
-			CreatorName:   l.OwnerUsername,
-			AverageRating: l.AvgRating,
-			ReviewsCount:  l.RatingCount,
+			IsActive:           l.IsActive,
+			DescriptionPublic:  l.DescriptionPublic,
+			CreatedAt:          l.CreatedAt.Time,
+			UpdatedAt:          &l.UpdatedAt.Time,
+			AverageRating:      l.AverageRating,
+			ReviewsCount:       int(l.ReviewsCount),
 		}
 	}
 
-	// Get total count
-	total := len(items)
-	if limit > 0 && total == limit {
-		// If we got exactly the number of items requested, there might be more
-		countQuery := `
-            SELECT COUNT(*) 
-            FROM v_marketplace_strategies 
-            WHERE 1=1`
+	// Count query for total results
+	countQuery := `SELECT COUNT(*) FROM get_marketplace_strategies($1, $2, $3, $4, $5, $6, $7, NULL, NULL)`
 
-		var params []interface{}
-		if searchTerm != "" {
-			countQuery += ` AND (name ILIKE '%' || $1 || '%' OR description ILIKE '%' || $1 || '%')`
-			params = append(params, searchTerm)
-		}
+	var total int
+	err = r.db.GetContext(ctx, &total, countQuery,
+		searchTerm,
+		minPriceSQL,
+		maxPriceSQL,
+		isFree,
+		tagsParam,
+		minRatingSQL,
+		sortBy,
+	)
 
-		err = r.db.GetContext(ctx, &total, countQuery, params...)
-		if err != nil {
-			r.logger.Warn("Failed to get total count, using result length", zap.Error(err))
-		}
+	if err != nil {
+		r.logger.Warn("Failed to get total count, using result length", zap.Error(err))
+		total = len(items)
 	}
 
 	return items, total, nil
@@ -161,7 +153,7 @@ func (r *MarketplaceRepository) Create(ctx context.Context, listing *model.Marke
 		listing.Price,
 		listing.IsSubscription,
 		listing.SubscriptionPeriod,
-		listing.DescriptionPublic, // Updated field name
+		listing.DescriptionPublic,
 	).Scan(&id)
 
 	if err != nil {

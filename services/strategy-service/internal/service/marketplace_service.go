@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"services/strategy-service/internal/model"
@@ -44,7 +45,7 @@ func NewMarketplaceService(
 	}
 }
 
-// GetAllListings retrieves marketplace listings using get_marketplace_strategies function
+// GetAllListings retrieves marketplace listings
 func (s *MarketplaceService) GetAllListings(ctx context.Context, searchTerm string, minPrice *float64, maxPrice *float64, isFree *bool, tags []int, minRating *float64, sortBy string, page, limit int) ([]model.MarketplaceItem, int, error) {
 	// Validate pagination
 	if page < 1 {
@@ -54,8 +55,28 @@ func (s *MarketplaceService) GetAllListings(ctx context.Context, searchTerm stri
 		limit = 10
 	}
 
-	// Get listings using the get_marketplace_strategies function
-	return s.marketplaceRepo.GetAll(ctx, searchTerm, minPrice, maxPrice, isFree, tags, minRating, sortBy, page, limit)
+	// Get listings from repository
+	items, total, err := s.marketplaceRepo.GetAll(ctx, searchTerm, minPrice, maxPrice, isFree, tags, minRating, sortBy, page, limit)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	// Enhance listings with real user information from user service
+	for i := range items {
+		// Try to get creator name from user service
+		username, err := s.userClient.GetUserByID(ctx, items[i].UserID)
+		if err != nil {
+			s.logger.Warn("Failed to get username from user service",
+				zap.Error(err),
+				zap.Int("user_id", items[i].UserID))
+			// If we can't get the username, use the ID as string
+			items[i].CreatorName = fmt.Sprintf("User %d", items[i].UserID)
+		} else {
+			items[i].CreatorName = username
+		}
+	}
+
+	return items, total, nil
 }
 
 // CreateListing creates a new marketplace listing using add_to_marketplace function
@@ -184,7 +205,25 @@ func (s *MarketplaceService) GetReviews(ctx context.Context, marketplaceID int, 
 	}
 
 	// Get reviews with pagination
-	return s.reviewRepo.GetByMarketplaceID(ctx, marketplaceID, page, limit)
+	reviews, total, err := s.reviewRepo.GetByMarketplaceID(ctx, marketplaceID, page, limit)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	// Add usernames to reviews
+	for i := range reviews {
+		username, err := s.userClient.GetUserByID(ctx, reviews[i].UserID)
+		if err != nil {
+			s.logger.Warn("Failed to get reviewer username",
+				zap.Error(err),
+				zap.Int("user_id", reviews[i].UserID))
+			reviews[i].UserName = fmt.Sprintf("User %d", reviews[i].UserID)
+		} else {
+			reviews[i].UserName = username
+		}
+	}
+
+	return reviews, total, nil
 }
 
 // CreateReview creates a review for a purchased strategy using add_review function
