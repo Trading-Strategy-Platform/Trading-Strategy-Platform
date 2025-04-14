@@ -27,8 +27,7 @@ func NewTagHandler(tagService *service.TagService, logger *zap.Logger) *TagHandl
 // GetAllTags handles retrieving all tags
 // GET /api/v1/strategy-tags
 func (h *TagHandler) GetAllTags(c *gin.Context) {
-	// For tags, we typically don't need pagination since there are not many tags
-	// However, we could add it if needed
+	// Parse pagination parameters
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "100"))
 	if page < 1 {
@@ -38,7 +37,10 @@ func (h *TagHandler) GetAllTags(c *gin.Context) {
 		limit = 100
 	}
 
-	tags, total, err := h.tagService.GetAllTags(c.Request.Context(), page, limit)
+	// Parse search parameter
+	searchTerm := c.Query("search")
+
+	tags, total, err := h.tagService.GetAllTags(c.Request.Context(), searchTerm, page, limit)
 	if err != nil {
 		h.logger.Error("Failed to get tags", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch tags"})
@@ -76,4 +78,74 @@ func (h *TagHandler) CreateTag(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusCreated, tag)
+}
+
+// UpdateTag handles updating an existing tag
+// PUT /api/v1/strategy-tags/{id}
+func (h *TagHandler) UpdateTag(c *gin.Context) {
+	// Parse tag ID from URL path
+	idStr := c.Param("id")
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid tag ID"})
+		return
+	}
+
+	// Parse request body
+	var request struct {
+		Name string `json:"name" binding:"required"`
+	}
+
+	if err := c.ShouldBindJSON(&request); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Update tag
+	tag, err := h.tagService.UpdateTag(c.Request.Context(), id, request.Name)
+	if err != nil {
+		h.logger.Error("Failed to update tag", zap.Error(err), zap.Int("id", id))
+
+		// Return appropriate status code based on error
+		if err.Error() == "tag not found" {
+			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		} else {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		}
+		return
+	}
+
+	c.JSON(http.StatusOK, tag)
+}
+
+// DeleteTag handles deleting a tag
+// DELETE /api/v1/strategy-tags/{id}
+func (h *TagHandler) DeleteTag(c *gin.Context) {
+	// Parse tag ID from URL path
+	idStr := c.Param("id")
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid tag ID"})
+		return
+	}
+
+	// Delete tag
+	err = h.tagService.DeleteTag(c.Request.Context(), id)
+	if err != nil {
+		h.logger.Error("Failed to delete tag", zap.Error(err), zap.Int("id", id))
+
+		// Return appropriate status code based on error
+		if err.Error() == "tag not found or is in use" {
+			if err.Error() == "tag not found or is in use" {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "Cannot delete tag because it's in use or doesn't exist"})
+			} else {
+				c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+			}
+		} else {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete tag"})
+		}
+		return
+	}
+
+	c.Status(http.StatusNoContent)
 }

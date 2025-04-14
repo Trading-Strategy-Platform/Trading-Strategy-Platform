@@ -67,9 +67,9 @@ WHERE
 -- Get all my strategies with filtering
 CREATE OR REPLACE FUNCTION get_my_strategies(
     p_user_id integer,
-    p_search_term character varying DEFAULT NULL::character varying,
+    p_search_term character varying DEFAULT NULL,
     p_purchased_only boolean DEFAULT false,
-    p_tags integer[] DEFAULT NULL::integer[]
+    p_tags integer[] DEFAULT NULL
 )
 RETURNS TABLE (
     id integer,
@@ -87,100 +87,147 @@ RETURNS TABLE (
     purchase_id integer,
     purchase_date timestamp,
     tag_ids integer[],
-    structure jsonb  
+    structure jsonb
 ) AS $$
+DECLARE
+    search_condition text := '';
+    tags_condition text := '';
+    query text;
 BEGIN
-    RETURN QUERY
-    SELECT 
-        s.id, 
-        s.name, 
-        s.description, 
-        s.thumbnail_url,
-        s.user_id AS owner_id,
-        s.user_id AS owner_user_id,
-        s.is_public,
-        s.is_active,
-        s.version,
-        s.created_at,
-        s.updated_at,
-        'owner'::text AS access_type,
-        NULL::integer AS purchase_id,
-        NULL::timestamp AS purchase_date,
-        ARRAY(
-            SELECT tag_id 
-            FROM strategy_tag_mappings 
-            WHERE strategy_id = s.id
-        )::integer[] AS tag_ids,
-        s.structure  
-    FROM 
-        strategies s
-    WHERE 
-        s.user_id = p_user_id
-        AND s.is_active = TRUE
-        AND (NOT p_purchased_only)
-        AND (
-            p_search_term IS NULL 
-            OR s.name ILIKE '%' || p_search_term || '%' 
-            OR s.description ILIKE '%' || p_search_term || '%'
-        )
-        AND (
-            p_tags IS NULL 
-            OR EXISTS (
-                SELECT 1 
-                FROM strategy_tag_mappings 
-                WHERE strategy_id = s.id 
-                AND tag_id = ANY(p_tags)
-            )
-        )
+    -- Build search condition if search term is provided
+    IF p_search_term IS NOT NULL THEN
+        search_condition := ' AND (s.name ILIKE ''%' || p_search_term || '%'' OR s.description ILIKE ''%' || p_search_term || '%'')';
+    END IF;
     
-    UNION ALL
+    -- Build tags condition if tags are provided
+    IF p_tags IS NOT NULL AND array_length(p_tags, 1) > 0 THEN
+        tags_condition := ' AND EXISTS (SELECT 1 FROM strategy_tag_mappings WHERE strategy_id = s.id AND tag_id = ANY(''' || p_tags::text || '''::int[]))';
+    END IF;
+
+    -- Start building the query
+    query := '
+        WITH combined_results AS (';
     
-    SELECT 
-        s.id, 
-        s.name, 
-        s.description,
-        s.thumbnail_url,
-        s.user_id AS owner_id,
-        s.user_id AS owner_user_id,
-        s.is_public,
-        s.is_active,
-        p.strategy_version AS version,
-        p.created_at,
-        s.updated_at,
-        'purchased'::text AS access_type,
-        p.id AS purchase_id,
-        p.created_at AS purchase_date,
-        ARRAY(
-            SELECT tag_id 
-            FROM strategy_tag_mappings 
-            WHERE strategy_id = s.id
-        )::integer[] AS tag_ids,
-        s.structure  
-    FROM 
-        strategy_purchases p
-        JOIN strategy_marketplace m ON p.marketplace_id = m.id
-        JOIN strategies s ON m.strategy_id = s.id
-    WHERE 
-        p.buyer_id = p_user_id
-        AND s.is_active = TRUE 
-        AND (
-            p.subscription_end IS NULL
-            OR p.subscription_end > NOW()
-        )
-        AND (
-            p_search_term IS NULL 
-            OR s.name ILIKE '%' || p_search_term || '%' 
-            OR s.description ILIKE '%' || p_search_term || '%'
-        )
-        AND (
-            p_tags IS NULL 
-            OR EXISTS (
-                SELECT 1 
+    -- Part 1: Include owned strategies if not filtering by purchased only
+    IF NOT p_purchased_only THEN
+        query := query || '
+            SELECT 
+                s.id, 
+                s.name, 
+                s.description, 
+                s.thumbnail_url,
+                s.user_id AS owner_id,
+                s.user_id AS owner_user_id,
+                s.is_public,
+                s.is_active,
+                s.version,
+                s.created_at,
+                s.updated_at,
+                ''owner''::text AS access_type,
+                NULL::integer AS purchase_id,
+                NULL::timestamp AS purchase_date,
+                ARRAY(
+                    SELECT tag_id 
+                    FROM strategy_tag_mappings 
+                    WHERE strategy_id = s.id
+                )::integer[] AS tag_ids,
+                s.structure
+            FROM 
+                strategies s
+            WHERE 
+                s.user_id = ' || p_user_id || '
+                AND s.is_active = TRUE' ||
+                search_condition ||
+                tags_condition;
+
+        -- Add UNION if we're going to add more parts
+        query := query || '
+            UNION ALL';
+    END IF;
+    
+    -- Part 2: Always include active purchased strategies
+    query := query || '
+        SELECT 
+            s.id, 
+            s.name, 
+            s.description,
+            s.thumbnail_url,
+            s.user_id AS owner_id,
+            s.user_id AS owner_user_id,
+            s.is_public,
+            s.is_active,
+            p.strategy_version AS version,
+            p.created_at,
+            s.updated_at,
+            ''purchased''::text AS access_type,
+            p.id AS purchase_id,
+            p.created_at AS purchase_date,
+            ARRAY(
+                SELECT tag_id 
                 FROM strategy_tag_mappings 
-                WHERE strategy_id = s.id 
-                AND tag_id = ANY(p_tags)
-            )
-        );
+                WHERE strategy_id = s.id
+            )::integer[] AS tag_ids,
+            s.structure
+        FROM 
+            strategy_purchases p
+            JOIN strategy_marketplace m ON p.marketplace_id = m.id
+            JOIN strategies s ON m.strategy_id = s.id
+        WHERE 
+            p.buyer_id = ' || p_user_id || '
+            AND s.is_active = TRUE 
+            AND (
+                p.subscription_end IS NULL
+                OR p.subscription_end > NOW()
+            )' ||
+            search_condition ||
+            tags_condition;
+            
+    -- Part 3: Include expired subscriptions if not filtering by purchased only
+    IF NOT p_purchased_only THEN
+        query := query || '
+            UNION ALL
+            SELECT 
+                s.id, 
+                s.name, 
+                s.description,
+                s.thumbnail_url,
+                s.user_id AS owner_id,
+                s.user_id AS owner_user_id,
+                s.is_public,
+                s.is_active,
+                p.strategy_version AS version,
+                p.created_at,
+                s.updated_at,
+                ''expired''::text AS access_type,
+                p.id AS purchase_id,
+                p.created_at AS purchase_date,
+                ARRAY(
+                    SELECT tag_id 
+                    FROM strategy_tag_mappings 
+                    WHERE strategy_id = s.id
+                )::integer[] AS tag_ids,
+                s.structure
+            FROM 
+                strategy_purchases p
+                JOIN strategy_marketplace m ON p.marketplace_id = m.id
+                JOIN strategies s ON m.strategy_id = s.id
+            WHERE 
+                p.buyer_id = ' || p_user_id || '
+                AND s.is_active = TRUE 
+                AND p.subscription_end IS NOT NULL
+                AND p.subscription_end <= NOW()' ||
+                search_condition ||
+                tags_condition;
+    END IF;
+    
+    -- Close the CTE and order the results
+    query := query || '
+        )
+        SELECT * FROM combined_results
+        ORDER BY created_at DESC';
+        
+    -- Execute the dynamically built query
+    RETURN QUERY EXECUTE query;
 END;
 $$ LANGUAGE plpgsql;
 

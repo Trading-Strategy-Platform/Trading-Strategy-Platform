@@ -274,13 +274,17 @@ func setupRouter(
 		// ==================== TAG ROUTES ====================
 		tags := v1.Group("/strategy-tags")
 		{
-			// Public route
+			// Public route - anyone can get tags
 			tags.GET("", tagHandler.GetAllTags) // GET /api/v1/strategy-tags
 
-			// Protected routes
-			tagsAuth := tags.Group("")
-			tagsAuth.Use(middleware.AuthMiddleware(userClient, logger))
-			tagsAuth.POST("", tagHandler.CreateTag) // POST /api/v1/strategy-tags
+			// Admin-only routes - only admins can modify tags
+			adminTags := tags.Group("")
+			adminTags.Use(middleware.AuthMiddleware(userClient, logger))
+			adminTags.Use(middleware.RequireRole(userClient, "admin"))
+
+			adminTags.POST("", tagHandler.CreateTag)       // POST /api/v1/strategy-tags
+			adminTags.PUT("/:id", tagHandler.UpdateTag)    // PUT /api/v1/strategy-tags/{id}
+			adminTags.DELETE("/:id", tagHandler.DeleteTag) // DELETE /api/v1/strategy-tags/{id}
 		}
 
 		// ==================== MARKETPLACE ROUTES ====================

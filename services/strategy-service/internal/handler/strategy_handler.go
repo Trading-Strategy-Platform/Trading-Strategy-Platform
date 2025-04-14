@@ -115,6 +115,8 @@ func (h *StrategyHandler) CreateStrategy(c *gin.Context) {
 	// Set default IsActive to true
 	request.IsActive = true
 
+	// No structure validation or manipulation at all
+
 	strategy, err := h.strategyService.CreateStrategy(c.Request.Context(), &request, userID.(int))
 	if err != nil {
 		h.logger.Error("Failed to create strategy", zap.Error(err))
@@ -185,6 +187,8 @@ func (h *StrategyHandler) UpdateStrategy(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+
+	// No structure validation or manipulation at all
 
 	strategy, err := h.strategyService.UpdateStrategy(c.Request.Context(), id, &request, userID.(int))
 	if err != nil {

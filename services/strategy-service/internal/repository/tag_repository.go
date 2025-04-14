@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"errors"
 
 	"services/strategy-service/internal/model"
 
@@ -23,14 +24,15 @@ func NewTagRepository(db *sqlx.DB, logger *zap.Logger) *TagRepository {
 	}
 }
 
-// GetAll retrieves all tags using get_strategy_tags function
-func (r *TagRepository) GetAll(ctx context.Context, page, limit int) ([]model.Tag, int, error) {
-	query := `SELECT * FROM get_strategy_tags()`
+// GetAll retrieves all tags using get_strategy_tags function with search parameter
+func (r *TagRepository) GetAll(ctx context.Context, searchTerm string, page, limit int) ([]model.Tag, int, error) {
+	// Use the updated get_strategy_tags function that accepts a search parameter
+	query := `SELECT * FROM get_strategy_tags($1)`
 
 	var allTags []model.Tag
-	err := r.db.SelectContext(ctx, &allTags, query)
+	err := r.db.SelectContext(ctx, &allTags, query, searchTerm)
 	if err != nil {
-		r.logger.Error("Failed to get tags", zap.Error(err))
+		r.logger.Error("Failed to get tags", zap.Error(err), zap.String("search", searchTerm))
 		return nil, 0, err
 	}
 
@@ -64,4 +66,40 @@ func (r *TagRepository) Create(ctx context.Context, name string) (int, error) {
 	}
 
 	return id, nil
+}
+
+// Update updates a tag's name using update_strategy_tag function
+func (r *TagRepository) Update(ctx context.Context, id int, name string) error {
+	query := `SELECT update_strategy_tag($1, $2)`
+
+	var success bool
+	err := r.db.QueryRowContext(ctx, query, id, name).Scan(&success)
+	if err != nil {
+		r.logger.Error("Failed to update tag", zap.Error(err), zap.Int("id", id))
+		return err
+	}
+
+	if !success {
+		return errors.New("tag not found")
+	}
+
+	return nil
+}
+
+// Delete removes a tag using delete_strategy_tag function
+func (r *TagRepository) Delete(ctx context.Context, id int) error {
+	query := `SELECT delete_strategy_tag($1)`
+
+	var success bool
+	err := r.db.QueryRowContext(ctx, query, id).Scan(&success)
+	if err != nil {
+		r.logger.Error("Failed to delete tag", zap.Error(err), zap.Int("id", id))
+		return err
+	}
+
+	if !success {
+		return errors.New("tag not found or is in use")
+	}
+
+	return nil
 }
