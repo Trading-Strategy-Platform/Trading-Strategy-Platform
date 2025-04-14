@@ -132,6 +132,10 @@ func (h *MarketplaceHandler) CreateListing(c *gin.Context) {
 		return
 	}
 
+	if request.Price < 0 {
+		request.Price = 0
+	}
+
 	userID, exists := c.Get("userID")
 	if !exists {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})

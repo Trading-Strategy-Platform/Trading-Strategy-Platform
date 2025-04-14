@@ -29,7 +29,7 @@ type MarketplaceItem struct {
 type MarketplaceCreate struct {
 	StrategyID         int     `json:"strategy_id" binding:"required"`
 	VersionID          int     `json:"version_id" binding:"required"`
-	Price              float64 `json:"price" binding:"required,min=0"`
+	Price              float64 `json:"price" binding:"min=0"`
 	IsSubscription     bool    `json:"is_subscription"`
 	SubscriptionPeriod string  `json:"subscription_period,omitempty"`
 	DescriptionPublic  string  `json:"description_public"`
