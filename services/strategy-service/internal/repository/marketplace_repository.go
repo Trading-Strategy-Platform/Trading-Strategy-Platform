@@ -67,7 +67,7 @@ func (r *MarketplaceRepository) GetAll(ctx context.Context, searchTerm string, m
 		MarketplaceID      int       `db:"marketplace_id"`
 		StrategyID         int       `db:"strategy_id"`
 		Name               string    `db:"name"`
-		Description        string    `db:"description"`
+		Description        string    `db:"description"` // This comes from the view which aliases description_public as description
 		ThumbnailURL       string    `db:"thumbnail_url"`
 		OwnerID            int       `db:"owner_id"`
 		OwnerUsername      string    `db:"owner_username"`
@@ -111,8 +111,8 @@ func (r *MarketplaceRepository) GetAll(ctx context.Context, searchTerm string, m
 			Price:              l.Price,
 			IsSubscription:     l.IsSubscription,
 			SubscriptionPeriod: l.SubscriptionPeriod,
-			IsActive:           true, // Assume active since the function only returns active listings
-			Description:        l.Description,
+			IsActive:           true,          // Assume active since the function only returns active listings
+			DescriptionPublic:  l.Description, // The view returns description_public as "description"
 			CreatedAt:          l.CreatedAt,
 			UpdatedAt:          &l.UpdatedAt,
 
@@ -123,9 +123,7 @@ func (r *MarketplaceRepository) GetAll(ctx context.Context, searchTerm string, m
 		}
 	}
 
-	// Get total count - this could be optimized to return from the function directly
-	// For now, we'll use the length of returned items if it's less than the requested limit,
-	// otherwise execute a count query
+	// Get total count
 	total := len(items)
 	if limit > 0 && total == limit {
 		// If we got exactly the number of items requested, there might be more
@@ -163,7 +161,7 @@ func (r *MarketplaceRepository) Create(ctx context.Context, listing *model.Marke
 		listing.Price,
 		listing.IsSubscription,
 		listing.SubscriptionPeriod,
-		listing.Description,
+		listing.DescriptionPublic, // Updated field name
 	).Scan(&id)
 
 	if err != nil {
@@ -177,7 +175,8 @@ func (r *MarketplaceRepository) Create(ctx context.Context, listing *model.Marke
 // GetByID retrieves a marketplace listing by ID
 func (r *MarketplaceRepository) GetByID(ctx context.Context, id int) (*model.MarketplaceItem, error) {
 	query := `
-		SELECT id, strategy_id, user_id, price, is_subscription, subscription_period, is_active, description, created_at, updated_at
+		SELECT id, strategy_id, user_id, price, is_subscription, subscription_period, 
+		       is_active, description_public, created_at, updated_at
 		FROM strategy_marketplace
 		WHERE id = $1
 	`

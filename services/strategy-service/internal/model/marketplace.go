@@ -13,7 +13,7 @@ type MarketplaceItem struct {
 	IsSubscription     bool       `json:"is_subscription" db:"is_subscription"`
 	SubscriptionPeriod string     `json:"subscription_period,omitempty" db:"subscription_period"`
 	IsActive           bool       `json:"is_active" db:"is_active"`
-	Description        string     `json:"description" db:"description"`
+	DescriptionPublic  string     `json:"description_public" db:"description_public"`
 	CreatedAt          time.Time  `json:"created_at" db:"created_at"`
 	UpdatedAt          *time.Time `json:"updated_at,omitempty" db:"updated_at"`
 
@@ -32,7 +32,7 @@ type MarketplaceCreate struct {
 	Price              float64 `json:"price" binding:"required,min=0"`
 	IsSubscription     bool    `json:"is_subscription"`
 	SubscriptionPeriod string  `json:"subscription_period,omitempty"`
-	Description        string  `json:"description"`
+	DescriptionPublic  string  `json:"description_public"`
 }
 
 // StrategyPurchase represents a purchase of a strategy from the marketplace

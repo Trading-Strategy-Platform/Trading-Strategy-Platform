@@ -90,13 +90,18 @@ RETURNS TABLE (
     structure jsonb
 ) AS $$
 DECLARE
-    search_condition text := '';
+    owned_search_condition text := '';
+    purchased_search_condition text := '';
     tags_condition text := '';
     query text;
 BEGIN
-    -- Build search condition if search term is provided
+    -- Build separate search conditions for owned vs purchased strategies
     IF p_search_term IS NOT NULL THEN
-        search_condition := ' AND (s.name ILIKE ''%' || p_search_term || '%'' OR s.description ILIKE ''%' || p_search_term || '%'')';
+        -- For owned strategies (no marketplace table)
+        owned_search_condition := ' AND (s.name ILIKE ''%' || p_search_term || '%'' OR s.description ILIKE ''%' || p_search_term || '%'')';
+        
+        -- For purchased strategies (includes marketplace table)
+        purchased_search_condition := ' AND (s.name ILIKE ''%' || p_search_term || '%'' OR s.description ILIKE ''%' || p_search_term || '%'' OR m.description_public ILIKE ''%' || p_search_term || '%'')';
     END IF;
     
     -- Build tags condition if tags are provided
@@ -114,7 +119,7 @@ BEGIN
             SELECT 
                 s.id, 
                 s.name, 
-                s.description, 
+                s.description AS description,
                 s.thumbnail_url,
                 s.user_id AS owner_id,
                 s.user_id AS owner_user_id,
@@ -137,7 +142,7 @@ BEGIN
             WHERE 
                 s.user_id = ' || p_user_id || '
                 AND s.is_active = TRUE' ||
-                search_condition ||
+                owned_search_condition || -- Use owned search condition
                 tags_condition;
 
         -- Add UNION if we're going to add more parts
@@ -150,7 +155,7 @@ BEGIN
         SELECT 
             s.id, 
             s.name, 
-            s.description,
+            m.description_public AS description,
             s.thumbnail_url,
             s.user_id AS owner_id,
             s.user_id AS owner_user_id,
@@ -179,7 +184,7 @@ BEGIN
                 p.subscription_end IS NULL
                 OR p.subscription_end > NOW()
             )' ||
-            search_condition ||
+            purchased_search_condition || -- Use purchased search condition
             tags_condition;
             
     -- Part 3: Include expired subscriptions if not filtering by purchased only
@@ -189,7 +194,7 @@ BEGIN
             SELECT 
                 s.id, 
                 s.name, 
-                s.description,
+                m.description_public AS description,
                 s.thumbnail_url,
                 s.user_id AS owner_id,
                 s.user_id AS owner_user_id,
@@ -216,7 +221,7 @@ BEGIN
                 AND s.is_active = TRUE 
                 AND p.subscription_end IS NOT NULL
                 AND p.subscription_end <= NOW()' ||
-                search_condition ||
+                purchased_search_condition || -- Use purchased search condition
                 tags_condition;
     END IF;
     

@@ -215,9 +215,13 @@ func (s *StrategyService) UpdateThumbnail(ctx context.Context, id int, userID in
 		return errors.New("access denied")
 	}
 
-	// Create an update object with just the thumbnail URL
+	// Create an update object with all necessary fields to preserve them
 	thumbnailUpdate := &model.StrategyUpdate{
 		ThumbnailURL: &thumbnailURL,
+		Structure:    &strategy.Structure,   // Keep existing structure
+		Name:         &strategy.Name,        // Keep existing name
+		Description:  &strategy.Description, // Keep existing description
+		IsPublic:     &strategy.IsPublic,    // Keep existing public status
 	}
 
 	// Update the strategy

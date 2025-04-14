@@ -111,7 +111,7 @@ CREATE TABLE IF NOT EXISTS "strategy_marketplace" (
   "is_subscription" boolean NOT NULL DEFAULT false,
   "subscription_period" varchar(20),
   "is_active" boolean NOT NULL DEFAULT true,
-  "description" text,
+  "description_public" text,
   "created_at" timestamp NOT NULL DEFAULT (CURRENT_TIMESTAMP),
   "updated_at" timestamp
 );
