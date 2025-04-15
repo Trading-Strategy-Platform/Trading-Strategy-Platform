@@ -48,15 +48,17 @@ type AuthConfig struct {
 
 // KafkaConfig holds Kafka specific configuration
 type KafkaConfig struct {
-	Brokers string
-	Topics  map[string]string
+	Brokers  []string
+	Enabled  bool
+	ClientID string
 }
 
 // RedisConfig holds Redis specific configuration
 type RedisConfig struct {
-	URL             string
-	SessionPrefix   string
-	SessionDuration time.Duration
+	URL      string
+	Password string
+	DB       int
+	Enabled  bool
 }
 
 // LoggingConfig holds logging specific configuration

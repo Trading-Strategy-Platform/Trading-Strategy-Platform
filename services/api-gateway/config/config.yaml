@@ -5,19 +5,19 @@ server:
   idleTimeout: 120s
 
 userService:
-  url: http://user-service:8083  # Updated to use correct port
+  url: http://user-service:8083
   timeout: 10s
 
 strategyService:
-  url: http://strategy-service:8082  # Updated to use correct port
+  url: http://strategy-service:8082
   timeout: 10s
 
 historicalService:
-  url: http://historical-service:8081  # Updated to use correct port
+  url: http://historical-service:8081
   timeout: 30s
 
 mediaService:
-  url: http://media-service:8085  # Correct port
+  url: http://media-service:8085
   timeout: 30s
 
 rateLimit:
@@ -29,3 +29,13 @@ rateLimit:
 logging:
   level: debug
   format: json
+
+redis:
+  url: redis:6379
+  password: ""
+  db: 0
+  
+kafka:
+  brokers:
+    - kafka:9092
+  clientID: api-gateway

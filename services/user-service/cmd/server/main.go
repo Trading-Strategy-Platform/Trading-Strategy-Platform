@@ -18,8 +18,10 @@ import (
 	"services/user-service/internal/service"
 
 	"github.com/gin-gonic/gin"
+	"github.com/go-redis/redis/v8"
 	_ "github.com/jackc/pgx/v4/stdlib"
 	"github.com/jmoiron/sqlx"
+	"github.com/segmentio/kafka-go"
 	"go.uber.org/zap"
 )
 
@@ -44,6 +46,36 @@ func main() {
 	}
 	defer db.Close()
 
+	// Initialize Redis client (if enabled)
+	var redisClient *redis.Client
+	if cfg.Redis.Enabled {
+		redisClient = redis.NewClient(&redis.Options{
+			Addr:     cfg.Redis.URL,
+			Password: cfg.Redis.Password,
+			DB:       cfg.Redis.DB,
+		})
+
+		// Test Redis connection
+		_, err = redisClient.Ping(context.Background()).Result()
+		if err != nil {
+			logger.Warn("Failed to connect to Redis, running without cache", zap.Error(err))
+			redisClient = nil
+		} else {
+			logger.Info("Connected to Redis", zap.String("address", cfg.Redis.URL))
+		}
+	}
+
+	// Initialize Kafka writer (if enabled)
+	var kafkaWriter *kafka.Writer
+	if cfg.Kafka.Enabled && len(cfg.Kafka.Brokers) > 0 {
+		kafkaWriter = &kafka.Writer{
+			Addr:     kafka.TCP(cfg.Kafka.Brokers...),
+			Topic:    "user-events",
+			Balancer: &kafka.LeastBytes{},
+		}
+		logger.Info("Initialized Kafka writer", zap.Strings("brokers", cfg.Kafka.Brokers))
+	}
+
 	// Create repositories
 	userRepo := repository.NewUserRepository(db, logger)
 	authRepo := repository.NewAuthRepository(db, logger)
@@ -54,9 +86,14 @@ func main() {
 	// Create clients
 	mediaClient := client.NewMediaClient(cfg.Media.URL, cfg.Media.ServiceKey, logger)
 
-	// Create services
+	// Create services with Redis and Kafka integration
 	authService := service.NewAuthService(userRepo, authRepo, cfg, logger)
-	userService := service.NewUserService(userRepo, logger)
+	userService := service.NewUserService(
+		userRepo,
+		logger,
+		redisClient, // Add Redis client
+		kafkaWriter, // Add Kafka writer
+	)
 	notificationService := service.NewNotificationService(notificationRepo, userRepo, logger)
 	preferenceService := service.NewPreferenceService(preferenceRepo, userRepo, logger)
 	profileService := service.NewProfileService(profileRepo, userRepo, mediaClient, logger)
@@ -97,6 +134,11 @@ func main() {
 	// Create a deadline for server shutdown
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+
+	// Close Kafka writer if initialized
+	if kafkaWriter != nil {
+		kafkaWriter.Close()
+	}
 
 	if err := srv.Shutdown(ctx); err != nil {
 		logger.Fatal("Server forced to shutdown", zap.Error(err))

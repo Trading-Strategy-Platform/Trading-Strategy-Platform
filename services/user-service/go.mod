@@ -15,6 +15,9 @@ require (
 )
 
 require (
+	github.com/go-redis/redis/v8 v8.11.5
+	github.com/segmentio/kafka-go v0.4.42
+	github.com/google/uuid v1.3.0
 	github.com/bytedance/sonic v1.11.6 // indirect
 	github.com/bytedance/sonic/loader v0.2.3 // indirect
 	github.com/cloudwego/base64x v0.1.5 // indirect

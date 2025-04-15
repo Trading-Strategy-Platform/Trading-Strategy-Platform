@@ -20,16 +20,17 @@ auth:
   accessTokenDuration: 12h
   refreshTokenDuration: 168h  # 7 days in hours (7*24h)
 
-kafka:
-  brokers: kafka:9092
-  topics:
-    notifications: user-notifications
-    events: user-events
-
 redis:
-  url: redis:6379
-  sessionPrefix: user-session
-  sessionDuration: 24h
+  url: "redis:6379"
+  password: ""
+  db: 0
+  enabled: true
+
+kafka:
+  enabled: true
+  clientID: "user-service"
+  brokers:
+    - "kafka:9092"
 
 media:
   URL: http://media-service:8085
