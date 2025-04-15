@@ -13,6 +13,7 @@ type Config struct {
 	UserService       ServiceConfig
 	StrategyService   ServiceConfig
 	HistoricalService ServiceConfig
+	MediaService      ServiceConfig
 	RateLimit         RateLimitConfig
 	Logging           LoggingConfig
 }
@@ -81,6 +82,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("userService.timeout", "10s")
 	v.SetDefault("strategyService.timeout", "10s")
 	v.SetDefault("historicalService.timeout", "30s")
+	v.SetDefault("mediaService.timeout", "30s")
 
 	// Rate limit defaults
 	v.SetDefault("rateLimit.enabled", false)

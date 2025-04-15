@@ -36,12 +36,14 @@ func main() {
 	userServiceProxy := proxy.NewServiceProxy(cfg.UserService.URL, logger)
 	strategyServiceProxy := proxy.NewServiceProxy(cfg.StrategyService.URL, logger)
 	historicalServiceProxy := proxy.NewServiceProxy(cfg.HistoricalService.URL, logger)
+	mediaServiceProxy := proxy.NewServiceProxy(cfg.MediaService.URL, logger)
 
 	// Create the API gateway handler
 	gatewayHandler := handler.NewGatewayHandler(
 		userServiceProxy,
 		strategyServiceProxy,
 		historicalServiceProxy,
+		mediaServiceProxy,
 		logger,
 	)
 
@@ -137,6 +139,10 @@ func setupRouter(
 		c.JSON(http.StatusOK, gin.H{"status": "healthy"})
 	})
 
+	// Media routes - A SIMPLER APPROACH: Use a single catch-all route for all media requests
+	// This ensures all paths under /media will be proxied to the media service
+	router.Any("/media/*path", gatewayHandler.ProxyMediaService)
+
 	// API routes
 	api := router.Group("/api")
 	{
@@ -215,6 +221,12 @@ func setupRouter(
 		// Timeframe routes
 		api.Any("/v1/timeframes", gatewayHandler.ProxyHistoricalService)
 		api.Any("/v1/timeframes/:id", gatewayHandler.ProxyHistoricalService)
+
+		// ==================== MEDIA SERVICE ROUTES ====================
+		// Media upload and management route (API access)
+		api.Any("/v1/media/upload", gatewayHandler.ProxyMediaService)
+		api.Any("/v1/media/:id", gatewayHandler.ProxyMediaService)
+		api.Any("/v1/media/by-path/*path", gatewayHandler.ProxyMediaService)
 	}
 
 	return router

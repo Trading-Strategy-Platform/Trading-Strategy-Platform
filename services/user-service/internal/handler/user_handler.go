@@ -3,6 +3,7 @@ package handler
 import (
 	"net/http"
 	"strconv"
+	"strings"
 
 	"services/user-service/internal/model"
 	"services/user-service/internal/service"
@@ -189,4 +190,76 @@ func (h *UserHandler) GetUserRoles(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"roles": []string{role},
 	})
+}
+
+// BatchGetServiceUsers handles fetching multiple users by ID for service-to-service communication
+// GET /api/v1/service/users/batch?ids=1,2,3
+func (h *UserHandler) BatchGetServiceUsers(c *gin.Context) {
+	// Verify service key
+	serviceKey := c.GetHeader("X-Service-Key")
+	if serviceKey == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Service key required"})
+		return
+	}
+
+	// Validate service key
+	valid, err := h.userService.ValidateServiceKey(c.Request.Context(), "strategy-service", serviceKey)
+	if err != nil || !valid {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid service key"})
+		return
+	}
+
+	// Parse ids from query parameter
+	idsParam := c.Query("ids")
+	if idsParam == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "User IDs required"})
+		return
+	}
+
+	// Split the comma-separated list
+	idStrings := strings.Split(idsParam, ",")
+
+	// Convert to integers
+	var ids []int
+	for _, idStr := range idStrings {
+		id, err := strconv.Atoi(strings.TrimSpace(idStr))
+		if err != nil {
+			h.logger.Warn("Invalid user ID in batch request",
+				zap.String("id", idStr),
+				zap.Error(err))
+			continue // Skip invalid IDs
+		}
+		ids = append(ids, id)
+	}
+
+	if len(ids) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "No valid user IDs provided"})
+		return
+	}
+
+	// Get users by their IDs
+	users, err := h.userService.GetUsersByIDs(c.Request.Context(), ids)
+	if err != nil {
+		h.logger.Error("failed to get users batch", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get users"})
+		return
+	}
+
+	// Format the response to include only the needed fields
+	type UserResponse struct {
+		ID              int    `json:"id"`
+		Username        string `json:"username"`
+		ProfilePhotoURL string `json:"profile_photo_url,omitempty"`
+	}
+
+	result := make([]UserResponse, 0, len(users))
+	for _, user := range users {
+		result = append(result, UserResponse{
+			ID:              user.ID,
+			Username:        user.Username,
+			ProfilePhotoURL: user.ProfilePhotoURL,
+		})
+	}
+
+	c.JSON(http.StatusOK, gin.H{"users": result})
 }

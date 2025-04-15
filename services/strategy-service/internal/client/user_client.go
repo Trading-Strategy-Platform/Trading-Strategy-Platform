@@ -389,3 +389,65 @@ func (c *UserClient) ValidateUserAccess(ctx context.Context, userID int, token s
 
 	return response.Valid && response.UserID == userID, nil
 }
+
+// BatchGetUsersByIDs retrieves multiple users' details by their IDs
+func (c *UserClient) BatchGetUsersByIDs(ctx context.Context, userIDs []int) (map[int]UserDetails, error) {
+	// Build comma-separated list of user IDs
+	var idParams string
+	for i, id := range userIDs {
+		if i > 0 {
+			idParams += ","
+		}
+		idParams += fmt.Sprintf("%d", id)
+	}
+
+	// Use the service endpoint, not the admin endpoint
+	url := fmt.Sprintf("%s/api/v1/service/users/batch?ids=%s", c.baseURL, idParams)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	// Add service authentication header - this is crucial
+	req.Header.Set("X-Service-Key", "strategy-service-key")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		c.logger.Error("Failed to get users from User Service", zap.Error(err))
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		c.logger.Warn("User service returned non-200 status",
+			zap.Int("status_code", resp.StatusCode),
+			zap.String("url", url))
+		return nil, fmt.Errorf("user service returned status code %d", resp.StatusCode)
+	}
+
+	var response struct {
+		Users []UserDetails `json:"users"`
+	}
+
+	err = json.NewDecoder(resp.Body).Decode(&response)
+	if err != nil {
+		c.logger.Error("Failed to decode users response", zap.Error(err))
+		return nil, err
+	}
+
+	// Create map of user ID to user details
+	result := make(map[int]UserDetails)
+	for _, user := range response.Users {
+		result[user.ID] = user
+	}
+
+	return result, nil
+}
+
+// UserDetails represents the user information returned by the user service
+type UserDetails struct {
+	ID              int    `json:"id"`
+	Username        string `json:"username"`
+	ProfilePhotoURL string `json:"profile_photo_url,omitempty"`
+}

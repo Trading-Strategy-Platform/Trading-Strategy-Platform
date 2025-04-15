@@ -249,12 +249,21 @@ func setupRouter(
 			admin.POST("/notifications", notifHandler.CreateNotification)
 		}
 
-		// // Service-to-service API
-		// service := v1.Group("/service")
-		// {
-		// 	// TODO: Implement service-to-service authentication middleware
-		// 	// This would validate the service key in the request header
-		// }
+		// Service-to-service API
+		service := v1.Group("/service")
+		{
+			// This is for direct service-to-service communication
+			// No auth middleware, but will verify service keys in the handlers
+
+			// Service user endpoints
+			serviceUsers := service.Group("/users")
+			{
+				userHandler := handler.NewUserHandler(userService, logger)
+				serviceUsers.GET("/batch", userHandler.BatchGetServiceUsers)
+			}
+
+			// Add other service endpoints as needed
+		}
 	}
 
 	return router

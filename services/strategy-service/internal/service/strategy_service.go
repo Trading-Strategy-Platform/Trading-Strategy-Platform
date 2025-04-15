@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 
+	"services/strategy-service/internal/client"
 	"services/strategy-service/internal/model"
 	"services/strategy-service/internal/repository"
 
@@ -15,6 +16,7 @@ import (
 type UserClient interface {
 	GetUserByID(ctx context.Context, userID int) (string, error) // Returns username
 	ValidateUserAccess(ctx context.Context, userID int, token string) (bool, error)
+	BatchGetUsersByIDs(ctx context.Context, userIDs []int) (map[int]client.UserDetails, error) // Add this new method
 }
 
 // BacktestClient defines methods for interacting with the Historical Data Service

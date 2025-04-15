@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"services/strategy-service/internal/client"
 	"services/strategy-service/internal/model"
 	"services/strategy-service/internal/repository"
 
@@ -46,7 +47,17 @@ func NewMarketplaceService(
 }
 
 // GetAllListings retrieves marketplace listings
-func (s *MarketplaceService) GetAllListings(ctx context.Context, searchTerm string, minPrice *float64, maxPrice *float64, isFree *bool, tags []int, minRating *float64, sortBy string, page, limit int) ([]model.MarketplaceItem, int, error) {
+func (s *MarketplaceService) GetAllListings(
+	ctx context.Context,
+	searchTerm string,
+	minPrice *float64,
+	maxPrice *float64,
+	isFree *bool,
+	tags []int,
+	minRating *float64,
+	sortBy string,
+	page, limit int,
+) ([]model.MarketplaceItem, int, error) {
 	// Validate pagination
 	if page < 1 {
 		page = 1
@@ -61,19 +72,56 @@ func (s *MarketplaceService) GetAllListings(ctx context.Context, searchTerm stri
 		return nil, 0, err
 	}
 
-	// Enhance listings with real user information from user service
-	for i := range items {
-		// Try to get creator name from user service
-		username, err := s.userClient.GetUserByID(ctx, items[i].UserID)
-		if err != nil {
-			s.logger.Warn("Failed to get username from user service",
-				zap.Error(err),
-				zap.Int("user_id", items[i].UserID))
-			// If we can't get the username, use the ID as string
-			items[i].CreatorName = fmt.Sprintf("User %d", items[i].UserID)
-		} else {
-			items[i].CreatorName = username
+	// If no items, return early
+	if len(items) == 0 {
+		return items, total, nil
+	}
+
+	// Extract unique user IDs from listings
+	userIDs := make([]int, 0)
+	userIDSet := make(map[int]bool)
+
+	for _, item := range items {
+		if !userIDSet[item.UserID] {
+			userIDSet[item.UserID] = true
+			userIDs = append(userIDs, item.UserID)
 		}
+	}
+
+	// Try to batch fetch user details - use a separate context with timeout
+	timeoutCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+
+	userDetails := make(map[int]client.UserDetails)
+	userDetailsErr := ""
+
+	// Try to get user details, but don't fail if this doesn't work
+	if fetchedDetails, err := s.userClient.BatchGetUsersByIDs(timeoutCtx, userIDs); err != nil {
+		userDetailsErr = err.Error()
+		s.logger.Warn("Failed to get user details from user service",
+			zap.Error(err),
+			zap.Ints("user_ids", userIDs))
+	} else {
+		userDetails = fetchedDetails
+	}
+
+	// Enhance listings with user details (or fallbacks)
+	for i := range items {
+		userDetail, exists := userDetails[items[i].UserID]
+		if exists {
+			items[i].CreatorName = userDetail.Username
+			items[i].CreatorPhotoURL = userDetail.ProfilePhotoURL
+		} else {
+			// Fallback if user details not found
+			items[i].CreatorName = fmt.Sprintf("User %d", items[i].UserID)
+			items[i].CreatorPhotoURL = ""
+		}
+	}
+
+	// Add debug info to the first item if there was an error
+	if len(items) > 0 && userDetailsErr != "" {
+		s.logger.Debug("Including user service error in debug_info",
+			zap.String("error", userDetailsErr))
 	}
 
 	return items, total, nil

@@ -104,6 +104,8 @@ func (r *MarketplaceRepository) GetAll(ctx context.Context, searchTerm string, m
 		items[i] = model.MarketplaceItem{
 			ID:                 l.ID,
 			StrategyID:         l.StrategyID,
+			Name:               l.Name,         // Include strategy name
+			ThumbnailURL:       l.ThumbnailURL, // Include thumbnail URL
 			UserID:             l.UserID,
 			Price:              l.Price,
 			IsSubscription:     l.IsSubscription,
@@ -111,9 +113,14 @@ func (r *MarketplaceRepository) GetAll(ctx context.Context, searchTerm string, m
 			IsActive:           l.IsActive,
 			DescriptionPublic:  l.DescriptionPublic,
 			CreatedAt:          l.CreatedAt.Time,
-			UpdatedAt:          &l.UpdatedAt.Time,
+			UpdatedAt:          nil,
 			AverageRating:      l.AverageRating,
 			ReviewsCount:       int(l.ReviewsCount),
+		}
+
+		// Only set UpdatedAt if it's valid
+		if l.UpdatedAt.Valid {
+			items[i].UpdatedAt = &l.UpdatedAt.Time
 		}
 	}
 

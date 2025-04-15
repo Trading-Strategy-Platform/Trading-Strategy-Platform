@@ -124,3 +124,50 @@ func (s *UserService) CheckUserActive(ctx context.Context, id int) (bool, error)
 	}
 	return user.IsActive, nil
 }
+
+func (s *UserService) GetUsersByIDs(ctx context.Context, ids []int) ([]model.User, error) {
+	if len(ids) == 0 {
+		return []model.User{}, nil
+	}
+
+	// Create a placeholder for the results
+	users := make([]model.User, 0, len(ids))
+
+	// For each user ID in the batch
+	for _, id := range ids {
+		user, err := s.userRepo.GetByID(ctx, id)
+		if err != nil {
+			s.logger.Warn("Error fetching user in batch",
+				zap.Error(err),
+				zap.Int("user_id", id))
+			continue // Skip this user but continue with others
+		}
+
+		if user != nil {
+			users = append(users, *user)
+		}
+	}
+
+	return users, nil
+}
+
+func (s *UserService) ValidateServiceKey(ctx context.Context, serviceName, keyHash string) (bool, error) {
+	// Ensure we have a repository method to validate service keys
+	// This would typically check against the service_keys table
+
+	// For simplicity, we're doing a direct check here, but in production
+	// you should use a proper repository method
+
+	// Check if service name is valid
+	if serviceName != "strategy-service" &&
+		serviceName != "historical-service" &&
+		serviceName != "media-service" {
+		return false, nil
+	}
+
+	// Check if key hash matches expected value for the service
+	// In a real implementation, you would fetch this from the database
+	expectedKeyHash := "strategy-service-key"
+
+	return keyHash == expectedKeyHash, nil
+}

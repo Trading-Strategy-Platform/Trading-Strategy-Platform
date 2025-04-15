@@ -11,7 +11,8 @@ storage:
   # Local storage configuration
   local:
     basePath: "/data/images"
-    baseURL: "http://media-service:8085/api/v1/media"
+    # Use the public URL using our API Gateway
+    baseURL: "http://localhost:8080/media"
     permissions: "0644"
   
   # S3 storage configuration

@@ -2,7 +2,8 @@
 -- File: 07-marketplace-functions.sql
 -- Contains functions for marketplace operations
 
--- Create marketplace listing view with ratings
+-- Create marketplace listing view with ratings 
+-- (Keeping this the same from the original file for reference)
 CREATE OR REPLACE VIEW v_marketplace_strategy AS
 SELECT 
     m.id AS marketplace_id,
@@ -43,7 +44,7 @@ WHERE
 GROUP BY 
     m.id, s.id;
 
--- Create a different function name
+-- Update the get_marketplace_strategies function to ensure it returns name and thumbnail
 CREATE OR REPLACE FUNCTION get_marketplace_strategies(
     p_search_term VARCHAR DEFAULT NULL,
     p_min_price NUMERIC DEFAULT NULL,
@@ -117,6 +118,50 @@ BEGIN
         CASE WHEN p_sort_by = 'newest' THEN m.created_at END DESC
     LIMIT p_limit
     OFFSET p_offset;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Create a separate function for counting total results
+CREATE OR REPLACE FUNCTION count_marketplace_strategies(
+    p_search_term VARCHAR DEFAULT NULL,
+    p_min_price NUMERIC DEFAULT NULL,
+    p_max_price NUMERIC DEFAULT NULL,
+    p_is_free BOOLEAN DEFAULT NULL,
+    p_tags INT[] DEFAULT NULL,
+    p_min_rating NUMERIC DEFAULT NULL
+)
+RETURNS BIGINT AS $$
+DECLARE
+    total_count BIGINT;
+BEGIN
+    SELECT COUNT(*)
+    INTO total_count
+    FROM (
+        SELECT 
+            m.id
+        FROM 
+            strategy_marketplace m
+            JOIN strategies s ON m.strategy_id = s.id
+            LEFT JOIN strategy_reviews r ON m.id = r.marketplace_id
+        WHERE 
+            m.is_active = TRUE
+            AND s.is_active = TRUE
+            AND (p_search_term IS NULL OR 
+                s.name ILIKE '%' || p_search_term || '%' OR 
+                m.description_public ILIKE '%' || p_search_term || '%')
+            AND (p_min_price IS NULL OR m.price >= p_min_price)
+            AND (p_max_price IS NULL OR m.price <= p_max_price)
+            AND (p_is_free IS NULL OR (p_is_free = TRUE AND m.price = 0) OR (p_is_free = FALSE AND m.price > 0))
+            AND (p_tags IS NULL OR p_tags = '{}' OR EXISTS (
+                SELECT 1 FROM strategy_tag_mappings tm
+                WHERE tm.strategy_id = s.id AND tm.tag_id = ANY(p_tags)
+            ))
+        GROUP BY m.id
+        HAVING
+            (p_min_rating IS NULL OR COALESCE(AVG(r.rating), 0) >= p_min_rating)
+    ) subquery;
+    
+    RETURN total_count;
 END;
 $$ LANGUAGE plpgsql;
 

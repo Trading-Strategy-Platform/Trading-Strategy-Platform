@@ -135,8 +135,11 @@ func setupRouter(cfg *config.Config, mediaHandler *handler.MediaHandler, logger 
 			// Upload endpoint (requires authentication)
 			media.POST("/upload", authMiddleware, mediaHandler.Upload)
 
-			// Get endpoint (public)
+			// Get endpoint by ID (public)
 			media.GET("/:id", middleware.PublicRoute(), mediaHandler.Get)
+
+			// Get endpoint by path (public) - use a different route pattern to avoid conflicts
+			media.GET("/by-path/*fullpath", middleware.PublicRoute(), mediaHandler.GetByPath)
 
 			// Delete endpoint (requires authentication)
 			media.DELETE("/:id", authMiddleware, mediaHandler.Delete)

@@ -18,11 +18,14 @@ type MarketplaceItem struct {
 	UpdatedAt          *time.Time `json:"updated_at,omitempty" db:"updated_at"`
 
 	// Additional fields for responses
-	Strategy       *Strategy `json:"strategy,omitempty" db:"-"`
-	CreatorName    string    `json:"creator_name,omitempty" db:"-"`
-	AverageRating  float64   `json:"average_rating,omitempty" db:"-"`
-	ReviewsCount   int       `json:"reviews_count,omitempty" db:"-"`
-	PurchasesCount int       `json:"purchases_count,omitempty" db:"-"`
+	Strategy        *Strategy `json:"strategy,omitempty" db:"-"`
+	Name            string    `json:"name,omitempty" db:"name"`                   // Added strategy name
+	ThumbnailURL    string    `json:"thumbnail_url,omitempty" db:"thumbnail_url"` // Added thumbnail URL
+	CreatorName     string    `json:"creator_name,omitempty" db:"-"`
+	CreatorPhotoURL string    `json:"creator_photo_url,omitempty" db:"-"` // Added creator photo URL
+	AverageRating   float64   `json:"average_rating,omitempty" db:"-"`
+	ReviewsCount    int       `json:"reviews_count,omitempty" db:"-"`
+	PurchasesCount  int       `json:"purchases_count,omitempty" db:"-"`
 }
 
 // MarketplaceCreate represents data needed to create a marketplace listing
