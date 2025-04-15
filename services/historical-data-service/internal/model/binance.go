@@ -36,15 +36,6 @@ type BinanceKline struct {
 	CloseTime time.Time
 }
 
-// SymbolDataStatus represents the status of a symbol's data
-type SymbolDataStatus struct {
-	Symbol        string      `json:"symbol"`
-	SymbolID      int         `json:"symbol_id"`
-	HasData       bool        `json:"has_data"`
-	AvailableData []DateRange `json:"available_data"`
-	MissingData   []DateRange `json:"missing_data"`
-}
-
 // BinanceDownloadRequest represents a request to download data from Binance
 type BinanceDownloadRequest struct {
 	Symbol    string    `json:"symbol" binding:"required"`

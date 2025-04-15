@@ -295,6 +295,22 @@ func setupRouter(
 		// HISTORICAL SERVICE ROUTES
 		api.Any("/v1/market-data", gatewayHandler.ProxyHistoricalService)
 		api.Any("/v1/market-data/:id", gatewayHandler.ProxyHistoricalService)
+		api.Any("/v1/market-data/candles", gatewayHandler.ProxyHistoricalService)
+		api.Any("/v1/market-data/candles/batch", gatewayHandler.ProxyHistoricalService)
+		api.Any("/v1/market-data/asset-types", gatewayHandler.ProxyHistoricalService)
+		api.Any("/v1/market-data/exchanges", gatewayHandler.ProxyHistoricalService)
+
+		// New market data download routes
+		api.Any("/v1/market-data/downloads", gatewayHandler.ProxyHistoricalService)
+		api.Any("/v1/market-data/downloads/:id", gatewayHandler.ProxyHistoricalService)
+		api.Any("/v1/market-data/downloads/:id/status", gatewayHandler.ProxyHistoricalService)
+		api.Any("/v1/market-data/downloads/active", gatewayHandler.ProxyHistoricalService)
+		api.Any("/v1/market-data/downloads/summary", gatewayHandler.ProxyHistoricalService)
+		api.Any("/v1/market-data/downloads/inventory", gatewayHandler.ProxyHistoricalService)
+		api.Any("/v1/market-data/downloads/sources/:source/symbols", gatewayHandler.ProxyHistoricalService)
+		api.Any("/v1/market-data/downloads/symbols/:symbol/status", gatewayHandler.ProxyHistoricalService)
+
+		// Existing routes
 		api.Any("/v1/backtests", gatewayHandler.ProxyHistoricalService)
 		api.Any("/v1/backtests/:id", gatewayHandler.ProxyHistoricalService)
 		api.Any("/v1/backtest-runs", gatewayHandler.ProxyHistoricalService)

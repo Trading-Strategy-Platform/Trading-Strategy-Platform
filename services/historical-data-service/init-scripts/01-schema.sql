@@ -94,17 +94,22 @@ CREATE TABLE IF NOT EXISTS "backtest_trades" (
   "exit_reason" varchar(50)
 );
 
--- Binance download jobs table
-CREATE TABLE IF NOT EXISTS "binance_download_jobs" (
+-- Market data download jobs table
+CREATE TABLE IF NOT EXISTS "market_data_download_jobs" (
   "id" SERIAL PRIMARY KEY,
   "symbol_id" int NOT NULL,
   "symbol" varchar(20) NOT NULL,
+  "source" varchar(50) NOT NULL,
   "timeframe" timeframe_type NOT NULL,
   "start_date" timestamptz NOT NULL,
   "end_date" timestamptz NOT NULL,
   "status" varchar(20) NOT NULL DEFAULT 'pending',
   "progress" numeric(5,2) NOT NULL DEFAULT 0,
+  "total_candles" int NOT NULL DEFAULT 0,
+  "processed_candles" int NOT NULL DEFAULT 0,
+  "retries" int NOT NULL DEFAULT 0,
   "error" text,
   "created_at" timestamptz NOT NULL DEFAULT (CURRENT_TIMESTAMP),
-  "updated_at" timestamptz NOT NULL DEFAULT (CURRENT_TIMESTAMP)
+  "updated_at" timestamptz NOT NULL DEFAULT (CURRENT_TIMESTAMP),
+  "last_processed_time" timestamptz
 );

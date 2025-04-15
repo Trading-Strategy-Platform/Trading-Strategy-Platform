@@ -49,7 +49,7 @@ func main() {
 	backtestRepo := repository.NewBacktestRepository(db, logger)
 	symbolRepo := repository.NewSymbolRepository(db, logger)
 	timeframeRepo := repository.NewTimeframeRepository(db, logger)
-	binanceRepo := repository.NewBinanceRepository(db, logger)
+	downloadJobRepo := repository.NewDownloadJobRepository(db, logger) // renamed from binanceRepo
 
 	// Initialize clients
 	userClient := client.NewUserClient(cfg.UserService.URL, logger)
@@ -65,8 +65,8 @@ func main() {
 	)
 	symbolService := service.NewSymbolService(symbolRepo, logger)
 	timeframeService := service.NewTimeframeService(timeframeRepo, logger)
-	binanceService := service.NewBinanceService(
-		binanceRepo,
+	dataDownloadService := service.NewMarketDataDownloadService( // renamed from binanceService
+		downloadJobRepo,
 		symbolRepo,
 		marketDataRepo,
 		logger,
@@ -77,7 +77,7 @@ func main() {
 	backtestHandler := handler.NewBacktestHandler(backtestService, logger)
 	symbolHandler := handler.NewSymbolHandler(symbolService, logger)
 	timeframeHandler := handler.NewTimeframeHandler(timeframeService, logger)
-	binanceHandler := handler.NewBinanceHandler(binanceService, logger)
+	dataDownloadHandler := handler.NewDataDownloadHandler(dataDownloadService, logger) // renamed from binanceHandler
 
 	// Set up HTTP server with Gin
 	router := setupRouter(
@@ -85,7 +85,7 @@ func main() {
 		backtestHandler,
 		symbolHandler,
 		timeframeHandler,
-		binanceHandler,
+		dataDownloadHandler, // renamed from binanceHandler
 		userClient,
 		logger,
 		cfg,
@@ -182,7 +182,7 @@ func setupRouter(
 	backtestHandler *handler.BacktestHandler,
 	symbolHandler *handler.SymbolHandler,
 	timeframeHandler *handler.TimeframeHandler,
-	binanceHandler *handler.BinanceHandler,
+	dataDownloadHandler *handler.DataDownloadHandler, // renamed from binanceHandler
 	userClient *client.UserClient,
 	logger *zap.Logger,
 	cfg *config.Config,
@@ -201,19 +201,21 @@ func setupRouter(
 	// API routes
 	v1 := router.Group("/api/v1")
 	{
-		// Binance API routes
-		binance := v1.Group("/binance")
+		// Market data downloads routes (previously Binance routes)
+		downloads := v1.Group("/market-data/downloads")
 		{
-			binance.GET("/symbols", binanceHandler.GetAvailableSymbols)
-			binance.GET("/symbols/:symbol/status", binanceHandler.CheckSymbolStatus)
+			downloads.GET("/sources/:source/symbols", dataDownloadHandler.GetAvailableSymbols)
+			downloads.GET("/symbols/:symbol/status", dataDownloadHandler.CheckSymbolStatus)
+			downloads.GET("/inventory", dataDownloadHandler.GetDataInventory)
 
-			// Protected Binance routes
-			binanceAuth := binance.Group("")
-			binanceAuth.Use(middleware.AuthMiddleware(userClient, logger))
-			binanceAuth.POST("/download", binanceHandler.InitiateDataDownload)
-			binanceAuth.GET("/download/:id/status", binanceHandler.GetDownloadStatus)
-			binanceAuth.GET("/downloads/active", binanceHandler.GetActiveDownloads)
-			binanceAuth.DELETE("/download/:id", binanceHandler.CancelDownload)
+			// Protected download routes
+			downloadsAuth := downloads.Group("")
+			downloadsAuth.Use(middleware.AuthMiddleware(userClient, logger))
+			downloadsAuth.POST("", dataDownloadHandler.InitiateDataDownload)
+			downloadsAuth.GET("/:id/status", dataDownloadHandler.GetDownloadStatus)
+			downloadsAuth.GET("/active", dataDownloadHandler.GetActiveDownloads)
+			downloadsAuth.DELETE("/:id", dataDownloadHandler.CancelDownload)
+			downloadsAuth.GET("/summary", dataDownloadHandler.GetJobsSummary)
 		}
 
 		// Symbol routes
