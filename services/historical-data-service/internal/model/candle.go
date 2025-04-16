@@ -18,7 +18,7 @@ type Candle struct {
 // CandleBatch represents a batch of candles for database import
 type CandleBatch struct {
 	SymbolID int       `json:"symbol_id"`
-	Time     time.Time `json:"time"`
+	Time     time.Time `json:"candle_time"` // Changed from "time" to "candle_time" to match SQL function
 	Open     float64   `json:"open"`
 	High     float64   `json:"high"`
 	Low      float64   `json:"low"`

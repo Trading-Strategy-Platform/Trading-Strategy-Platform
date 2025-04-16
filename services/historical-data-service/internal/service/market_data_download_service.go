@@ -289,7 +289,7 @@ func (s *MarketDataDownloadService) GetActiveDownloads(ctx context.Context, sour
 }
 
 // CancelDownload cancels a download job
-func (s *MarketDataDownloadService) CancelDownload(ctx context.Context, jobID int) (bool, error) {
+func (s *MarketDataDownloadService) CancelDownload(ctx context.Context, jobID int, force bool) (bool, error) {
 	job, err := s.downloadRepo.GetDownloadJob(ctx, jobID)
 	if err != nil {
 		return false, err
@@ -299,8 +299,9 @@ func (s *MarketDataDownloadService) CancelDownload(ctx context.Context, jobID in
 		return false, nil
 	}
 
-	// Only pending or in-progress jobs can be cancelled
-	if job.Status != "pending" && job.Status != "in_progress" {
+	// If force is true, we'll cancel regardless of current state
+	// Otherwise, only pending or in-progress jobs can be cancelled
+	if !force && job.Status != "pending" && job.Status != "in_progress" {
 		return false, fmt.Errorf("job is already %s", job.Status)
 	}
 
@@ -318,6 +319,12 @@ func (s *MarketDataDownloadService) CancelDownload(ctx context.Context, jobID in
 		return false, err
 	}
 
+	s.logger.Info("Market data download job cancelled by user",
+		zap.Int("jobID", jobID),
+		zap.String("symbol", job.Symbol),
+		zap.String("status", "cancelled"),
+		zap.Bool("force", force))
+
 	return success, nil
 }
 
@@ -328,31 +335,80 @@ func (s *MarketDataDownloadService) GetJobsSummary(ctx context.Context) (map[str
 
 // GetDataInventory gets a summary of all available market data
 func (s *MarketDataDownloadService) GetDataInventory(ctx context.Context, assetType, exchange string) ([]map[string]interface{}, error) {
+	// Add debug logging
+	s.logger.Debug("Getting data inventory",
+		zap.String("assetType", assetType),
+		zap.String("exchange", exchange))
+
 	// Get all symbols of the specified type
 	symbols, err := s.symbolRepo.GetSymbolsByFilter(ctx, "", assetType, exchange)
 	if err != nil {
+		s.logger.Error("Failed to get symbols", zap.Error(err))
 		return nil, err
 	}
 
+	s.logger.Debug("Found symbols", zap.Int("count", len(symbols)))
+
 	var inventory []map[string]interface{}
 
+	// Check all symbols, even if DataAvailable is false
 	for _, symbol := range symbols {
-		if !symbol.DataAvailable {
-			continue
-		}
-
-		// Get available timeframes
-		timeframes, err := s.getAvailableTimeframes(ctx, symbol.ID)
+		// First check if there's actually any data for this symbol
+		hasData, err := s.marketDataRepo.HasData(ctx, symbol.ID, "1m")
 		if err != nil {
-			s.logger.Error("Failed to get timeframes for symbol",
+			s.logger.Error("Failed to check if symbol has data",
 				zap.Error(err),
 				zap.Int("symbolID", symbol.ID))
 			continue
 		}
 
+		s.logger.Debug("Symbol data check",
+			zap.String("symbol", symbol.Symbol),
+			zap.Int("symbolID", symbol.ID),
+			zap.Bool("hasData", hasData),
+			zap.Bool("dataAvailableFlagSet", symbol.DataAvailable))
+
+		// Skip symbols with no data
+		if !hasData {
+			continue
+		}
+
+		// If we found data but the flag is not set, fix it
+		if hasData && !symbol.DataAvailable {
+			s.logger.Warn("Symbol has data but DataAvailable flag is not set, fixing",
+				zap.String("symbol", symbol.Symbol),
+				zap.Int("symbolID", symbol.ID))
+
+			s.symbolRepo.UpdateDataAvailability(ctx, symbol.ID, true)
+		}
+
+		// Get all possible timeframes
+		timeframes := []string{"1m", "5m", "15m", "30m", "1h", "4h", "1d", "1w"}
 		timeframeData := make(map[string]interface{})
 
+		// Check each timeframe
 		for _, tf := range timeframes {
+			// Check if this timeframe has data
+			tfHasData, err := s.marketDataRepo.HasData(ctx, symbol.ID, tf)
+			if err != nil {
+				s.logger.Error("Failed to check timeframe data",
+					zap.Error(err),
+					zap.String("symbol", symbol.Symbol),
+					zap.String("timeframe", tf))
+				continue
+			}
+
+			if !tfHasData {
+				// For 1m data, it really needs to exist
+				// For higher timeframes, we can compute them from 1m data
+				if tf != "1m" {
+					s.logger.Debug("No data for timeframe, but can be computed from 1m data",
+						zap.String("symbol", symbol.Symbol),
+						zap.String("timeframe", tf))
+				}
+				continue
+			}
+
 			// Get data ranges for this timeframe
 			ranges, err := s.marketDataRepo.GetDataRanges(ctx, symbol.ID, tf)
 			if err != nil {
@@ -362,6 +418,11 @@ func (s *MarketDataDownloadService) GetDataInventory(ctx context.Context, assetT
 					zap.String("timeframe", tf))
 				continue
 			}
+
+			s.logger.Debug("Found data ranges",
+				zap.String("symbol", symbol.Symbol),
+				zap.String("timeframe", tf),
+				zap.Int("rangesCount", len(ranges)))
 
 			if len(ranges) == 0 {
 				continue
@@ -387,13 +448,39 @@ func (s *MarketDataDownloadService) GetDataInventory(ctx context.Context, assetT
 				count = 0
 			}
 
-			timeframeData[tf] = map[string]interface{}{
-				"available_ranges": ranges,
-				"gaps":             gaps,
-				"earliest_date":    ranges[0].Start,
-				"latest_date":      ranges[len(ranges)-1].End,
-				"candle_count":     count,
+			// Get date range directly if GetDataRanges failed
+			var earliestDate, latestDate time.Time
+			if len(ranges) == 0 {
+				earliestDate, latestDate, err = s.marketDataRepo.GetDataRange(ctx, symbol.ID, tf)
+				if err != nil {
+					s.logger.Error("Failed to get data range directly",
+						zap.Error(err),
+						zap.Int("symbolID", symbol.ID),
+						zap.String("timeframe", tf))
+				}
+			} else {
+				earliestDate = ranges[0].Start
+				latestDate = ranges[len(ranges)-1].End
 			}
+
+			// Build timeframe info
+			tfInfo := map[string]interface{}{
+				"gaps":         gaps,
+				"candle_count": count,
+			}
+
+			// Add date ranges if available
+			if len(ranges) > 0 {
+				tfInfo["available_ranges"] = ranges
+				tfInfo["earliest_date"] = earliestDate
+				tfInfo["latest_date"] = latestDate
+			} else if !earliestDate.IsZero() && !latestDate.IsZero() {
+				tfInfo["earliest_date"] = earliestDate
+				tfInfo["latest_date"] = latestDate
+				tfInfo["available_ranges"] = []model.DateRange{{Start: earliestDate, End: latestDate}}
+			}
+
+			timeframeData[tf] = tfInfo
 		}
 
 		if len(timeframeData) > 0 {
@@ -407,6 +494,9 @@ func (s *MarketDataDownloadService) GetDataInventory(ctx context.Context, assetT
 			})
 		}
 	}
+
+	s.logger.Info("Generated data inventory",
+		zap.Int("symbolsWithData", len(inventory)))
 
 	return inventory, nil
 }
@@ -490,32 +580,55 @@ func (s *MarketDataDownloadService) processBinanceDownload(
 		return
 	}
 
-	// Calculate the total time range to download
-	totalDuration := endDate.Sub(startDate)
-	processedDuration := time.Duration(0)
-
-	// Estimate total number of candles
-	var totalCandlesEstimate int
+	// Calculate minutes per candle based on timeframe
+	var minutesPerCandle int
 	switch timeframe {
 	case "1m":
-		totalCandlesEstimate = int(totalDuration.Minutes())
+		minutesPerCandle = 1
 	case "5m":
-		totalCandlesEstimate = int(totalDuration.Minutes() / 5)
+		minutesPerCandle = 5
 	case "15m":
-		totalCandlesEstimate = int(totalDuration.Minutes() / 15)
+		minutesPerCandle = 15
 	case "30m":
-		totalCandlesEstimate = int(totalDuration.Minutes() / 30)
+		minutesPerCandle = 30
 	case "1h":
-		totalCandlesEstimate = int(totalDuration.Hours())
+		minutesPerCandle = 60
 	case "4h":
-		totalCandlesEstimate = int(totalDuration.Hours() / 4)
+		minutesPerCandle = 240
 	case "1d":
-		totalCandlesEstimate = int(totalDuration.Hours() / 24)
+		minutesPerCandle = 1440
 	case "1w":
-		totalCandlesEstimate = int(totalDuration.Hours() / 168)
+		minutesPerCandle = 10080
 	default:
-		totalCandlesEstimate = 1000 // Default estimate
+		minutesPerCandle = 1
 	}
+
+	// Calculate optimal chunk size to get close to 1000 candles per request
+	// Maximum is 1000 candles per request, let's aim for 900 to be safe
+	targetCandlesPerChunk := 900
+	chunkMinutes := targetCandlesPerChunk * minutesPerCandle
+	chunkDuration := time.Duration(chunkMinutes) * time.Minute
+
+	s.logger.Info("Calculated optimal chunk size",
+		zap.String("timeframe", timeframe),
+		zap.Int("minutesPerCandle", minutesPerCandle),
+		zap.Int("targetCandlesPerChunk", targetCandlesPerChunk),
+		zap.Int("chunkMinutes", chunkMinutes),
+		zap.Duration("chunkDuration", chunkDuration))
+
+	// Calculate the total time range to download
+	totalDuration := endDate.Sub(startDate)
+
+	// Estimate total number of candles
+	totalCandlesEstimate := int(totalDuration.Minutes()) / minutesPerCandle
+
+	s.logger.Info("Starting download job",
+		zap.Int("jobID", jobID),
+		zap.String("symbol", symbol),
+		zap.String("timeframe", timeframe),
+		zap.Time("startDate", startDate),
+		zap.Time("endDate", endDate),
+		zap.Int("estimatedTotalCandles", totalCandlesEstimate))
 
 	// Update job with total candles estimate
 	s.downloadRepo.UpdateDownloadJobStatus(
@@ -531,11 +644,13 @@ func (s *MarketDataDownloadService) processBinanceDownload(
 
 	// Process in chunks
 	currentStart := startDate
+	processedCandles := 0
+	totalDownloaded := 0
+	retryCount := 0
 
-	// Track progress
-	var progress float64
-	var processedCandles int
-	var retryCount int
+	// Keep track of consecutive empty chunks for early termination
+	emptyChunksInARow := 0
+	maxEmptyChunks := 5 // If we get 5 empty chunks in a row, we'll stop
 
 	for currentStart.Before(endDate) {
 		// Check if job was cancelled
@@ -555,10 +670,20 @@ func (s *MarketDataDownloadService) processBinanceDownload(
 		}
 
 		// Calculate chunk end time
-		chunkEnd := currentStart.Add(24 * time.Hour) // Download in daily chunks
+		chunkEnd := currentStart.Add(chunkDuration)
 		if chunkEnd.After(endDate) {
 			chunkEnd = endDate
 		}
+
+		// Log the time range we're fetching
+		s.logger.Debug("Fetching data chunk",
+			zap.String("symbol", symbol),
+			zap.String("interval", interval),
+			zap.Time("startTime", currentStart),
+			zap.Time("endTime", chunkEnd))
+
+		// Calculate expected candles in this chunk
+		expectedCandlesInChunk := int(chunkEnd.Sub(currentStart).Minutes()) / minutesPerCandle
 
 		// Fetch klines for this chunk
 		klines, err := binanceClient.GetKlines(ctx, symbol, interval, &currentStart, &chunkEnd, 1000)
@@ -578,7 +703,7 @@ func (s *MarketDataDownloadService) processBinanceDownload(
 					ctx,
 					jobID,
 					"in_progress",
-					progress,
+					float64(processedCandles)/float64(totalCandlesEstimate)*100,
 					processedCandles,
 					totalCandlesEstimate,
 					retryCount,
@@ -602,81 +727,101 @@ func (s *MarketDataDownloadService) processBinanceDownload(
 			continue
 		}
 
-		// If no klines were returned but we haven't reached the end date, there might be a gap
-		if len(klines) == 0 && currentStart.Before(endDate) {
+		// If no klines were returned but we haven't reached the end date
+		if len(klines) == 0 {
+			emptyChunksInARow++
+			s.logger.Info("No data returned for time range",
+				zap.String("symbol", symbol),
+				zap.String("interval", interval),
+				zap.Time("start", currentStart),
+				zap.Time("end", chunkEnd),
+				zap.Int("emptyChunksInARow", emptyChunksInARow))
+
 			// Skip ahead by the chunk size
 			currentStart = chunkEnd
+
+			// Check if we've hit the limit for empty chunks
+			if emptyChunksInARow >= maxEmptyChunks {
+				s.logger.Warn("Too many consecutive empty chunks, ending download early",
+					zap.Int("emptyChunksInARow", emptyChunksInARow),
+					zap.Int("maxEmptyChunks", maxEmptyChunks))
+				break
+			}
+
 			continue
 		}
 
-		// Verify kline sequence for gaps
-		if len(klines) > 1 {
-			for i := 1; i < len(klines); i++ {
-				var expectedTime time.Time
-				switch timeframe {
-				case "1m":
-					expectedTime = klines[i-1].OpenTime.Add(1 * time.Minute)
-				case "5m":
-					expectedTime = klines[i-1].OpenTime.Add(5 * time.Minute)
-				case "15m":
-					expectedTime = klines[i-1].OpenTime.Add(15 * time.Minute)
-				case "30m":
-					expectedTime = klines[i-1].OpenTime.Add(30 * time.Minute)
-				case "1h":
-					expectedTime = klines[i-1].OpenTime.Add(1 * time.Hour)
-				case "4h":
-					expectedTime = klines[i-1].OpenTime.Add(4 * time.Hour)
-				case "1d":
-					expectedTime = klines[i-1].OpenTime.Add(24 * time.Hour)
-				case "1w":
-					expectedTime = klines[i-1].OpenTime.Add(7 * 24 * time.Hour)
-				}
+		// Reset empty chunks counter if we got data
+		emptyChunksInARow = 0
 
-				if !expectedTime.Equal(klines[i].OpenTime) {
-					s.logger.Warn("Gap detected in kline data",
-						zap.String("symbol", symbol),
-						zap.Time("expected", expectedTime),
-						zap.Time("actual", klines[i].OpenTime))
-				}
-			}
-		}
+		totalDownloaded += len(klines)
+		s.logger.Debug("Received klines from Binance",
+			zap.Int("count", len(klines)),
+			zap.String("symbol", symbol),
+			zap.String("interval", interval),
+			zap.Time("firstCandleTime", klines[0].OpenTime),
+			zap.Time("lastCandleTime", klines[len(klines)-1].OpenTime),
+			zap.Int("expectedCandlesInChunk", expectedCandlesInChunk),
+			zap.Int("actualCandlesInChunk", len(klines)))
 
 		// Convert klines to candles
-		candles := make([]model.CandleBatch, len(klines))
+		candles := make([]model.CandleBatch, 0, len(klines))
 		for i, k := range klines {
-			candles[i] = model.CandleBatch{
+			// Make extra sure the time is not zero
+			if k.OpenTime.IsZero() {
+				s.logger.Warn("Skipping candle with zero time",
+					zap.Int("index", i),
+					zap.String("symbol", symbol))
+				continue
+			}
+
+			candles = append(candles, model.CandleBatch{
 				SymbolID: symbolID,
-				Time:     k.OpenTime,
+				Time:     k.OpenTime, // This will use the "candle_time" JSON tag
 				Open:     k.Open,
 				High:     k.High,
 				Low:      k.Low,
 				Close:    k.Close,
 				Volume:   k.Volume,
-			}
+			})
 		}
 
 		// Import candles
-		_, err = s.marketDataRepo.BatchImportCandles(ctx, candles)
+		importedCount, err := s.marketDataRepo.BatchImportCandles(ctx, candles)
 		if err != nil {
-			// Update job status with error but continue
+			// Log in detail
 			s.logger.Error("Failed to import candles",
 				zap.Error(err),
 				zap.String("symbol", symbol),
 				zap.Time("chunkStart", currentStart),
-				zap.Time("chunkEnd", chunkEnd))
+				zap.Time("chunkEnd", chunkEnd),
+				zap.Int("candlesInBatch", len(candles)))
 
 			// Try next chunk
 			currentStart = chunkEnd
 			continue
 		}
 
+		s.logger.Info("Imported candles",
+			zap.Int("importedCount", importedCount),
+			zap.String("symbol", symbol),
+			zap.String("interval", interval),
+			zap.Time("start", currentStart),
+			zap.Time("end", chunkEnd),
+			zap.Int("totalDownloadedSoFar", totalDownloaded),
+			zap.Int("totalImportedSoFar", processedCandles+importedCount))
+
 		// Reset retry counter on success
 		retryCount = 0
 
 		// Update progress
-		processedCandles += len(candles)
-		processedDuration += chunkEnd.Sub(currentStart)
-		progress = float64(processedDuration) / float64(totalDuration) * 100
+		processedCandles += importedCount
+		progress := float64(processedCandles) / float64(totalCandlesEstimate) * 100
+
+		// Cap progress at 99% until completely done
+		if progress > 99.0 && currentStart.Before(endDate) {
+			progress = 99.0
+		}
 
 		// Update progress in database
 		s.downloadRepo.UpdateDownloadJobStatus(
@@ -694,11 +839,17 @@ func (s *MarketDataDownloadService) processBinanceDownload(
 		currentStart = chunkEnd
 
 		// Sleep to avoid rate limiting
-		time.Sleep(200 * time.Millisecond)
+		time.Sleep(300 * time.Millisecond)
+	}
+
+	// Calculate final progress percentage
+	finalProgress := float64(processedCandles) / float64(totalCandlesEstimate) * 100
+	if finalProgress > 100.0 {
+		finalProgress = 100.0
 	}
 
 	// Update job status to completed or partial if there were errors
-	if progress >= 99.0 {
+	if finalProgress >= 99.0 {
 		s.downloadRepo.UpdateDownloadJobStatus(
 			ctx,
 			jobID,
@@ -709,19 +860,33 @@ func (s *MarketDataDownloadService) processBinanceDownload(
 			retryCount,
 			"",
 		)
+		s.logger.Info("Download job completed successfully",
+			zap.Int("jobID", jobID),
+			zap.String("symbol", symbol),
+			zap.Int("processedCandles", processedCandles),
+			zap.Int("totalCandlesEstimate", totalCandlesEstimate))
 	} else {
 		s.downloadRepo.UpdateDownloadJobStatus(
 			ctx,
 			jobID,
 			"partial",
-			progress,
+			finalProgress,
 			processedCandles,
 			totalCandlesEstimate,
 			retryCount,
-			"Download completed with some gaps",
+			fmt.Sprintf("Download completed with some gaps. Imported %d of ~%d candles (%.1f%%)",
+				processedCandles, totalCandlesEstimate, finalProgress),
 		)
+		s.logger.Info("Download job completed partially",
+			zap.Int("jobID", jobID),
+			zap.String("symbol", symbol),
+			zap.Int("processedCandles", processedCandles),
+			zap.Int("totalCandlesEstimate", totalCandlesEstimate),
+			zap.Float64("completionPercentage", finalProgress))
 	}
 
-	// Update symbol data availability flag
-	s.symbolRepo.UpdateDataAvailability(ctx, symbolID, true)
+	// Update symbol data availability flag if we imported any data
+	if processedCandles > 0 {
+		s.symbolRepo.UpdateDataAvailability(ctx, symbolID, true)
+	}
 }

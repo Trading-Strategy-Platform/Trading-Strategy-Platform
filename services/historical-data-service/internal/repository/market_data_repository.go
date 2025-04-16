@@ -85,16 +85,74 @@ func (r *MarketDataRepository) GetCandles(
 
 // GetDataRanges returns all available data ranges for a symbol and timeframe
 func (r *MarketDataRepository) GetDataRanges(ctx context.Context, symbolID int, timeframe string) ([]model.DateRange, error) {
+	// Add logging for debugging
+	r.logger.Debug("Getting data ranges",
+		zap.Int("symbolID", symbolID),
+		zap.String("timeframe", timeframe))
+
+	// First check if we have any data at all for this symbol and timeframe
+	var count int
+	checkQuery := `SELECT COUNT(*) FROM candles WHERE symbol_id = $1 LIMIT 1`
+	err := r.db.GetContext(ctx, &count, checkQuery, symbolID)
+	if err != nil {
+		r.logger.Error("Failed to check if candles exist",
+			zap.Error(err),
+			zap.Int("symbolID", symbolID))
+		return nil, err
+	}
+
+	r.logger.Debug("Candle count check",
+		zap.Int("symbolID", symbolID),
+		zap.Int("count", count))
+
+	if count == 0 {
+		// No data for this symbol
+		return []model.DateRange{}, nil
+	}
+
+	// Try the get_symbol_data_ranges function first
 	query := `SELECT * FROM get_symbol_data_ranges($1, $2)`
 
 	var ranges []model.DateRange
-	err := r.db.SelectContext(ctx, &ranges, query, symbolID, timeframe)
+	err = r.db.SelectContext(ctx, &ranges, query, symbolID, timeframe)
+
+	// If the function-based approach fails, fall back to a direct query
 	if err != nil {
-		r.logger.Error("Failed to get data ranges",
+		r.logger.Warn("Function-based data range query failed, falling back to direct query",
 			zap.Error(err),
 			zap.Int("symbolID", symbolID),
 			zap.String("timeframe", timeframe))
-		return nil, err
+
+		// Direct query approach
+		fallbackQuery := `
+			SELECT 
+				MIN(candle_time) as start,
+				MAX(candle_time) as end
+			FROM candles
+			WHERE symbol_id = $1
+		`
+
+		var singleRange model.DateRange
+		err = r.db.GetContext(ctx, &singleRange, fallbackQuery, symbolID)
+		if err != nil {
+			r.logger.Error("Failed to get data range with fallback query",
+				zap.Error(err),
+				zap.Int("symbolID", symbolID))
+			return nil, err
+		}
+
+		// Only add the range if it has valid dates
+		if !singleRange.Start.IsZero() && !singleRange.End.IsZero() {
+			ranges = []model.DateRange{singleRange}
+			r.logger.Debug("Got data range with fallback query",
+				zap.Int("symbolID", symbolID),
+				zap.Time("start", singleRange.Start),
+				zap.Time("end", singleRange.End))
+		}
+	} else {
+		r.logger.Debug("Got data ranges with function query",
+			zap.Int("symbolID", symbolID),
+			zap.Int("rangesCount", len(ranges)))
 	}
 
 	return ranges, nil

@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"fmt"
 	"net/http"
 	"strconv"
 
@@ -146,7 +147,37 @@ func (h *DataDownloadHandler) CancelDownload(c *gin.Context) {
 		return
 	}
 
-	success, err := h.downloadService.CancelDownload(c.Request.Context(), id)
+	// Get the force flag from the query
+	force := c.DefaultQuery("force", "false") == "true"
+
+	// First get the job to check its status
+	job, err := h.downloadService.GetDownloadStatus(c.Request.Context(), id)
+	if err != nil {
+		h.logger.Error("Failed to get download job", zap.Error(err), zap.Int("jobID", id))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve download job"})
+		return
+	}
+
+	if job == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Download job not found"})
+		return
+	}
+
+	// Check if job is in a state that can be cancelled
+	if !force && job.Status != "pending" && job.Status != "in_progress" {
+		// Return success with clear information that nothing was changed
+		c.JSON(http.StatusOK, gin.H{
+			"message":      fmt.Sprintf("Job is already in '%s' state. Use ?force=true to cancel anyway.", job.Status),
+			"status":       job.Status,
+			"job_id":       job.JobID,
+			"cancelled":    false,
+			"already_done": true,
+		})
+		return
+	}
+
+	// We're actually going to change the status
+	success, err := h.downloadService.CancelDownload(c.Request.Context(), id, force)
 	if err != nil {
 		h.logger.Error("Failed to cancel download", zap.Error(err), zap.Int("jobID", id))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to cancel download"})
@@ -158,7 +189,24 @@ func (h *DataDownloadHandler) CancelDownload(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"message": "Download cancelled successfully"})
+	// Refresh the job status after cancellation
+	updatedJob, _ := h.downloadService.GetDownloadStatus(c.Request.Context(), id)
+
+	// Prepare current status value
+	var currentStatus string
+	if updatedJob != nil {
+		currentStatus = updatedJob.Status
+	} else {
+		currentStatus = "cancelled"
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message":         "Download cancelled successfully",
+		"job_id":          id,
+		"cancelled":       true,
+		"previous_status": job.Status,
+		"current_status":  currentStatus,
+	})
 }
 
 // GetJobsSummary handles retrieving a summary of download jobs
