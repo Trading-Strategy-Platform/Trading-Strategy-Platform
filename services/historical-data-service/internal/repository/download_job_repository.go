@@ -121,7 +121,16 @@ func (r *DownloadJobRepository) UpdateDownloadJobStatus(
 
 // GetActiveDownloadJobs gets all active market data download jobs
 func (r *DownloadJobRepository) GetActiveDownloadJobs(ctx context.Context, source string) ([]model.MarketDataDownloadJob, error) {
-	query := `SELECT * FROM get_active_market_data_download_jobs($1)`
+	// Using direct SQL with explicit column names to avoid ambiguity
+	query := `
+		SELECT j.id, j.symbol_id, j.symbol, j.source, j.timeframe, j.start_date, j.end_date, 
+		       j.status, j.progress, j.total_candles, j.processed_candles, j.retries, j.error,
+		       j.created_at, j.updated_at, j.last_processed_time
+		FROM market_data_download_jobs j
+		WHERE j.status IN ('pending', 'in_progress')
+		AND (CAST($1 AS VARCHAR) IS NULL OR j.source = $1)
+		ORDER BY j.created_at DESC
+	`
 
 	var jobs []model.MarketDataDownloadJob
 	err := r.db.SelectContext(ctx, &jobs, query, source)
@@ -140,11 +149,11 @@ func (r *DownloadJobRepository) GetJobsSummary(ctx context.Context) (map[string]
 	// Get counts of jobs by status
 	statusQuery := `
 		SELECT 
-			status, 
+			j.status, 
 			COUNT(*) as count,
-			SUM(CASE WHEN created_at > NOW() - INTERVAL '24 hours' THEN 1 ELSE 0 END) as last_24h
-		FROM market_data_download_jobs
-		GROUP BY status
+			SUM(CASE WHEN j.created_at > NOW() - INTERVAL '24 hours' THEN 1 ELSE 0 END) as last_24h
+		FROM market_data_download_jobs j
+		GROUP BY j.status
 	`
 
 	type statusCount struct {
@@ -177,10 +186,10 @@ func (r *DownloadJobRepository) GetJobsSummary(ctx context.Context) (map[string]
 	// Get counts by source
 	sourceQuery := `
 		SELECT 
-			source, 
+			j.source, 
 			COUNT(*) as count
-		FROM market_data_download_jobs
-		GROUP BY source
+		FROM market_data_download_jobs j
+		GROUP BY j.source
 	`
 
 	type sourceCount struct {

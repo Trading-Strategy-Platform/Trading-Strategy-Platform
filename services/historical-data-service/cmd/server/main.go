@@ -182,7 +182,7 @@ func setupRouter(
 	backtestHandler *handler.BacktestHandler,
 	symbolHandler *handler.SymbolHandler,
 	timeframeHandler *handler.TimeframeHandler,
-	dataDownloadHandler *handler.DataDownloadHandler, // renamed from binanceHandler
+	dataDownloadHandler *handler.DataDownloadHandler,
 	userClient *client.UserClient,
 	logger *zap.Logger,
 	cfg *config.Config,
@@ -208,14 +208,20 @@ func setupRouter(
 			downloads.GET("/symbols/:symbol/status", dataDownloadHandler.CheckSymbolStatus)
 			downloads.GET("/inventory", dataDownloadHandler.GetDataInventory)
 
-			// Protected download routes
+			// Protected download routes - requires authentication
 			downloadsAuth := downloads.Group("")
 			downloadsAuth.Use(middleware.AuthMiddleware(userClient, logger))
+
+			// Routes that require basic user role
 			downloadsAuth.POST("", dataDownloadHandler.InitiateDataDownload)
 			downloadsAuth.GET("/:id/status", dataDownloadHandler.GetDownloadStatus)
 			downloadsAuth.GET("/active", dataDownloadHandler.GetActiveDownloads)
 			downloadsAuth.DELETE("/:id", dataDownloadHandler.CancelDownload)
-			downloadsAuth.GET("/summary", dataDownloadHandler.GetJobsSummary)
+
+			// Admin-only routes
+			downloadsAdmin := downloadsAuth.Group("")
+			downloadsAdmin.Use(middleware.RequireRole(userClient, "admin"))
+			downloadsAdmin.GET("/summary", dataDownloadHandler.GetJobsSummary)
 		}
 
 		// Symbol routes
@@ -223,12 +229,16 @@ func setupRouter(
 		{
 			symbols.GET("", symbolHandler.GetAllSymbols)
 
-			// Protected symbols management
+			// Protected symbols management - requires authentication
 			symbolsAuth := symbols.Group("")
 			symbolsAuth.Use(middleware.AuthMiddleware(userClient, logger))
-			symbolsAuth.POST("", symbolHandler.CreateSymbol)
-			symbolsAuth.PUT("/:id", symbolHandler.UpdateSymbol)
-			symbolsAuth.DELETE("/:id", symbolHandler.DeleteSymbol)
+
+			// Admin-only symbol management routes
+			symbolsAdmin := symbolsAuth.Group("")
+			symbolsAdmin.Use(middleware.RequireRole(userClient, "admin"))
+			symbolsAdmin.POST("", symbolHandler.CreateSymbol)
+			symbolsAdmin.PUT("/:id", symbolHandler.UpdateSymbol)
+			symbolsAdmin.DELETE("/:id", symbolHandler.DeleteSymbol)
 		}
 
 		// Timeframes routes
@@ -245,7 +255,11 @@ func setupRouter(
 			marketData.Use(middleware.AuthMiddleware(userClient, logger))
 
 			marketData.GET("/candles", marketDataHandler.GetCandles)
-			marketData.POST("/candles/batch", marketDataHandler.BatchImportCandles)
+
+			// Admin-only routes for importing data
+			marketDataAdmin := marketData.Group("")
+			marketDataAdmin.Use(middleware.RequireRole(userClient, "admin"))
+			marketDataAdmin.POST("/candles/batch", marketDataHandler.BatchImportCandles)
 
 			// Asset types and exchanges
 			marketData.GET("/asset-types", marketDataHandler.GetAssetTypes)

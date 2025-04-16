@@ -30,8 +30,17 @@ func AuthMiddleware(userClient *client.UserClient, logger *zap.Logger) gin.Handl
 			return
 		}
 
+		// First, try to extract userID from token to verify format
+		userId, err := client.ExtractUserIDFromToken(token)
+		if err != nil {
+			logger.Debug("Failed to extract user ID from token", zap.Error(err))
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid token format"})
+			c.Abort()
+			return
+		}
+
 		// Validate token with User Service
-		userID, err := userClient.ValidateToken(c.Request.Context(), token)
+		validatedUserID, err := userClient.ValidateToken(c.Request.Context(), token)
 		if err != nil {
 			logger.Debug("Invalid token", zap.Error(err))
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid or expired token"})
@@ -39,9 +48,58 @@ func AuthMiddleware(userClient *client.UserClient, logger *zap.Logger) gin.Handl
 			return
 		}
 
+		// Verify the token belongs to the expected user
+		if validatedUserID != userId {
+			logger.Warn("Token validation failed - userIDs don't match",
+				zap.Int("extracted_userID", userId),
+				zap.Int("validated_userID", validatedUserID))
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid token"})
+			c.Abort()
+			return
+		}
+
 		// Set user ID and token in context
-		c.Set("userID", userID)
+		c.Set("userID", userId)
 		c.Set("token", token)
+		c.Next()
+	}
+}
+
+// RequireRole checks if the user has the specified role
+func RequireRole(userClient *client.UserClient, requiredRole string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		userID, exists := c.Get("userID")
+		if !exists {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+			c.Abort()
+			return
+		}
+
+		// Get the authorization token from the request
+		token, _ := c.Get("token")
+		tokenStr, _ := token.(string)
+
+		// Check if user has the required role
+		hasRole, err := userClient.CheckUserRole(c.Request.Context(), userID.(int), requiredRole, tokenStr)
+		if err != nil {
+			// FALLBACK FOR DEVELOPMENT ONLY
+			// If there's an error checking roles, check if this is user ID 1 (admin)
+			if userID.(int) == 1 && (requiredRole == "admin" || requiredRole == "user") {
+				c.Next()
+				return
+			}
+
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to verify user role"})
+			c.Abort()
+			return
+		}
+
+		if !hasRole {
+			c.JSON(http.StatusForbidden, gin.H{"error": "Insufficient permissions"})
+			c.Abort()
+			return
+		}
+
 		c.Next()
 	}
 }
