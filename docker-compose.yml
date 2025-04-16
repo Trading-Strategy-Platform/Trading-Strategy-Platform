@@ -128,6 +128,7 @@ services:
     depends_on:
       - historical-db
       - kafka
+      - backtest-service
     ports:
       - "8083:8081"  # Map host 8083 to container 8081
     environment:
@@ -139,10 +140,34 @@ services:
       STRATEGY_SERVICE_URL: http://strategy-service:8082
       USER_SERVICE_URL: http://user-service:8083
       KAFKA_BROKERS: kafka:9092
+      BACKTEST_SERVICE_URL: http://backtest-service:5000
     networks:
       - historical-service-network
       - kafka-network
       - api-gateway-network
+      - backtest-service-network
+  
+  backtest-service:
+    build:
+      context: ./services/backtesting-service
+      dockerfile: Dockerfile
+    container_name: backtest-service
+    ports:
+      - "5000:5000"
+    environment:
+      PYTHONUNBUFFERED: "1"
+      LOG_LEVEL: "INFO"
+    networks:
+      - backtest-service-network
+      - api-gateway-network
+    volumes:
+      - ./services/backtesting-service/src:/app/src
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
   
   media-service:
     build:
@@ -249,3 +274,4 @@ networks:
   redis-network:
   api-gateway-network:
   media-service-network:
+  backtest-service-network:

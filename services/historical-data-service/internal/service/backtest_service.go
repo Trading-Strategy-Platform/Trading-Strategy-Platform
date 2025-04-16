@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"time"
 
 	"services/historical-data-service/internal/client"
@@ -19,6 +20,7 @@ type BacktestService struct {
 	backtestRepo   *repository.BacktestRepository
 	marketDataRepo *repository.MarketDataRepository
 	strategyClient *client.StrategyClient
+	backtestClient *client.BacktestClient
 	logger         *zap.Logger
 }
 
@@ -29,10 +31,20 @@ func NewBacktestService(
 	strategyClient *client.StrategyClient,
 	logger *zap.Logger,
 ) *BacktestService {
+	// Get backtest service URL from environment or use default
+	backtestServiceURL := os.Getenv("BACKTEST_SERVICE_URL")
+	if backtestServiceURL == "" {
+		backtestServiceURL = "http://backtest-service:5000"
+	}
+
+	// Create backtest client
+	backtestClient := client.NewBacktestClient(backtestServiceURL, logger)
+
 	return &BacktestService{
 		backtestRepo:   backtestRepo,
 		marketDataRepo: marketDataRepo,
 		strategyClient: strategyClient,
+		backtestClient: backtestClient,
 		logger:         logger,
 	}
 }
@@ -136,6 +148,8 @@ func (s *BacktestService) runBacktest(
 
 	// Get strategy structure (either latest or specific version)
 	var strategyStructure json.RawMessage
+	var strategyVersion int
+
 	if request.StrategyVersion > 0 {
 		// Get specific version
 		version, err := s.strategyClient.GetStrategyVersion(
@@ -149,6 +163,7 @@ func (s *BacktestService) runBacktest(
 			return
 		}
 		strategyStructure = version.Structure
+		strategyVersion = version.Version
 	} else {
 		// Get latest version
 		strategy, err := s.strategyClient.GetStrategy(ctx, request.StrategyID, token)
@@ -157,12 +172,26 @@ func (s *BacktestService) runBacktest(
 			return
 		}
 		strategyStructure = strategy.Structure
+		strategyVersion = strategy.Version
 	}
 
-	// Log strategy structure to use the variable
-	s.logger.Debug("Running backtest with strategy structure",
+	// Validate strategy structure
+	valid, message, err := s.backtestClient.ValidateStrategy(ctx, strategyStructure)
+	if err != nil {
+		s.failBacktest(ctx, backtestID, fmt.Sprintf("Failed to validate strategy: %v", err))
+		return
+	}
+
+	if !valid {
+		s.failBacktest(ctx, backtestID, fmt.Sprintf("Strategy validation failed: %s", message))
+		return
+	}
+
+	// Log strategy information
+	s.logger.Debug("Running backtest with validated strategy",
 		zap.Int("backtestID", backtestID),
-		zap.String("strategyType", string(strategyStructure)[:100]+"..."))
+		zap.Int("strategyID", request.StrategyID),
+		zap.Int("strategyVersion", strategyVersion))
 
 	// Process each symbol in the backtest
 	for _, symbolID := range request.SymbolIDs {
@@ -211,29 +240,66 @@ func (s *BacktestService) runBacktest(
 			continue
 		}
 
-		// TODO: Implement the actual backtest execution logic
-		// This would involve processing the strategy rules against the market data
-		// For now, we'll simulate a backtest with dummy results
+		// Prepare parameters for the backtest
+		backtestParams := map[string]interface{}{
+			"symbol_id":       symbolID,
+			"initial_capital": request.InitialCapital,
+			"market_type":     "spot",  // Default to spot trading
+			"leverage":        1.0,     // Default leverage (1.0 means no leverage)
+			"commission_rate": 0.1,     // Default commission rate (0.1%)
+			"slippage_rate":   0.05,    // Default slippage rate (0.05%)
+			"position_sizing": "fixed", // Default position sizing strategy
+			"allow_short":     false,   // Default to long-only for spot trading
+			// Additional risk management parameters can be added here
+		}
 
-		// Simulate processing time
-		time.Sleep(2 * time.Second)
+		// Run the backtest using the Python service
+		result, err := s.backtestClient.RunBacktest(ctx, candles, strategyStructure, backtestParams)
+		if err != nil {
+			s.logger.Error("Failed to execute backtest",
+				zap.Error(err),
+				zap.Int("symbolID", symbolID),
+				zap.Int("runID", runID))
 
-		// Generate dummy results
-		results := &model.BacktestResults{
-			TotalTrades:      25,
-			WinningTrades:    15,
-			LosingTrades:     10,
-			ProfitFactor:     1.5,
-			SharpeRatio:      1.8,
-			MaxDrawdown:      5.5,
-			FinalCapital:     request.InitialCapital * 1.15,
-			TotalReturn:      15.0,
-			AnnualizedReturn: 10.0,
-			ResultsJSON:      json.RawMessage(`{"equityCurve": [1000, 1025, 1050, 1075, 1100, 1125, 1150]}`),
+			// Mark this run as failed
+			s.backtestRepo.UpdateBacktestRunStatus(ctx, runID, "failed")
+			continue
+		}
+
+		// Convert backtesting results to our model
+		metrics := &model.BacktestResults{
+			TotalTrades:      result.Metrics.TotalTrades,
+			WinningTrades:    result.Metrics.WinningTrades,
+			LosingTrades:     result.Metrics.LosingTrades,
+			ProfitFactor:     result.Metrics.ProfitFactor,
+			SharpeRatio:      result.Metrics.SharpeRatio,
+			MaxDrawdown:      result.Metrics.MaxDrawdown,
+			FinalCapital:     result.Metrics.FinalCapital,
+			TotalReturn:      result.Metrics.TotalReturn,
+			AnnualizedReturn: result.Metrics.AnnualizedReturn,
+		}
+
+		// Convert results JSON
+		resultsJSON, err := json.Marshal(map[string]interface{}{
+			"equity_curve":  result.EquityCurve,
+			"equity_times":  result.EquityTimes,
+			"trades_count":  len(result.Trades),
+			"average_trade": result.Metrics.AverageTrade,
+			"average_win":   result.Metrics.AverageWin,
+			"average_loss":  result.Metrics.AverageLoss,
+			"largest_win":   result.Metrics.LargestWin,
+			"largest_loss":  result.Metrics.LargestLoss,
+			"win_rate":      result.Metrics.WinRate,
+		})
+		if err != nil {
+			s.logger.Error("Failed to marshal results JSON", zap.Error(err))
+		} else {
+			raw := json.RawMessage(resultsJSON)
+			metrics.ResultsJSON = raw
 		}
 
 		// Save backtest results
-		resultID, err := s.backtestRepo.SaveBacktestResults(ctx, runID, results)
+		resultID, err := s.backtestRepo.SaveBacktestResults(ctx, runID, metrics)
 		if err != nil {
 			s.logger.Error("Failed to save backtest results",
 				zap.Error(err),
@@ -241,19 +307,18 @@ func (s *BacktestService) runBacktest(
 			continue
 		}
 
-		s.logger.Info("Backtest run completed and results saved",
+		s.logger.Info("Backtest results saved successfully",
 			zap.Int("runID", runID),
-			zap.Int("resultID", resultID))
+			zap.Int("resultID", resultID),
+			zap.Int("totalTrades", result.Metrics.TotalTrades),
+			zap.Float64("totalReturn", result.Metrics.TotalReturn))
 
-		// Add some dummy trades
-		s.addDummyTrades(ctx, runID, symbolID, &request.StartDate)
+		// Save all trades from the backtest
+		s.saveTrades(ctx, runID, symbolID, result.Trades)
 	}
 
-	// Once all runs are processed, the update_backtest_run_status function will
-	// automatically update the parent backtest status if all runs are complete
-
 	// Notify the Strategy Service that the backtest is complete
-	err := s.strategyClient.NotifyBacktestComplete(
+	err = s.strategyClient.NotifyBacktestComplete(
 		ctx,
 		backtestID,
 		request.StrategyID,
@@ -286,52 +351,71 @@ func (s *BacktestService) failBacktest(ctx context.Context, backtestID int, erro
 	}
 }
 
-// addDummyTrades adds some dummy trades for testing
-func (s *BacktestService) addDummyTrades(
+// saveTrades saves all trades from a backtest result
+func (s *BacktestService) saveTrades(
 	ctx context.Context,
 	runID int,
 	symbolID int,
-	startDate *time.Time,
+	trades []model.BacktestTrade,
 ) {
-	// Add a few dummy trades
-	tradeDate := startDate.AddDate(0, 0, 5)
+	s.logger.Info("Saving trades from backtest result",
+		zap.Int("runID", runID),
+		zap.Int("symbolID", symbolID),
+		zap.Int("tradeCount", len(trades)))
 
-	longTrade := &model.BacktestTrade{
-		BacktestRunID:     runID,
-		SymbolID:          symbolID,
-		EntryTime:         tradeDate,
-		ExitTime:          &[]time.Time{tradeDate.AddDate(0, 0, 2)}[0],
-		PositionType:      "long",
-		EntryPrice:        100.0,
-		ExitPrice:         &[]float64{105.0}[0],
-		Quantity:          10.0,
-		ProfitLoss:        &[]float64{50.0}[0],
-		ProfitLossPercent: &[]float64{5.0}[0],
-		ExitReason:        &[]string{"take_profit"}[0],
-	}
+	// Process each trade
+	for _, trade := range trades {
+		// Parse entry time
+		var entryTime time.Time
+		var err error
 
-	_, err := s.backtestRepo.AddBacktestTrade(ctx, longTrade)
-	if err != nil {
-		s.logger.Error("Failed to add dummy long trade", zap.Error(err))
-	}
+		if t, err := time.Parse(time.RFC3339, trade.EntryTime.Format(time.RFC3339)); err == nil {
+			entryTime = t
+		} else if t, err := time.Parse("2006-01-02T15:04:05", trade.EntryTime.Format(time.RFC3339)); err == nil {
+			entryTime = t
+		} else {
+			s.logger.Error("Failed to parse entry time, using current time",
+				zap.Error(err),
+				zap.String("entryTime", trade.EntryTime.Format(time.RFC3339)))
+			entryTime = time.Now()
+		}
 
-	shortTrade := &model.BacktestTrade{
-		BacktestRunID:     runID,
-		SymbolID:          symbolID,
-		EntryTime:         tradeDate.AddDate(0, 0, 5),
-		ExitTime:          &[]time.Time{tradeDate.AddDate(0, 0, 7)}[0],
-		PositionType:      "short",
-		EntryPrice:        110.0,
-		ExitPrice:         &[]float64{105.0}[0],
-		Quantity:          10.0,
-		ProfitLoss:        &[]float64{50.0}[0],
-		ProfitLossPercent: &[]float64{4.5}[0],
-		ExitReason:        &[]string{"take_profit"}[0],
-	}
+		// Parse exit time if present
+		var exitTime *time.Time
+		if trade.ExitTime != nil {
+			t, err := time.Parse(time.RFC3339, trade.ExitTime.Format(time.RFC3339))
+			if err != nil {
+				s.logger.Error("Failed to parse exit time",
+					zap.Error(err),
+					zap.String("exitTime", trade.ExitTime.Format(time.RFC3339)))
+			} else {
+				exitTime = &t
+			}
+		}
 
-	_, err = s.backtestRepo.AddBacktestTrade(ctx, shortTrade)
-	if err != nil {
-		s.logger.Error("Failed to add dummy short trade", zap.Error(err))
+		// Create trade record
+		dbTrade := &model.BacktestTrade{
+			BacktestRunID:     runID,
+			SymbolID:          symbolID,
+			EntryTime:         entryTime,
+			ExitTime:          exitTime,
+			PositionType:      trade.PositionType,
+			EntryPrice:        trade.EntryPrice,
+			ExitPrice:         trade.ExitPrice,
+			Quantity:          trade.Quantity,
+			ProfitLoss:        trade.ProfitLoss,
+			ProfitLossPercent: trade.ProfitLossPercent,
+			ExitReason:        trade.ExitReason,
+		}
+
+		// Save to database
+		_, err = s.backtestRepo.AddBacktestTrade(ctx, dbTrade)
+		if err != nil {
+			s.logger.Error("Failed to save trade",
+				zap.Error(err),
+				zap.Int("runID", runID),
+				zap.String("positionType", trade.PositionType))
+		}
 	}
 }
 
@@ -506,4 +590,9 @@ func (s *BacktestService) ProcessQueuedBacktests(
 	}
 
 	return processedCount, nil
+}
+
+// CheckBacktestServiceHealth checks if the backtesting service is healthy
+func (s *BacktestService) CheckBacktestServiceHealth(ctx context.Context) (bool, error) {
+	return s.backtestClient.CheckHealth(ctx)
 }

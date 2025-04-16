@@ -1,0 +1,47 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backtest-service
+  labels:
+    app: backtest-service
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: backtest-service
+  template:
+    metadata:
+      labels:
+        app: backtest-service
+    spec:
+      containers:
+      - name: backtest-service
+        image: ${REGISTRY}/backtest-service:latest
+        ports:
+        - containerPort: 5000
+        resources:
+          limits:
+            memory: "2Gi"
+            cpu: "1000m"
+          requests:
+            memory: "1Gi"
+            cpu: "500m"
+        env:
+        - name: PYTHONUNBUFFERED
+          value: "1"
+        - name: LOG_LEVEL
+          value: "INFO"
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 5000
+          initialDelaySeconds: 10
+          periodSeconds: 30
+          timeoutSeconds: 5
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 5000
+          initialDelaySeconds: 20
+          periodSeconds: 30
+          timeoutSeconds: 5

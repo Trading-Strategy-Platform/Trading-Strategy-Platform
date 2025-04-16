@@ -55,3 +55,5 @@ spec:
             secretKeyRef:
               name: timescaledb-secret
               key: password
+        - name: BACKTEST_SERVICE_URL
+          value: "http://backtest-service:5000"

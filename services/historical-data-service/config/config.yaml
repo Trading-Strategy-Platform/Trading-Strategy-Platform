@@ -16,14 +16,18 @@ database:
   connMaxLifetime: 30m
 
 userService:
-  url: http://user-service:8083  # Updated to correct port
+  url: http://user-service:8083
   timeout: 5s
   serviceKey: historical-service-key
 
 strategyService:
-  url: http://strategy-service:8082  # Updated to correct port
+  url: http://strategy-service:8082
   timeout: 5s
   serviceKey: historical-service-key
+
+backtestService:
+  url: http://backtest-service:5000
+  timeout: 120s  
 
 kafka:
   brokers: kafka:9092

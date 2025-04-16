@@ -1,0 +1,19 @@
+# Web framework
+flask==2.0.1
+gunicorn==20.1.0
+
+# Data manipulation
+numpy==1.21.2
+pandas==1.3.3
+
+# Technical indicators alternatives (choose one or more)
+pandas-ta==0.3.14b0  # Pure Python TA library (easier to install than TA-Lib)
+# TA-Lib is commented out because we'll install it via conda in the Dockerfile
+# ta-lib==0.4.24
+
+# Backtesting framework
+backtesting==0.3.3
+
+# Utilities
+python-dateutil==2.8.2
+pytz==2021.3
