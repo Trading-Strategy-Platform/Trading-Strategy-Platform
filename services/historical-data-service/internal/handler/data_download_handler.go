@@ -228,12 +228,22 @@ func (h *DataDownloadHandler) GetDataInventory(c *gin.Context) {
 	assetType := c.DefaultQuery("asset_type", "")
 	exchange := c.DefaultQuery("exchange", "")
 
+	// Add more detailed logging
+	h.logger.Info("GetDataInventory request received",
+		zap.String("assetType", assetType),
+		zap.String("exchange", exchange))
+
 	inventory, err := h.downloadService.GetDataInventory(c.Request.Context(), assetType, exchange)
 	if err != nil {
 		h.logger.Error("Failed to get data inventory", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get data inventory"})
 		return
 	}
+
+	// Add debug info about result
+	h.logger.Info("Inventory result",
+		zap.Any("inventoryLength", len(inventory)),
+		zap.Any("inventoryIsNil", inventory == nil))
 
 	c.JSON(http.StatusOK, inventory)
 }

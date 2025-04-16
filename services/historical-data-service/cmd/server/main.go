@@ -201,12 +201,15 @@ func setupRouter(
 	// API routes
 	v1 := router.Group("/api/v1")
 	{
+		// Public inventory endpoint - direct access without authentication
+		v1.GET("/market-data/inventory", dataDownloadHandler.GetDataInventory)
+
 		// Market data downloads routes (previously Binance routes)
 		downloads := v1.Group("/market-data/downloads")
 		{
 			downloads.GET("/sources/:source/symbols", dataDownloadHandler.GetAvailableSymbols)
 			downloads.GET("/symbols/:symbol/status", dataDownloadHandler.CheckSymbolStatus)
-			downloads.GET("/inventory", dataDownloadHandler.GetDataInventory)
+			downloads.GET("/inventory", dataDownloadHandler.GetDataInventory) // Keep for backward compatibility
 
 			// Protected download routes - requires authentication
 			downloadsAuth := downloads.Group("")
@@ -251,19 +254,18 @@ func setupRouter(
 		// Market data routes
 		marketData := v1.Group("/market-data")
 		{
-			// Only authenticated users can access market data
-			marketData.Use(middleware.AuthMiddleware(userClient, logger))
+			// Protected market data routes - requires authentication
+			authenticatedMarketData := marketData.Group("")
+			authenticatedMarketData.Use(middleware.AuthMiddleware(userClient, logger))
 
-			marketData.GET("/candles", marketDataHandler.GetCandles)
+			authenticatedMarketData.GET("/candles", marketDataHandler.GetCandles)
+			authenticatedMarketData.GET("/asset-types", marketDataHandler.GetAssetTypes)
+			authenticatedMarketData.GET("/exchanges", marketDataHandler.GetExchanges)
 
 			// Admin-only routes for importing data
-			marketDataAdmin := marketData.Group("")
+			marketDataAdmin := authenticatedMarketData.Group("")
 			marketDataAdmin.Use(middleware.RequireRole(userClient, "admin"))
 			marketDataAdmin.POST("/candles/batch", marketDataHandler.BatchImportCandles)
-
-			// Asset types and exchanges
-			marketData.GET("/asset-types", marketDataHandler.GetAssetTypes)
-			marketData.GET("/exchanges", marketDataHandler.GetExchanges)
 		}
 
 		// Backtest routes
