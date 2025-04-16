@@ -292,29 +292,15 @@ func setupRouter(
 		api.Any("/v1/reviews", gatewayHandler.ProxyStrategyService)
 		api.Any("/v1/reviews/:id", gatewayHandler.ProxyStrategyService)
 
-		// HISTORICAL SERVICE ROUTES
-		api.Any("/v1/market-data", gatewayHandler.ProxyHistoricalService)
-		api.Any("/v1/market-data/:id", gatewayHandler.ProxyHistoricalService)
-		api.Any("/v1/market-data/candles", gatewayHandler.ProxyHistoricalService)
-		api.Any("/v1/market-data/candles/batch", gatewayHandler.ProxyHistoricalService)
-		api.Any("/v1/market-data/asset-types", gatewayHandler.ProxyHistoricalService)
-		api.Any("/v1/market-data/exchanges", gatewayHandler.ProxyHistoricalService)
+		// HISTORICAL SERVICE ROUTES - Use ONE wildcard route for all market-data endpoints
+		api.Any("/v1/market-data/*path", gatewayHandler.ProxyHistoricalService)
 
-		// New market data download routes
-		api.Any("/v1/market-data/downloads", gatewayHandler.ProxyHistoricalService)
-		api.Any("/v1/market-data/downloads/:id", gatewayHandler.ProxyHistoricalService)
-		api.Any("/v1/market-data/downloads/:id/status", gatewayHandler.ProxyHistoricalService)
-		api.Any("/v1/market-data/downloads/active", gatewayHandler.ProxyHistoricalService)
-		api.Any("/v1/market-data/downloads/summary", gatewayHandler.ProxyHistoricalService)
-		api.Any("/v1/market-data/downloads/inventory", gatewayHandler.ProxyHistoricalService)
-		api.Any("/v1/market-data/downloads/sources/:source/symbols", gatewayHandler.ProxyHistoricalService)
-		api.Any("/v1/market-data/downloads/symbols/:symbol/status", gatewayHandler.ProxyHistoricalService)
-
-		// Existing routes
+		// Other historical service routes that don't start with market-data
 		api.Any("/v1/backtests", gatewayHandler.ProxyHistoricalService)
 		api.Any("/v1/backtests/:id", gatewayHandler.ProxyHistoricalService)
 		api.Any("/v1/backtest-runs", gatewayHandler.ProxyHistoricalService)
 		api.Any("/v1/backtest-runs/:id", gatewayHandler.ProxyHistoricalService)
+		api.Any("/v1/backtest-runs/:id/*path", gatewayHandler.ProxyHistoricalService)
 		api.Any("/v1/symbols", gatewayHandler.ProxyHistoricalService)
 		api.Any("/v1/symbols/:id", gatewayHandler.ProxyHistoricalService)
 		api.Any("/v1/timeframes", gatewayHandler.ProxyHistoricalService)
