@@ -7,6 +7,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     curl \
     wget \
+    libpq-dev \
+    postgresql-client \
     && rm -rf /var/lib/apt/lists/*
 
 # Create conda environment
@@ -31,6 +33,13 @@ RUN pip install -e .
 
 # Set Python path
 ENV PYTHONPATH=/app
+
+# Set database connection environment variables (these can be overridden at runtime)
+ENV HISTORICAL_DB_HOST=historical-db
+ENV HISTORICAL_DB_PORT=5432
+ENV HISTORICAL_DB_USER=historical_service_user
+ENV HISTORICAL_DB_PASSWORD=historical_service_password
+ENV HISTORICAL_DB_NAME=historical_service
 
 # Expose the application port
 EXPOSE 5000

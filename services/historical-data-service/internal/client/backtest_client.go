@@ -31,6 +31,11 @@ func NewBacktestClient(baseURL string, logger *zap.Logger) *BacktestClient {
 	}
 }
 
+// BaseURL returns the base URL of the backtesting service
+func (c *BacktestClient) BaseURL() string {
+	return c.baseURL
+}
+
 // RunBacktest sends a backtest request to the backtesting service
 func (c *BacktestClient) RunBacktest(
 	ctx context.Context,
@@ -61,6 +66,76 @@ func (c *BacktestClient) RunBacktest(
 
 	// Execute request
 	c.logger.Info("Sending backtest request", zap.String("url", url))
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		c.logger.Error("Failed to send request to backtesting service", zap.Error(err))
+		return nil, fmt.Errorf("failed to send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	// Check for error status
+	if resp.StatusCode != http.StatusOK {
+		var errorResp struct {
+			Error string `json:"error"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&errorResp); err != nil {
+			return nil, fmt.Errorf("backtest service returned status %d", resp.StatusCode)
+		}
+		return nil, fmt.Errorf("backtest service error: %s", errorResp.Error)
+	}
+
+	// Parse response
+	var result model.BacktestResult
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		c.logger.Error("Failed to decode backtest response", zap.Error(err))
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	return &result, nil
+}
+
+// RunBacktestWithDB sends a backtest request to use direct database access
+func (c *BacktestClient) RunBacktestWithDB(
+	ctx context.Context,
+	symbolID int,
+	timeframe string,
+	startDate time.Time,
+	endDate time.Time,
+	strategy json.RawMessage,
+	params map[string]interface{},
+	backtestRunID int,
+) (*model.BacktestResult, error) {
+	// Build request payload
+	payload := map[string]interface{}{
+		"symbol_id":       symbolID,
+		"timeframe":       timeframe,
+		"start_date":      startDate.Format(time.RFC3339),
+		"end_date":        endDate.Format(time.RFC3339),
+		"strategy":        strategy,
+		"params":          params,
+		"backtest_run_id": backtestRunID,
+	}
+
+	// Convert request to JSON
+	jsonData, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal backtest request: %w", err)
+	}
+
+	// Create HTTP request
+	url := fmt.Sprintf("%s/backtest/db", c.baseURL)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	// Execute request
+	c.logger.Info("Sending backtest request with direct DB access",
+		zap.String("url", url),
+		zap.Int("symbolID", symbolID),
+		zap.String("timeframe", timeframe))
+
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		c.logger.Error("Failed to send request to backtesting service", zap.Error(err))

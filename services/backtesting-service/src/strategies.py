@@ -6,7 +6,7 @@ Converts JSON strategy definitions to executable backtesting.py strategies.
 """
 
 import logging
-from typing import Dict, Any, Tuple, List, Optional, Callable
+from typing import Dict, Any, Tuple, List, Optional, Callable, Type
 import pandas as pd
 from backtesting import Strategy
 

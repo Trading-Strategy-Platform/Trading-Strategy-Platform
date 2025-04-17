@@ -157,9 +157,16 @@ services:
     environment:
       PYTHONUNBUFFERED: "1"
       LOG_LEVEL: "INFO"
+      # Direct database connection variables
+      HISTORICAL_DB_HOST: historical-db
+      HISTORICAL_DB_PORT: 5432
+      HISTORICAL_DB_USER: historical_service_user
+      HISTORICAL_DB_PASSWORD: historical_service_password
+      HISTORICAL_DB_NAME: historical_service
     networks:
       - backtest-service-network
       - api-gateway-network
+      - historical-service-network  # Added this network for direct DB access
     volumes:
       - ./services/backtesting-service/src:/app/src
     healthcheck:

@@ -11,6 +11,8 @@ bin/
 vendor/
 diagnostic-logs
 
+*__pycache__
+
 # Go modules
 go.work
 

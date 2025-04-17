@@ -1,5 +1,6 @@
 # Web framework
 flask==2.0.1
+werkzeug==2.0.3
 gunicorn==20.1.0
 
 # Data manipulation
@@ -13,6 +14,9 @@ pandas-ta==0.3.14b0  # Pure Python TA library (easier to install than TA-Lib)
 
 # Backtesting framework
 backtesting==0.3.3
+
+# Database access
+psycopg2-binary==2.9.9  # Pre-compiled PostgreSQL adapter
 
 # Utilities
 python-dateutil==2.8.2

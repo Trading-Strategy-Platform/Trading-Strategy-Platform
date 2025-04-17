@@ -31,6 +31,23 @@ spec:
           value: "1"
         - name: LOG_LEVEL
           value: "INFO"
+        # Direct database access environment variables
+        - name: HISTORICAL_DB_HOST
+          value: "timescaledb"
+        - name: HISTORICAL_DB_PORT
+          value: "5432"
+        - name: HISTORICAL_DB_NAME
+          value: "historical_service"
+        - name: HISTORICAL_DB_USER
+          valueFrom:
+            secretKeyRef:
+              name: timescaledb-secret
+              key: username
+        - name: HISTORICAL_DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: timescaledb-secret
+              key: password
         readinessProbe:
           httpGet:
             path: /health

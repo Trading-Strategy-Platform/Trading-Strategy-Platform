@@ -1,10 +1,12 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"time"
 
@@ -214,49 +216,89 @@ func (s *BacktestService) runBacktest(
 			continue
 		}
 
-		// Get market data for backtesting
-		candles, err := s.marketDataRepo.GetCandles(
-			ctx,
-			symbolID,
-			request.Timeframe,
-			&request.StartDate,
-			&request.EndDate,
-			nil,
-		)
-		if err != nil {
-			// Mark this run as failed
-			s.backtestRepo.UpdateBacktestRunStatus(ctx, runID, "failed")
-			s.logger.Error("Failed to get market data",
-				zap.Error(err),
-				zap.Int("symbolID", symbolID))
-			continue
-		}
-
-		if len(candles) == 0 {
-			// Mark this run as failed
-			s.backtestRepo.UpdateBacktestRunStatus(ctx, runID, "failed")
-			s.logger.Error("No market data available",
-				zap.Int("symbolID", symbolID))
-			continue
-		}
-
-		// Prepare parameters for the backtest
-		backtestParams := map[string]interface{}{
+		// Use the /backtest/db endpoint which will fetch data directly from the database
+		backtestRequest := map[string]interface{}{
 			"symbol_id":       symbolID,
-			"initial_capital": request.InitialCapital,
-			"market_type":     "spot",  // Default to spot trading
-			"leverage":        1.0,     // Default leverage (1.0 means no leverage)
-			"commission_rate": 0.1,     // Default commission rate (0.1%)
-			"slippage_rate":   0.05,    // Default slippage rate (0.05%)
-			"position_sizing": "fixed", // Default position sizing strategy
-			"allow_short":     false,   // Default to long-only for spot trading
-			// Additional risk management parameters can be added here
+			"timeframe":       request.Timeframe,
+			"start_date":      request.StartDate.Format(time.RFC3339),
+			"end_date":        request.EndDate.Format(time.RFC3339),
+			"strategy":        strategyStructure,
+			"backtest_run_id": runID,
+			"params": map[string]interface{}{
+				"symbol_id":       symbolID,
+				"initial_capital": request.InitialCapital,
+				"market_type":     "spot",  // Default to spot trading
+				"leverage":        1.0,     // Default leverage (1.0 means no leverage)
+				"commission_rate": 0.1,     // Default commission rate (0.1%)
+				"slippage_rate":   0.05,    // Default slippage rate (0.05%)
+				"position_sizing": "fixed", // Default position sizing strategy
+				"allow_short":     false,   // Default to long-only for spot trading
+			},
 		}
 
-		// Run the backtest using the Python service
-		result, err := s.backtestClient.RunBacktest(ctx, candles, strategyStructure, backtestParams)
+		// Create the request body
+		jsonData, err := json.Marshal(backtestRequest)
 		if err != nil {
-			s.logger.Error("Failed to execute backtest",
+			s.failBacktest(ctx, backtestID, fmt.Sprintf("Failed to marshal backtest request: %v", err))
+			continue
+		}
+
+		// Create the request
+		url := fmt.Sprintf("%s/backtest/db", s.backtestClient.BaseURL())
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewBuffer(jsonData))
+		if err != nil {
+			s.failBacktest(ctx, backtestID, fmt.Sprintf("Failed to create request: %v", err))
+			continue
+		}
+
+		req.Header.Set("Content-Type", "application/json")
+
+		// Execute the request
+		s.logger.Info("Sending backtest request with direct DB access",
+			zap.String("url", url),
+			zap.Int("symbolID", symbolID),
+			zap.Int("runID", runID))
+
+		client := &http.Client{
+			Timeout: 5 * time.Minute, // Extended timeout for backtesting
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			s.logger.Error("Failed to send request to backtesting service",
+				zap.Error(err),
+				zap.Int("symbolID", symbolID),
+				zap.Int("runID", runID))
+
+			// Mark this run as failed
+			s.backtestRepo.UpdateBacktestRunStatus(ctx, runID, "failed")
+			continue
+		}
+		defer resp.Body.Close()
+
+		// Check for error status
+		if resp.StatusCode != http.StatusOK {
+			var errorResp struct {
+				Error string `json:"error"`
+			}
+			if err := json.NewDecoder(resp.Body).Decode(&errorResp); err != nil {
+				s.logger.Error("Failed to decode error response",
+					zap.Error(err),
+					zap.Int("statusCode", resp.StatusCode))
+			}
+
+			// Mark this run as failed
+			s.backtestRepo.UpdateBacktestRunStatus(ctx, runID, "failed")
+			s.logger.Error("Backtest service error",
+				zap.String("error", errorResp.Error),
+				zap.Int("symbolID", symbolID),
+				zap.Int("runID", runID))
+			continue
+		}
+
+		// Parse response
+		var result model.BacktestResult
+		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+			s.logger.Error("Failed to decode backtest response",
 				zap.Error(err),
 				zap.Int("symbolID", symbolID),
 				zap.Int("runID", runID))
@@ -266,55 +308,14 @@ func (s *BacktestService) runBacktest(
 			continue
 		}
 
-		// Convert backtesting results to our model
-		metrics := &model.BacktestResults{
-			TotalTrades:      result.Metrics.TotalTrades,
-			WinningTrades:    result.Metrics.WinningTrades,
-			LosingTrades:     result.Metrics.LosingTrades,
-			ProfitFactor:     result.Metrics.ProfitFactor,
-			SharpeRatio:      result.Metrics.SharpeRatio,
-			MaxDrawdown:      result.Metrics.MaxDrawdown,
-			FinalCapital:     result.Metrics.FinalCapital,
-			TotalReturn:      result.Metrics.TotalReturn,
-			AnnualizedReturn: result.Metrics.AnnualizedReturn,
-		}
-
-		// Convert results JSON
-		resultsJSON, err := json.Marshal(map[string]interface{}{
-			"equity_curve":  result.EquityCurve,
-			"equity_times":  result.EquityTimes,
-			"trades_count":  len(result.Trades),
-			"average_trade": result.Metrics.AverageTrade,
-			"average_win":   result.Metrics.AverageWin,
-			"average_loss":  result.Metrics.AverageLoss,
-			"largest_win":   result.Metrics.LargestWin,
-			"largest_loss":  result.Metrics.LargestLoss,
-			"win_rate":      result.Metrics.WinRate,
-		})
-		if err != nil {
-			s.logger.Error("Failed to marshal results JSON", zap.Error(err))
-		} else {
-			raw := json.RawMessage(resultsJSON)
-			metrics.ResultsJSON = raw
-		}
-
-		// Save backtest results
-		resultID, err := s.backtestRepo.SaveBacktestResults(ctx, runID, metrics)
-		if err != nil {
-			s.logger.Error("Failed to save backtest results",
-				zap.Error(err),
-				zap.Int("runID", runID))
-			continue
-		}
-
-		s.logger.Info("Backtest results saved successfully",
+		s.logger.Info("Backtest completed successfully",
 			zap.Int("runID", runID),
-			zap.Int("resultID", resultID),
+			zap.Int("symbolID", symbolID),
 			zap.Int("totalTrades", result.Metrics.TotalTrades),
 			zap.Float64("totalReturn", result.Metrics.TotalReturn))
 
-		// Save all trades from the backtest
-		s.saveTrades(ctx, runID, symbolID, result.Trades)
+		// No need to save trades or update status, as the backtest service has
+		// already saved everything directly to the database
 	}
 
 	// Notify the Strategy Service that the backtest is complete

@@ -17,6 +17,7 @@ from src.models import (
     TradeResult, BacktestResult
 )
 from src.strategies import build_strategy
+from src.db import get_candles, get_symbol_by_id, save_backtest_result, add_backtest_trade
 
 logger = logging.getLogger(__name__)
 
@@ -94,6 +95,106 @@ def run_backtest(
         return backtest_result.to_dict()
     except Exception as e:
         logger.exception(f"Error running backtest: {str(e)}")
+        raise RuntimeError(f"Failed to run backtest: {str(e)}")
+
+def run_backtest_with_db(
+    symbol_id: int,
+    timeframe: str,
+    start_time: datetime,
+    end_time: datetime,
+    strategy: Dict[str, Any],
+    params: Dict[str, Any],
+    backtest_run_id: int = None
+) -> Dict[str, Any]:
+    """
+    Run a backtest using data fetched directly from the database.
+    
+    Args:
+        symbol_id: Symbol ID
+        timeframe: Timeframe (e.g., '1m', '5m', '1h')
+        start_time: Start time
+        end_time: End time
+        strategy: Strategy configuration
+        params: Backtest parameters
+        backtest_run_id: Optional backtest run ID for saving results
+        
+    Returns:
+        Dict containing backtest results
+    """
+    try:
+        logger.info(f"Running backtest for symbol {symbol_id} from {start_time} to {end_time}")
+        
+        # Get symbol information
+        symbol_info = get_symbol_by_id(symbol_id)
+        if not symbol_info:
+            raise ValueError(f"Symbol with ID {symbol_id} not found")
+            
+        logger.info(f"Running backtest for {symbol_info['symbol']} ({symbol_id})")
+        
+        # Fetch candles directly from the database
+        candles = get_candles(symbol_id, timeframe, start_time, end_time)
+        
+        if not candles:
+            raise ValueError(f"No candle data found for symbol {symbol_id} in the specified time range")
+            
+        logger.info(f"Fetched {len(candles)} candles for backtest")
+        
+        # Set symbol_id in parameters if not already set
+        if 'symbol_id' not in params:
+            params['symbol_id'] = symbol_id
+            
+        # Run the backtest
+        result = run_backtest(candles, strategy, params)
+        
+        # If backtest_run_id is provided, save results to the database
+        if backtest_run_id:
+            metrics = result.get('metrics', {})
+            
+            # Save backtest results
+            result_id = save_backtest_result(
+                backtest_run_id=backtest_run_id,
+                total_trades=metrics.get('total_trades', 0),
+                winning_trades=metrics.get('winning_trades', 0),
+                losing_trades=metrics.get('losing_trades', 0),
+                profit_factor=metrics.get('profit_factor', 0),
+                sharpe_ratio=metrics.get('sharpe_ratio', 0),
+                max_drawdown=metrics.get('max_drawdown', 0),
+                final_capital=metrics.get('final_capital', 0),
+                total_return=metrics.get('total_return', 0),
+                annualized_return=metrics.get('annualized_return', 0),
+                results_json={
+                    'equity_curve': result.get('equity_curve', []),
+                    'equity_times': result.get('equity_times', [])
+                }
+            )
+            
+            logger.info(f"Saved backtest results with ID {result_id}")
+            
+            # Save trades
+            for trade in result.get('trades', []):
+                # Convert string timestamps to datetime objects
+                entry_time = datetime.fromisoformat(trade['entry_time']) if isinstance(trade['entry_time'], str) else trade['entry_time']
+                exit_time = datetime.fromisoformat(trade['exit_time']) if trade.get('exit_time') and isinstance(trade['exit_time'], str) else trade.get('exit_time')
+                
+                trade_id = add_backtest_trade(
+                    backtest_run_id=backtest_run_id,
+                    symbol_id=symbol_id,
+                    entry_time=entry_time,
+                    exit_time=exit_time,
+                    position_type=trade['position_type'],
+                    entry_price=trade['entry_price'],
+                    exit_price=trade.get('exit_price'),
+                    quantity=trade['quantity'],
+                    profit_loss=trade.get('profit_loss'),
+                    profit_loss_percent=trade.get('profit_loss_percent'),
+                    exit_reason=trade.get('exit_reason')
+                )
+            
+            logger.info(f"Saved {len(result.get('trades', []))} trades")
+        
+        return result
+    except Exception as e:
+        logger.exception(f"Error running backtest with DB: {str(e)}")
         raise RuntimeError(f"Failed to run backtest: {str(e)}")
 
 def process_backtest_metrics(result: pd.Series, initial_capital: float) -> BacktestMetrics:
