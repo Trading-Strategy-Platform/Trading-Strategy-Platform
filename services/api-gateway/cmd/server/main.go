@@ -271,6 +271,7 @@ func setupRouter(
 
 		// STRATEGY SERVICE ROUTES
 		api.Any("/v1/indicators", gatewayHandler.ProxyStrategyService)
+		api.Any("/v1/indicators/sync", gatewayHandler.ProxyStrategyService)
 		api.Any("/v1/indicators/categories", gatewayHandler.ProxyStrategyService)
 		api.Any("/v1/indicators/:id", gatewayHandler.ProxyStrategyService)
 		api.Any("/v1/indicators/:id/parameters", gatewayHandler.ProxyStrategyService)

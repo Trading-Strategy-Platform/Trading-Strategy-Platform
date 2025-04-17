@@ -39,6 +39,7 @@ services:
       - ./services/strategy-service/init-scripts:/docker-entrypoint-initdb.d
     networks:
       - strategy-service-network
+      - backtest-service-network  # Added for backtesting service access
   
   historical-db:
     build:
@@ -58,8 +59,88 @@ services:
       - ./services/historical-data-service/init-scripts:/docker-entrypoint-initdb.d
     networks:
       - historical-service-network
+      - backtest-service-network  # Added to ensure backtest service can access it
   
-  # SERVICES
+  # SERVICES WITH CHANGES
+  strategy-service:
+    build:
+      context: ./services/strategy-service
+      dockerfile: Dockerfile
+    container_name: strategy-service
+    depends_on:
+      - strategy-db
+      - kafka
+      - redis
+      - media-service
+      - backtest-service  # Added dependency on backtest-service
+    ports:
+      - "8082:8082"  # Map host 8082 to container 8082
+    environment:
+      DB_HOST: strategy-db
+      DB_PORT: 5432
+      DB_USER: strategy_service_user
+      DB_PASSWORD: strategy_service_password
+      DB_NAME: strategy_service
+      USER_SERVICE_URL: http://user-service:8083
+      KAFKA_BROKERS: kafka:9092
+      REDIS_URL: redis:6379
+      MEDIA_SERVICE_URL: http://media-service:8085
+      MEDIA_SERVICE_KEY: media-service-key
+      BACKTEST_SERVICE_URL: http://backtest-service:5000  # Added backtest service URL
+    networks:
+      - strategy-service-network
+      - kafka-network
+      - redis-network
+      - api-gateway-network
+      - media-service-network
+      - backtest-service-network  # Added network for backtest service
+    healthcheck:  # Added healthcheck
+      test: ["CMD", "curl", "-f", "http://localhost:8082/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+  
+  backtest-service:
+    build:
+      context: ./services/backtesting-service
+      dockerfile: Dockerfile  # Make sure to update this Dockerfile with the changes
+    container_name: backtest-service
+    depends_on:
+      - historical-db
+      - strategy-db  # Added dependency on strategy database
+    ports:
+      - "5000:5000"
+    environment:
+      PYTHONUNBUFFERED: "1"
+      LOG_LEVEL: "INFO"
+      # Historical DB connection
+      HISTORICAL_DB_HOST: historical-db
+      HISTORICAL_DB_PORT: 5432
+      HISTORICAL_DB_USER: historical_service_user
+      HISTORICAL_DB_PASSWORD: historical_service_password
+      HISTORICAL_DB_NAME: historical_service
+      # Strategy DB connection for indicator sync
+      STRATEGY_DB_HOST: strategy-db
+      STRATEGY_DB_PORT: 5432
+      STRATEGY_DB_USER: strategy_service_user
+      STRATEGY_DB_PASSWORD: strategy_service_password
+      STRATEGY_DB_NAME: strategy_service
+    networks:
+      - backtest-service-network
+      - api-gateway-network
+      - historical-service-network  # For historical DB access
+      - strategy-service-network    # Added for strategy DB access
+    volumes:
+      - ./services/backtesting-service/src:/app/src  # For development
+    healthcheck:  # Added enhanced healthcheck
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+  
+  # OTHER SERVICES (UNCHANGED)
   user-service:
     build:
       context: ./services/user-service
@@ -85,36 +166,6 @@ services:
       MEDIA_SERVICE_KEY: media-service-key
     networks:
       - user-service-network
-      - kafka-network
-      - redis-network
-      - api-gateway-network
-      - media-service-network
-  
-  strategy-service:
-    build:
-      context: ./services/strategy-service
-      dockerfile: Dockerfile
-    container_name: strategy-service
-    depends_on:
-      - strategy-db
-      - kafka
-      - redis
-      - media-service
-    ports:
-      - "8082:8082"  # Map host 8082 to container 8082
-    environment:
-      DB_HOST: strategy-db
-      DB_PORT: 5432
-      DB_USER: strategy_service_user
-      DB_PASSWORD: strategy_service_password
-      DB_NAME: strategy_service
-      USER_SERVICE_URL: http://user-service:8083
-      KAFKA_BROKERS: kafka:9092
-      REDIS_URL: redis:6379
-      MEDIA_SERVICE_URL: http://media-service:8085
-      MEDIA_SERVICE_KEY: media-service-key
-    networks:
-      - strategy-service-network
       - kafka-network
       - redis-network
       - api-gateway-network
@@ -146,35 +197,6 @@ services:
       - kafka-network
       - api-gateway-network
       - backtest-service-network
-  
-  backtest-service:
-    build:
-      context: ./services/backtesting-service
-      dockerfile: Dockerfile
-    container_name: backtest-service
-    ports:
-      - "5000:5000"
-    environment:
-      PYTHONUNBUFFERED: "1"
-      LOG_LEVEL: "INFO"
-      # Direct database connection variables
-      HISTORICAL_DB_HOST: historical-db
-      HISTORICAL_DB_PORT: 5432
-      HISTORICAL_DB_USER: historical_service_user
-      HISTORICAL_DB_PASSWORD: historical_service_password
-      HISTORICAL_DB_NAME: historical_service
-    networks:
-      - backtest-service-network
-      - api-gateway-network
-      - historical-service-network  # Added this network for direct DB access
-    volumes:
-      - ./services/backtesting-service/src:/app/src
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 10s
   
   media-service:
     build:

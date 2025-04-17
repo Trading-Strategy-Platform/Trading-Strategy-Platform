@@ -5,11 +5,13 @@ Main Flask application for the backtesting service.
 """
 
 import logging
+import psycopg2
+import os
 from datetime import datetime
 from flask import Flask, request, jsonify
 
 from src.backtest import run_backtest
-from src.indicators import get_available_indicators
+from src.indicators import get_available_indicators, sync_indicators
 from src.strategies import validate_strategy
 import src.db as db
 
@@ -25,8 +27,92 @@ app = Flask(__name__)
 
 @app.route('/health', methods=['GET'])
 def health_check():
-    """Health check endpoint."""
-    return jsonify({"status": "healthy"})
+    """Enhanced health check endpoint that verifies database connections."""
+    health_status = {
+        "status": "healthy",
+        "service": "backtesting-service",
+        "timestamp": datetime.now().isoformat(),
+        "connections": {
+            "historical_db": {"status": "unknown"},
+            "strategy_db": {"status": "unknown"}
+        }
+    }
+    
+    # Check historical database connection
+    historical_db_host = os.environ.get("HISTORICAL_DB_HOST", "historical-db")
+    historical_db_port = os.environ.get("HISTORICAL_DB_PORT", "5432")
+    historical_db_name = os.environ.get("HISTORICAL_DB_NAME", "historical_service")
+    historical_db_user = os.environ.get("HISTORICAL_DB_USER", "historical_service_user")
+    historical_db_pass = os.environ.get("HISTORICAL_DB_PASSWORD", "historical_service_password")
+    
+    historical_db_conn_string = f"host={historical_db_host} port={historical_db_port} dbname={historical_db_name} user={historical_db_user} password={historical_db_pass}"
+    
+    try:
+        # Quick connection test with short timeout
+        conn = psycopg2.connect(historical_db_conn_string, connect_timeout=3)
+        cursor = conn.cursor()
+        cursor.execute("SELECT 1")
+        cursor.close()
+        conn.close()
+        health_status["connections"]["historical_db"] = {
+            "status": "connected",
+            "host": historical_db_host,
+            "port": historical_db_port
+        }
+    except Exception as e:
+        logger.warning(f"Historical DB connection failed: {str(e)}")
+        health_status["connections"]["historical_db"] = {
+            "status": "error",
+            "message": str(e),
+            "host": historical_db_host,
+            "port": historical_db_port
+        }
+        health_status["status"] = "degraded"
+    
+    # Check strategy database connection
+    strategy_db_host = os.environ.get("STRATEGY_DB_HOST", "strategy-db")
+    strategy_db_port = os.environ.get("STRATEGY_DB_PORT", "5432")
+    strategy_db_name = os.environ.get("STRATEGY_DB_NAME", "strategy_service")
+    strategy_db_user = os.environ.get("STRATEGY_DB_USER", "strategy_service_user")
+    strategy_db_pass = os.environ.get("STRATEGY_DB_PASSWORD", "strategy_service_password")
+    
+    strategy_db_conn_string = f"host={strategy_db_host} port={strategy_db_port} dbname={strategy_db_name} user={strategy_db_user} password={strategy_db_pass}"
+    
+    try:
+        # Quick connection test with short timeout
+        conn = psycopg2.connect(strategy_db_conn_string, connect_timeout=3)
+        cursor = conn.cursor()
+        cursor.execute("SELECT 1")
+        cursor.close()
+        conn.close()
+        health_status["connections"]["strategy_db"] = {
+            "status": "connected",
+            "host": strategy_db_host,
+            "port": strategy_db_port
+        }
+    except Exception as e:
+        logger.warning(f"Strategy DB connection failed: {str(e)}")
+        health_status["connections"]["strategy_db"] = {
+            "status": "error",
+            "message": str(e),
+            "host": strategy_db_host,
+            "port": strategy_db_port
+        }
+        # Only mark as unhealthy if we need the strategy DB for indicator sync
+        if health_status["status"] == "healthy":
+            health_status["status"] = "degraded"
+    
+    # Add indicators count
+    try:
+        indicators = get_available_indicators()
+        health_status["indicators_count"] = len(indicators)
+    except Exception as e:
+        health_status["indicators_error"] = str(e)
+        health_status["status"] = "degraded"
+    
+    # Return 200 even if degraded, to not trigger container restarts
+    # The status field in the response body will indicate the true health
+    return jsonify(health_status)
 
 @app.route('/backtest', methods=['POST'])
 def backtest():
@@ -203,6 +289,19 @@ def indicators():
     except Exception as e:
         logger.exception(f"Error fetching indicators: {str(e)}")
         return jsonify({"error": f"Failed to fetch indicators: {str(e)}"}), 500
+    
+@app.route('/sync-indicators', methods=['POST'])
+def sync_indicators_endpoint():
+    """Endpoint to sync indicators to the strategy service database."""
+    try:
+        # Call the sync function
+        result = sync_indicators()
+        
+        # Return the result as JSON
+        return jsonify(result)
+    except Exception as e:
+        logger.exception(f"Error syncing indicators: {str(e)}")
+        return jsonify({"error": f"Failed to sync indicators: {str(e)}"}), 500
 
 if __name__ == "__main__":
     # Run the Flask app for development

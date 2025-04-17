@@ -3,8 +3,12 @@ package service
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
+	"os"
 	"time"
 
 	"services/strategy-service/internal/model"
@@ -512,4 +516,82 @@ func (s *IndicatorService) AddParameter(
 		zap.Int("indicator_id", indicatorID))
 
 	return newParam, nil
+}
+
+// SyncIndicatorsFromBacktestingService syncs indicators from the backtesting service
+func (s *IndicatorService) SyncIndicatorsFromBacktestingService(ctx context.Context) (int, error) {
+	// Get backtesting service URL from environment or use default
+	backtestingServiceURL := os.Getenv("BACKTEST_SERVICE_URL")
+	if backtestingServiceURL == "" {
+		// Default base URL if environment variable not set
+		backtestingServiceURL = "http://backtest-service:5000" // Correct container name
+	}
+
+	// Add the endpoint path
+	indicatorsURL := backtestingServiceURL + "/indicators"
+
+	s.logger.Info("Connecting to backtesting service", zap.String("url", indicatorsURL))
+
+	// Create HTTP client with timeout
+	client := &http.Client{
+		Timeout: 10 * time.Second,
+	}
+
+	// Make request to backtesting service
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, indicatorsURL, nil)
+	if err != nil {
+		s.logger.Error("Failed to create request to backtesting service", zap.Error(err))
+		return 0, err
+	}
+
+	// Send request
+	resp, err := client.Do(req)
+	if err != nil {
+		s.logger.Error("Failed to get indicators from backtesting service",
+			zap.Error(err),
+			zap.String("url", indicatorsURL))
+
+		// Try the backup URL if the main one fails
+		backupURL := "http://backtest-service:5000/indicators"
+		s.logger.Info("Trying backup URL", zap.String("backup_url", backupURL))
+
+		req, err = http.NewRequestWithContext(ctx, http.MethodGet, backupURL, nil)
+		if err != nil {
+			s.logger.Error("Failed to create request for backup URL", zap.Error(err))
+			return 0, err
+		}
+
+		resp, err = client.Do(req)
+		if err != nil {
+			s.logger.Error("Failed to connect using backup URL", zap.Error(err))
+			return 0, fmt.Errorf("all connection attempts to backtesting service failed: %w", err)
+		}
+	}
+
+	defer resp.Body.Close()
+
+	// Check response status
+	if resp.StatusCode != http.StatusOK {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		s.logger.Error("Backtesting service returned non-200 status",
+			zap.Int("status_code", resp.StatusCode),
+			zap.String("response", string(bodyBytes)))
+		return 0, fmt.Errorf("backtesting service returned status code %d", resp.StatusCode)
+	}
+
+	// Parse response
+	var indicators []model.IndicatorFromBacktesting
+	err = json.NewDecoder(resp.Body).Decode(&indicators)
+	if err != nil {
+		s.logger.Error("Failed to decode indicators response", zap.Error(err))
+		return 0, err
+	}
+
+	// Sync indicators using repository
+	syncedCount, err := s.indicatorRepo.SyncIndicators(ctx, indicators)
+	if err != nil {
+		return 0, fmt.Errorf("failed to sync indicators: %w", err)
+	}
+
+	return syncedCount, nil
 }

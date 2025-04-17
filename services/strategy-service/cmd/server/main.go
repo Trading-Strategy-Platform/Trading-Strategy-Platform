@@ -225,6 +225,7 @@ func setupRouter(
 			adminIndicators.POST("", indicatorHandler.CreateIndicator)             // POST /api/v1/indicators
 			adminIndicators.PUT("/:id", indicatorHandler.UpdateIndicator)          // PUT /api/v1/indicators/{id}
 			adminIndicators.DELETE("/:id", indicatorHandler.DeleteIndicator)       // DELETE /api/v1/indicators/{id}
+			adminIndicators.POST("/sync", indicatorHandler.SyncIndicators)         // POST /api/v1/indicators/sync
 			adminIndicators.POST("/:id/parameters", indicatorHandler.AddParameter) // POST /api/v1/indicators/{id}/parameters
 		}
 

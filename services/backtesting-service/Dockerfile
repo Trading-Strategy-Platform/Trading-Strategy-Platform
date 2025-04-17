@@ -34,12 +34,19 @@ RUN pip install -e .
 # Set Python path
 ENV PYTHONPATH=/app
 
-# Set database connection environment variables (these can be overridden at runtime)
+# Set database connection environment variables for Historical DB
 ENV HISTORICAL_DB_HOST=historical-db
 ENV HISTORICAL_DB_PORT=5432
 ENV HISTORICAL_DB_USER=historical_service_user
 ENV HISTORICAL_DB_PASSWORD=historical_service_password
 ENV HISTORICAL_DB_NAME=historical_service
+
+# Set database connection environment variables for Strategy DB
+ENV STRATEGY_DB_HOST=strategy-db
+ENV STRATEGY_DB_PORT=5432
+ENV STRATEGY_DB_USER=strategy_service_user
+ENV STRATEGY_DB_PASSWORD=strategy_service_password
+ENV STRATEGY_DB_NAME=strategy_service
 
 # Expose the application port
 EXPOSE 5000

@@ -59,3 +59,20 @@ type ParameterEnumValueCreate struct {
 	EnumValue   string `json:"enum_value" binding:"required"`
 	DisplayName string `json:"display_name,omitempty"`
 }
+
+// IndicatorFromBacktesting represents an indicator from the backtesting service
+type IndicatorFromBacktesting struct {
+	ID          string                     `json:"id"`
+	Name        string                     `json:"name"`
+	Description string                     `json:"description"`
+	Parameters  []ParameterFromBacktesting `json:"parameters"`
+}
+
+// ParameterFromBacktesting represents a parameter from the backtesting service
+type ParameterFromBacktesting struct {
+	Name        string        `json:"name"`
+	Type        string        `json:"type"`
+	Default     string        `json:"default"`
+	Description string        `json:"description,omitempty"`
+	Options     []interface{} `json:"options,omitempty"`
+}

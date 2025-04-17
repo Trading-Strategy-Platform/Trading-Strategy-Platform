@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -503,4 +504,26 @@ func (h *IndicatorHandler) UpdateEnumValue(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, updatedEnumValue)
+}
+
+// POST /api/v1/indicators/sync
+func (h *IndicatorHandler) SyncIndicators(c *gin.Context) {
+	// Only admins can sync indicators
+	userID, _ := c.Get("userID")
+	h.logger.Info("Syncing indicators", zap.Int("userID", userID.(int)))
+
+	// Sync indicators
+	count, err := h.indicatorService.SyncIndicatorsFromBacktestingService(c.Request.Context())
+	if err != nil {
+		h.logger.Error("Failed to sync indicators", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to sync indicators: " + err.Error()})
+		return
+	}
+
+	h.logger.Info("Successfully synced indicators", zap.Int("count", count))
+	c.JSON(http.StatusOK, gin.H{
+		"status":            "success",
+		"message":           fmt.Sprintf("Successfully synced %d indicators", count),
+		"indicators_synced": count,
+	})
 }

@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"strings"
 	"time"
 
 	"services/strategy-service/internal/model"
@@ -557,4 +559,228 @@ func (r *IndicatorRepository) UpdateEnumValue(ctx context.Context, id int, enumV
 	}
 
 	return nil
+}
+
+// SyncIndicators syncs indicators from the provided list
+func (r *IndicatorRepository) SyncIndicators(ctx context.Context, indicators []model.IndicatorFromBacktesting) (int, error) {
+	// Start a transaction
+	tx, err := r.db.BeginTxx(ctx, nil)
+	if err != nil {
+		r.logger.Error("Failed to begin transaction", zap.Error(err))
+		return 0, err
+	}
+	defer tx.Rollback() // Rollback if not committed
+
+	// Get existing indicators from database
+	var existingIndicators []struct {
+		ID   int    `db:"id"`
+		Name string `db:"name"`
+	}
+	err = tx.SelectContext(ctx, &existingIndicators, "SELECT id, name FROM indicators")
+	if err != nil {
+		r.logger.Error("Failed to get existing indicators", zap.Error(err))
+		return 0, err
+	}
+
+	// Create map of existing indicators by name for easy lookup
+	existingIndicatorMap := make(map[string]int)
+	for _, indicator := range existingIndicators {
+		existingIndicatorMap[indicator.Name] = indicator.ID
+	}
+
+	// Count of synced indicators
+	syncedCount := 0
+
+	// Process each indicator
+	for _, indicator := range indicators {
+		// Determine if this is an update or insert
+		indicatorID, exists := existingIndicatorMap[indicator.Name]
+
+		if exists {
+			// Update existing indicator
+			_, err = tx.ExecContext(ctx,
+				"UPDATE indicators SET description = $1, updated_at = NOW() WHERE id = $2",
+				indicator.Description, indicatorID)
+			if err != nil {
+				r.logger.Error("Failed to update indicator",
+					zap.Error(err),
+					zap.String("name", indicator.Name))
+				return 0, err
+			}
+		} else {
+			// Insert new indicator
+			// Categorize indicator based on name
+			category := categorizeIndicator(indicator.Name)
+
+			err = tx.QueryRowContext(ctx,
+				`INSERT INTO indicators 
+                (name, description, category, created_at, updated_at) 
+                VALUES ($1, $2, $3, NOW(), NOW()) RETURNING id`,
+				indicator.Name, indicator.Description, category).Scan(&indicatorID)
+			if err != nil {
+				r.logger.Error("Failed to insert indicator",
+					zap.Error(err),
+					zap.String("name", indicator.Name))
+				return 0, err
+			}
+		}
+
+		// Get existing parameters for this indicator
+		var existingParams []struct {
+			ID            int    `db:"id"`
+			ParameterName string `db:"parameter_name"`
+		}
+		err = tx.SelectContext(ctx, &existingParams,
+			`SELECT id, parameter_name FROM indicator_parameters WHERE indicator_id = $1`,
+			indicatorID)
+		if err != nil {
+			r.logger.Error("Failed to get existing parameters",
+				zap.Error(err),
+				zap.Int("indicator_id", indicatorID))
+			return 0, err
+		}
+
+		// Create map of existing parameters by name for easy lookup
+		existingParamMap := make(map[string]int)
+		for _, param := range existingParams {
+			existingParamMap[param.ParameterName] = param.ID
+		}
+
+		// Process parameters
+		for _, param := range indicator.Parameters {
+			paramType := param.Type
+			defaultValue := param.Default
+
+			// Determine if this is an enum parameter
+			hasOptions := len(param.Options) > 0
+			if hasOptions {
+				paramType = "enum"
+			}
+
+			paramID, paramExists := existingParamMap[param.Name]
+
+			if paramExists {
+				// Update existing parameter
+				_, err = tx.ExecContext(ctx,
+					`UPDATE indicator_parameters 
+                     SET parameter_type = $1, default_value = $2 
+                     WHERE id = $3`,
+					paramType, defaultValue, paramID)
+				if err != nil {
+					r.logger.Error("Failed to update parameter",
+						zap.Error(err),
+						zap.String("name", param.Name))
+					return 0, err
+				}
+			} else {
+				// Insert new parameter
+				err = tx.QueryRowContext(ctx,
+					`INSERT INTO indicator_parameters 
+                     (indicator_id, parameter_name, parameter_type, default_value, is_required) 
+                     VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+					indicatorID, param.Name, paramType, defaultValue, true).Scan(&paramID)
+				if err != nil {
+					r.logger.Error("Failed to insert parameter",
+						zap.Error(err),
+						zap.String("name", param.Name))
+					return 0, err
+				}
+			}
+
+			// Handle enum values if present
+			if hasOptions {
+				// Get existing enum values
+				var existingEnums []struct {
+					ID        int    `db:"id"`
+					EnumValue string `db:"enum_value"`
+				}
+				err = tx.SelectContext(ctx, &existingEnums,
+					`SELECT id, enum_value FROM parameter_enum_values WHERE parameter_id = $1`,
+					paramID)
+				if err != nil {
+					r.logger.Error("Failed to get existing enum values",
+						zap.Error(err),
+						zap.Int("parameter_id", paramID))
+					return 0, err
+				}
+
+				// Create map of existing enum values by value for easy lookup
+				existingEnumMap := make(map[string]int)
+				for _, enum := range existingEnums {
+					existingEnumMap[enum.EnumValue] = enum.ID
+				}
+
+				// Process each option
+				for _, option := range param.Options {
+					optionStr := fmt.Sprintf("%v", option) // Convert to string
+
+					if _, enumExists := existingEnumMap[optionStr]; !enumExists {
+						// Insert new enum value
+						_, err = tx.ExecContext(ctx,
+							`INSERT INTO parameter_enum_values 
+                             (parameter_id, enum_value, display_name) 
+                             VALUES ($1, $2, $3)`,
+							paramID, optionStr, optionStr)
+						if err != nil {
+							r.logger.Error("Failed to insert enum value",
+								zap.Error(err),
+								zap.String("value", optionStr))
+							return 0, err
+						}
+					}
+				}
+			}
+		}
+
+		syncedCount++
+	}
+
+	// Commit transaction
+	err = tx.Commit()
+	if err != nil {
+		r.logger.Error("Failed to commit transaction", zap.Error(err))
+		return 0, err
+	}
+
+	return syncedCount, nil
+}
+
+// Helper function to categorize indicators based on their name
+func categorizeIndicator(name string) string {
+	// Default category
+	category := "Other"
+
+	// Check for trend indicators
+	trendIndicators := []string{"MA", "EMA", "SMA", "MACD", "ADX", "Ichimoku"}
+	for _, indicator := range trendIndicators {
+		if strings.Contains(strings.ToUpper(name), strings.ToUpper(indicator)) {
+			return "Trend"
+		}
+	}
+
+	// Check for momentum indicators
+	momentumIndicators := []string{"RSI", "CCI", "Stochastic", "TRIX", "ROC", "Momentum"}
+	for _, indicator := range momentumIndicators {
+		if strings.Contains(strings.ToUpper(name), strings.ToUpper(indicator)) {
+			return "Momentum"
+		}
+	}
+
+	// Check for volatility indicators
+	volatilityIndicators := []string{"Bollinger", "ATR", "Volatility", "Standard Deviation"}
+	for _, indicator := range volatilityIndicators {
+		if strings.Contains(strings.ToUpper(name), strings.ToUpper(indicator)) {
+			return "Volatility"
+		}
+	}
+
+	// Check for volume indicators
+	volumeIndicators := []string{"Volume", "OBV", "Money Flow", "Accumulation"}
+	for _, indicator := range volumeIndicators {
+		if strings.Contains(strings.ToUpper(name), strings.ToUpper(indicator)) {
+			return "Volume"
+		}
+	}
+
+	return category
 }
