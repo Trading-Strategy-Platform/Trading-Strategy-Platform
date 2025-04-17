@@ -352,73 +352,73 @@ func (s *BacktestService) failBacktest(ctx context.Context, backtestID int, erro
 	}
 }
 
-// saveTrades saves all trades from a backtest result
-func (s *BacktestService) saveTrades(
-	ctx context.Context,
-	runID int,
-	symbolID int,
-	trades []model.BacktestTrade,
-) {
-	s.logger.Info("Saving trades from backtest result",
-		zap.Int("runID", runID),
-		zap.Int("symbolID", symbolID),
-		zap.Int("tradeCount", len(trades)))
+// // saveTrades saves all trades from a backtest result
+// func (s *BacktestService) saveTrades(
+// 	ctx context.Context,
+// 	runID int,
+// 	symbolID int,
+// 	trades []model.BacktestTrade,
+// ) {
+// 	s.logger.Info("Saving trades from backtest result",
+// 		zap.Int("runID", runID),
+// 		zap.Int("symbolID", symbolID),
+// 		zap.Int("tradeCount", len(trades)))
 
-	// Process each trade
-	for _, trade := range trades {
-		// Parse entry time
-		var entryTime time.Time
-		var err error
+// 	// Process each trade
+// 	for _, trade := range trades {
+// 		// Parse entry time
+// 		var entryTime time.Time
+// 		var err error
 
-		if t, err := time.Parse(time.RFC3339, trade.EntryTime.Format(time.RFC3339)); err == nil {
-			entryTime = t
-		} else if t, err := time.Parse("2006-01-02T15:04:05", trade.EntryTime.Format(time.RFC3339)); err == nil {
-			entryTime = t
-		} else {
-			s.logger.Error("Failed to parse entry time, using current time",
-				zap.Error(err),
-				zap.String("entryTime", trade.EntryTime.Format(time.RFC3339)))
-			entryTime = time.Now()
-		}
+// 		if t, err := time.Parse(time.RFC3339, trade.EntryTime.Format(time.RFC3339)); err == nil {
+// 			entryTime = t
+// 		} else if t, err := time.Parse("2006-01-02T15:04:05", trade.EntryTime.Format(time.RFC3339)); err == nil {
+// 			entryTime = t
+// 		} else {
+// 			s.logger.Error("Failed to parse entry time, using current time",
+// 				zap.Error(err),
+// 				zap.String("entryTime", trade.EntryTime.Format(time.RFC3339)))
+// 			entryTime = time.Now()
+// 		}
 
-		// Parse exit time if present
-		var exitTime *time.Time
-		if trade.ExitTime != nil {
-			t, err := time.Parse(time.RFC3339, trade.ExitTime.Format(time.RFC3339))
-			if err != nil {
-				s.logger.Error("Failed to parse exit time",
-					zap.Error(err),
-					zap.String("exitTime", trade.ExitTime.Format(time.RFC3339)))
-			} else {
-				exitTime = &t
-			}
-		}
+// 		// Parse exit time if present
+// 		var exitTime *time.Time
+// 		if trade.ExitTime != nil {
+// 			t, err := time.Parse(time.RFC3339, trade.ExitTime.Format(time.RFC3339))
+// 			if err != nil {
+// 				s.logger.Error("Failed to parse exit time",
+// 					zap.Error(err),
+// 					zap.String("exitTime", trade.ExitTime.Format(time.RFC3339)))
+// 			} else {
+// 				exitTime = &t
+// 			}
+// 		}
 
-		// Create trade record
-		dbTrade := &model.BacktestTrade{
-			BacktestRunID:     runID,
-			SymbolID:          symbolID,
-			EntryTime:         entryTime,
-			ExitTime:          exitTime,
-			PositionType:      trade.PositionType,
-			EntryPrice:        trade.EntryPrice,
-			ExitPrice:         trade.ExitPrice,
-			Quantity:          trade.Quantity,
-			ProfitLoss:        trade.ProfitLoss,
-			ProfitLossPercent: trade.ProfitLossPercent,
-			ExitReason:        trade.ExitReason,
-		}
+// 		// Create trade record
+// 		dbTrade := &model.BacktestTrade{
+// 			BacktestRunID:     runID,
+// 			SymbolID:          symbolID,
+// 			EntryTime:         entryTime,
+// 			ExitTime:          exitTime,
+// 			PositionType:      trade.PositionType,
+// 			EntryPrice:        trade.EntryPrice,
+// 			ExitPrice:         trade.ExitPrice,
+// 			Quantity:          trade.Quantity,
+// 			ProfitLoss:        trade.ProfitLoss,
+// 			ProfitLossPercent: trade.ProfitLossPercent,
+// 			ExitReason:        trade.ExitReason,
+// 		}
 
-		// Save to database
-		_, err = s.backtestRepo.AddBacktestTrade(ctx, dbTrade)
-		if err != nil {
-			s.logger.Error("Failed to save trade",
-				zap.Error(err),
-				zap.Int("runID", runID),
-				zap.String("positionType", trade.PositionType))
-		}
-	}
-}
+// 		// Save to database
+// 		_, err = s.backtestRepo.AddBacktestTrade(ctx, dbTrade)
+// 		if err != nil {
+// 			s.logger.Error("Failed to save trade",
+// 				zap.Error(err),
+// 				zap.Int("runID", runID),
+// 				zap.String("positionType", trade.PositionType))
+// 		}
+// 	}
+// }
 
 // GetBacktest retrieves a backtest by ID
 func (s *BacktestService) GetBacktest(

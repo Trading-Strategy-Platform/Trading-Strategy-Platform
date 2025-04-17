@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"sort"
 	"time"
 
 	"services/historical-data-service/internal/client"
@@ -345,8 +346,12 @@ func (s *MarketDataDownloadService) GetDataInventory(ctx context.Context, assetT
 		zap.String("assetType", assetType),
 		zap.String("exchange", exchange))
 
-	// Get all symbols, regardless of their dataAvailable flag
-	symbols, err := s.symbolRepo.GetSymbolsByFilter(ctx, "", assetType, exchange)
+	// Create a timeout context to prevent hanging operations
+	timeoutCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	// Get all symbols, with optional filtering by assetType and exchange
+	symbols, err := s.symbolRepo.GetSymbolsByFilter(timeoutCtx, "", assetType, exchange)
 	if err != nil {
 		s.logger.Error("Failed to get symbols", zap.Error(err))
 		return nil, err
@@ -358,18 +363,33 @@ func (s *MarketDataDownloadService) GetDataInventory(ctx context.Context, assetT
 		return []map[string]interface{}{}, nil
 	}
 
+	// Prioritize symbols with data_available=true
+	sort.Slice(symbols, func(i, j int) bool {
+		return symbols[i].DataAvailable && !symbols[j].DataAvailable
+	})
+
+	// Limit to 100 symbols to prevent timeout
+	maxSymbols := 100
+	if len(symbols) > maxSymbols {
+		s.logger.Info("Limiting symbol processing to prevent timeout",
+			zap.Int("totalSymbols", len(symbols)),
+			zap.Int("processLimit", maxSymbols))
+		symbols = symbols[:maxSymbols]
+	}
+
 	var inventory []map[string]interface{}
 
-	// Process each symbol to find data
+	// Process each symbol
 	for _, symbol := range symbols {
-		s.logger.Debug("Checking symbol data",
-			zap.String("symbol", symbol.Symbol),
-			zap.Int("symbolID", symbol.ID),
-			zap.Bool("dataAvailable", symbol.DataAvailable))
+		// Check for timeout
+		if timeoutCtx.Err() != nil {
+			s.logger.Warn("Timeout reached while processing symbols",
+				zap.Int("processedSymbols", len(inventory)))
+			break
+		}
 
-		// Force check for data regardless of the dataAvailable flag
-		// Start by checking for 1m candles - this is our base count
-		baseCount, err := s.downloadRepo.GetCandleCount(ctx, symbol.ID)
+		// Get candle count for this symbol
+		baseCount, err := s.downloadRepo.GetCandleCount(timeoutCtx, symbol.ID)
 		if err != nil {
 			s.logger.Error("Failed to get candle count",
 				zap.Error(err),
@@ -386,7 +406,7 @@ func (s *MarketDataDownloadService) GetDataInventory(ctx context.Context, assetT
 
 			// Update the data availability flag if needed
 			if !symbol.DataAvailable {
-				success, err := s.symbolRepo.UpdateDataAvailability(ctx, symbol.ID, true)
+				success, err := s.symbolRepo.UpdateDataAvailability(timeoutCtx, symbol.ID, true)
 				if err != nil || !success {
 					s.logger.Error("Failed to update data availability flag",
 						zap.Error(err),
@@ -397,64 +417,26 @@ func (s *MarketDataDownloadService) GetDataInventory(ctx context.Context, assetT
 				}
 			}
 
-			// Check available timeframes
-			timeframes := []string{"1m", "5m", "15m", "30m", "1h", "4h", "1d", "1w"}
-			timeframeData := make(map[string]interface{})
-
-			// Check all timeframes for this symbol
-			for _, tf := range timeframes {
-				// Attempt to get data ranges for this timeframe
-				ranges, err := s.marketDataRepo.GetDataRanges(ctx, symbol.ID, tf)
-				if err != nil {
-					s.logger.Error("Failed to get data ranges",
-						zap.Error(err),
-						zap.Int("symbolID", symbol.ID),
-						zap.String("timeframe", tf))
-					continue
-				}
-
-				if len(ranges) == 0 {
-					// Try alternative method to check if this timeframe has data
-					hasData, err := s.marketDataRepo.HasData(ctx, symbol.ID, tf)
-					if err != nil || !hasData {
-						continue
-					}
-
-					// If HasData returns true but no ranges, get the data range directly
-					startDate, endDate, err := s.marketDataRepo.GetDataRange(ctx, symbol.ID, tf)
-					if err != nil || startDate.IsZero() || endDate.IsZero() {
-						continue
-					}
-
-					// Create a single range
-					ranges = []model.DateRange{{Start: startDate, End: endDate}}
-				}
-
-				// Only include timeframes that have data
-				if len(ranges) > 0 {
-					// Calculate the appropriate candle count for this timeframe
-					adjustedCount := calculateCandleCountForTimeframe(baseCount, tf)
-
-					timeframeData[tf] = map[string]interface{}{
-						"available_ranges": ranges,
-						"earliest_date":    ranges[0].Start,
-						"latest_date":      ranges[len(ranges)-1].End,
-						"candle_count":     adjustedCount,
-					}
-				}
+			// Get overall date range using the repository method instead of direct DB access
+			minDate, maxDate, err := s.marketDataRepo.GetDateRange(timeoutCtx, symbol.ID)
+			if err != nil || minDate.IsZero() || maxDate.IsZero() {
+				s.logger.Error("Failed to get date range",
+					zap.Error(err),
+					zap.Int("symbolID", symbol.ID))
+				continue
 			}
 
-			// Only add to inventory if we found timeframe data
-			if len(timeframeData) > 0 {
-				inventory = append(inventory, map[string]interface{}{
-					"symbol_id":  symbol.ID,
-					"symbol":     symbol.Symbol,
-					"name":       symbol.Name,
-					"asset_type": symbol.AssetType,
-					"exchange":   symbol.Exchange,
-					"timeframes": timeframeData,
-				})
-			}
+			// Add to inventory without timeframes
+			inventory = append(inventory, map[string]interface{}{
+				"symbol_id":     symbol.ID,
+				"symbol":        symbol.Symbol,
+				"name":          symbol.Name,
+				"asset_type":    symbol.AssetType,
+				"exchange":      symbol.Exchange,
+				"candle_count":  baseCount,
+				"earliest_date": minDate,
+				"latest_date":   maxDate,
+			})
 		}
 	}
 
@@ -467,41 +449,6 @@ func (s *MarketDataDownloadService) GetDataInventory(ctx context.Context, assetT
 	}
 
 	return inventory, nil
-}
-
-// Helper function to calculate the appropriate candle count based on timeframe
-func calculateCandleCountForTimeframe(baseCount int, timeframe string) int {
-	// How many 1-minute candles make up one candle of this timeframe
-	var divisor int
-
-	switch timeframe {
-	case "1m":
-		divisor = 1
-	case "5m":
-		divisor = 5
-	case "15m":
-		divisor = 15
-	case "30m":
-		divisor = 30
-	case "1h":
-		divisor = 60
-	case "4h":
-		divisor = 240
-	case "1d":
-		divisor = 1440
-	case "1w":
-		divisor = 10080 // 7 days * 24 hours * 60 minutes
-	default:
-		divisor = 1
-	}
-
-	// Calculate the approximate count based on the timeframe
-	adjustedCount := baseCount / divisor
-	if adjustedCount < 1 {
-		adjustedCount = 1
-	}
-
-	return adjustedCount
 }
 
 // processDownload processes a download job for market data

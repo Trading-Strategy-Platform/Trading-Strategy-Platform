@@ -1,19 +1,25 @@
 # Build stage
 FROM golang:1.21-alpine AS builder
 
+# Install git for fetching dependencies
+RUN apk --no-cache add git
+
 WORKDIR /app
 
-# Copy go.mod and go.sum files
-COPY go.mod .
+# Copy go.mod file
+COPY go.mod go.sum* ./
 
 # Explicitly set Go version
 RUN go mod edit -go=1.21
 
-# Download dependencies
-RUN go mod download
-
 # Copy source code
 COPY . .
+
+# Update go.mod and go.sum based on the source code
+RUN go mod tidy
+
+# Download dependencies
+RUN go mod download
 
 # Build the application
 RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o historical-service ./cmd/server

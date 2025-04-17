@@ -289,3 +289,30 @@ func (r *MarketDataRepository) GetDataRange(
 
 	return result.StartDate, result.EndDate, nil
 }
+
+// Add this method to services/historical-data-service/internal/repository/market_data_repository.go
+
+// GetDateRange returns the minimum and maximum dates for a symbol
+func (r *MarketDataRepository) GetDateRange(ctx context.Context, symbolID int) (minDate, maxDate time.Time, err error) {
+	// Get min date
+	minQuery := `SELECT MIN(candle_time) FROM candles WHERE symbol_id = $1`
+	err = r.db.GetContext(ctx, &minDate, minQuery, symbolID)
+	if err != nil {
+		r.logger.Error("Failed to get min date",
+			zap.Error(err),
+			zap.Int("symbolID", symbolID))
+		return time.Time{}, time.Time{}, err
+	}
+
+	// Get max date
+	maxQuery := `SELECT MAX(candle_time) FROM candles WHERE symbol_id = $1`
+	err = r.db.GetContext(ctx, &maxDate, maxQuery, symbolID)
+	if err != nil {
+		r.logger.Error("Failed to get max date",
+			zap.Error(err),
+			zap.Int("symbolID", symbolID))
+		return time.Time{}, time.Time{}, err
+	}
+
+	return minDate, maxDate, nil
+}
