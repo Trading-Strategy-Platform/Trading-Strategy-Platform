@@ -31,9 +31,9 @@ func NewIndicatorRepository(db *sqlx.DB, logger *zap.Logger) *IndicatorRepositor
 }
 
 // GetAll retrieves all indicators with parameters and enum values using get_indicators function
-func (r *IndicatorRepository) GetAll(ctx context.Context, searchTerm string, categories []string, page, limit int) ([]model.TechnicalIndicator, int, error) {
+func (r *IndicatorRepository) GetAll(ctx context.Context, searchTerm string, categories []string, active *bool, page, limit int) ([]model.TechnicalIndicator, int, error) {
 	// Use the get_indicators function directly
-	query := `SELECT * FROM get_indicators($1, $2)`
+	query := `SELECT * FROM get_indicators($1, $2, $3)`
 
 	var args []interface{}
 	args = append(args, searchTerm)
@@ -42,8 +42,11 @@ func (r *IndicatorRepository) GetAll(ctx context.Context, searchTerm string, cat
 	if len(categories) > 0 {
 		args = append(args, pq.Array(categories))
 	} else {
-		args = append(args, nil) // NULL for empty categories
+		args = append(args, nil)
 	}
+
+	// Handle active filter
+	args = append(args, active)
 
 	// Execute query
 	rows, err := r.db.QueryContext(ctx, query, args...)
@@ -59,7 +62,7 @@ func (r *IndicatorRepository) GetAll(ctx context.Context, searchTerm string, cat
 		var indicator model.TechnicalIndicator
 		var updatedAt sql.NullTime
 		var parametersJSON []byte
-		// Usar sql.NullString para campos que pueden ser NULL
+		// Use sql.NullString for fields that can be NULL
 		var formulaNull sql.NullString
 		var minValueNull sql.NullFloat64
 		var maxValueNull sql.NullFloat64
@@ -72,6 +75,7 @@ func (r *IndicatorRepository) GetAll(ctx context.Context, searchTerm string, cat
 			&formulaNull,
 			&minValueNull,
 			&maxValueNull,
+			&indicator.IsActive,
 			&indicator.CreatedAt,
 			&updatedAt,
 			&parametersJSON,
@@ -81,14 +85,14 @@ func (r *IndicatorRepository) GetAll(ctx context.Context, searchTerm string, cat
 			return nil, 0, err
 		}
 
-		// Asignar valores de los campos NULL
+		// Assign values of NULL fields
 		if formulaNull.Valid {
 			indicator.Formula = formulaNull.String
 		} else {
-			indicator.Formula = "" // Asignar string vacío cuando es NULL
+			indicator.Formula = ""
 		}
 
-		// Asignar valores para min_value y max_value solo si son válidos
+		// Assign values for min_value and max_value only if valid
 		if minValueNull.Valid {
 			indicator.MinValue = &minValueNull.Float64
 		}
@@ -225,7 +229,7 @@ func (r *IndicatorRepository) GetByID(ctx context.Context, id int) (*model.Techn
 	var indicator model.TechnicalIndicator
 	var updatedAt sql.NullTime
 	var parametersJSON []byte
-	// Usar sql.NullString y sql.NullFloat64 para campos que pueden ser NULL
+	// Use sql.NullString and sql.NullFloat64 for fields that can be NULL
 	var formulaNull sql.NullString
 	var minValueNull sql.NullFloat64
 	var maxValueNull sql.NullFloat64
@@ -238,6 +242,7 @@ func (r *IndicatorRepository) GetByID(ctx context.Context, id int) (*model.Techn
 		&formulaNull,
 		&minValueNull,
 		&maxValueNull,
+		&indicator.IsActive,
 		&indicator.CreatedAt,
 		&updatedAt,
 		&parametersJSON,
@@ -353,8 +358,8 @@ func (r *IndicatorRepository) GetByID(ctx context.Context, id int) (*model.Techn
 // Create adds a new indicator to the database
 func (r *IndicatorRepository) Create(ctx context.Context, indicator *model.TechnicalIndicator) (int, error) {
 	query := `
-		INSERT INTO indicators (name, description, category, formula, min_value, max_value, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $7)
+		INSERT INTO indicators (name, description, category, formula, min_value, max_value, is_active, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)
 		RETURNING id
 	`
 
@@ -368,6 +373,7 @@ func (r *IndicatorRepository) Create(ctx context.Context, indicator *model.Techn
 		indicator.Formula,
 		indicator.MinValue,
 		indicator.MaxValue,
+		indicator.IsActive, // Added the is_active field
 		time.Now(),
 	).Scan(&id)
 
@@ -483,7 +489,7 @@ func (r *IndicatorRepository) Delete(ctx context.Context, id int) error {
 
 // Update an indicator
 func (r *IndicatorRepository) Update(ctx context.Context, id int, indicator *model.TechnicalIndicator) error {
-	query := `SELECT update_indicator($1, $2, $3, $4, $5, $6, $7)`
+	query := `SELECT update_indicator($1, $2, $3, $4, $5, $6, $7, $8)`
 
 	var success bool
 	err := r.db.QueryRowContext(
@@ -496,6 +502,7 @@ func (r *IndicatorRepository) Update(ctx context.Context, id int, indicator *mod
 		indicator.Formula,
 		indicator.MinValue,
 		indicator.MaxValue,
+		indicator.IsActive,
 	).Scan(&success)
 
 	if err != nil {

@@ -76,6 +76,7 @@ CREATE TABLE IF NOT EXISTS "indicators" (
   "formula" text,
   "min_value" float,
   "max_value" float,
+  "is_active" boolean NOT NULL DEFAULT true,
   "created_at" timestamp NOT NULL DEFAULT (CURRENT_TIMESTAMP),
   "updated_at" timestamp
 );

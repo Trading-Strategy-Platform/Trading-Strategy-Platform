@@ -340,7 +340,7 @@ def get_strategy_db_connection(connect_timeout: int = 10):
     """Get a connection to the strategy database"""
     return get_db_connection(STRATEGY_DB, connect_timeout)
 
-def sync_indicators_to_strategy_db(indicators_data: List[Dict[str, Any]]) -> Dict[str, Any]:
+def sync_indicators_to_db(indicators_data: List[Dict[str, Any]]) -> Dict[str, Any]:
     """
     Sync indicators to the strategy service database.
     
@@ -376,14 +376,16 @@ def sync_indicators_to_strategy_db(indicators_data: List[Dict[str, Any]]) -> Dic
                     (indicator['description'], indicator_id)
                 )
             else:
-                # Insert new indicator
+                # Insert new indicator with is_active=FALSE
+                category = categorize_indicator(indicator_name)
                 cursor.execute(
                     """INSERT INTO indicators 
-                       (name, description, category, created_at, updated_at) 
-                       VALUES (%s, %s, %s, NOW(), NOW()) RETURNING id""",
-                    (indicator_name, indicator['description'], categorize_indicator(indicator_name))
+                       (name, description, category, is_active, created_at, updated_at) 
+                       VALUES (%s, %s, %s, %s, NOW(), NOW()) RETURNING id""",
+                    (indicator_name, indicator['description'], category, False)
                 )
                 indicator_id = cursor.fetchone()[0]
+                logger.info(f"Created new indicator {indicator_name} with is_active=False")
             
             # Get existing parameters for this indicator
             cursor.execute("SELECT id, parameter_name FROM indicator_parameters WHERE indicator_id = %s", 

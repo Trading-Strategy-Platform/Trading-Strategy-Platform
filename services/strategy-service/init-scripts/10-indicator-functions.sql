@@ -43,7 +43,8 @@ FROM
 -- Get indicators with parameters and enum values
 CREATE OR REPLACE FUNCTION get_indicators(
     p_search VARCHAR,
-    p_categories VARCHAR[]
+    p_categories VARCHAR[],
+    p_active BOOLEAN = NULL
 )
 RETURNS TABLE (
     id INT,
@@ -52,7 +53,8 @@ RETURNS TABLE (
     category VARCHAR(50),
     formula TEXT,
     min_value FLOAT,  
-    max_value FLOAT, 
+    max_value FLOAT,
+    is_active BOOLEAN,
     created_at TIMESTAMP,
     updated_at TIMESTAMP,
     parameters JSONB
@@ -66,7 +68,8 @@ BEGIN
         i.category,
         i.formula,
         i.min_value,  
-        i.max_value,  
+        i.max_value,
+        i.is_active,
         i.created_at,
         i.updated_at,
         COALESCE(
@@ -97,12 +100,13 @@ BEGIN
     WHERE
         (p_search IS NULL OR i.name ILIKE '%' || p_search || '%' OR i.description ILIKE '%' || p_search || '%')
         AND (p_categories IS NULL OR array_length(p_categories, 1) IS NULL OR i.category = ANY(p_categories))
+        AND (p_active IS NULL OR i.is_active = p_active)
     ORDER BY 
         i.name;
 END;
 $$ LANGUAGE plpgsql;
 
--- Get indicator categories by id 
+-- Update get_indicator_by_id function
 CREATE OR REPLACE FUNCTION get_indicator_by_id(p_indicator_id INT)
 RETURNS TABLE (
     id INT,
@@ -111,7 +115,8 @@ RETURNS TABLE (
     category VARCHAR(50),
     formula TEXT,
     min_value FLOAT, 
-    max_value FLOAT, 
+    max_value FLOAT,
+    is_active BOOLEAN,
     created_at TIMESTAMP,
     updated_at TIMESTAMP,
     parameters JSONB
@@ -125,7 +130,8 @@ BEGIN
         i.category,
         i.formula,
         i.min_value, 
-        i.max_value,  
+        i.max_value,
+        i.is_active,
         i.created_at,
         i.updated_at,
         COALESCE(
@@ -198,7 +204,8 @@ CREATE OR REPLACE FUNCTION update_indicator(
     p_category VARCHAR(50),
     p_formula TEXT,
     p_min_value FLOAT,  
-    p_max_value FLOAT   
+    p_max_value FLOAT,
+    p_is_active BOOLEAN
 ) 
 RETURNS BOOLEAN AS $$
 DECLARE
@@ -211,7 +218,8 @@ BEGIN
         category = p_category,
         formula = p_formula,
         min_value = p_min_value,  
-        max_value = p_max_value,  
+        max_value = p_max_value,
+        is_active = p_is_active,
         updated_at = NOW()
     WHERE id = p_id;
     

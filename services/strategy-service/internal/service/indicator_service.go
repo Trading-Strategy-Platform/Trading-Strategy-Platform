@@ -40,7 +40,7 @@ func (s *IndicatorService) GetDB() *sqlx.DB {
 }
 
 // GetAllIndicators retrieves all technical indicators with their parameters and enum values
-func (s *IndicatorService) GetAllIndicators(ctx context.Context, searchTerm string, categories []string, page, limit int) ([]model.TechnicalIndicator, int, error) {
+func (s *IndicatorService) GetAllIndicators(ctx context.Context, searchTerm string, categories []string, active *bool, page, limit int) ([]model.TechnicalIndicator, int, error) {
 	// Validate pagination
 	if page < 1 {
 		page = 1
@@ -49,11 +49,17 @@ func (s *IndicatorService) GetAllIndicators(ctx context.Context, searchTerm stri
 		limit = 20
 	}
 
-	return s.indicatorRepo.GetAll(ctx, searchTerm, categories, page, limit)
+	return s.indicatorRepo.GetAll(ctx, searchTerm, categories, active, page, limit)
 }
 
 // CreateIndicator creates a new technical indicator with parameters and enum values
-func (s *IndicatorService) CreateIndicator(ctx context.Context, name, description, category, formula string, minValue, maxValue *float64, parameters []model.IndicatorParameterCreate) (*model.TechnicalIndicator, error) {
+func (s *IndicatorService) CreateIndicator(
+	ctx context.Context,
+	name, description, category, formula string,
+	minValue, maxValue *float64,
+	isActive *bool,
+	parameters []model.IndicatorParameterCreate,
+) (*model.TechnicalIndicator, error) {
 	// Validate input
 	if name == "" {
 		return nil, errors.New("indicator name is required")
@@ -70,6 +76,12 @@ func (s *IndicatorService) CreateIndicator(ctx context.Context, name, descriptio
 	}
 	defer tx.Rollback() // Rollback if we don't commit
 
+	// Set default value for isActive if it's nil
+	active := true
+	if isActive != nil {
+		active = *isActive
+	}
+
 	// Create the indicator
 	indicator := &model.TechnicalIndicator{
 		Name:        name,
@@ -78,6 +90,7 @@ func (s *IndicatorService) CreateIndicator(ctx context.Context, name, descriptio
 		Formula:     formula,
 		MinValue:    minValue,
 		MaxValue:    maxValue,
+		IsActive:    active,
 		CreatedAt:   time.Now(),
 	}
 
@@ -152,7 +165,8 @@ func (s *IndicatorService) CreateIndicator(ctx context.Context, name, descriptio
 	s.logger.Info("Successfully created indicator",
 		zap.Int("id", indicatorID),
 		zap.String("name", name),
-		zap.Int("parameters_count", len(parameters)))
+		zap.Int("parameters_count", len(parameters)),
+		zap.Bool("is_active", active))
 
 	return indicator, nil
 }

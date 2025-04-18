@@ -39,6 +39,13 @@ func (h *IndicatorHandler) GetAllIndicators(c *gin.Context) {
 		categories = strings.Split(categoriesStr, ",")
 	}
 
+	// Parse active filter
+	var active *bool
+	if activeStr := c.Query("active"); activeStr != "" {
+		activeBool := activeStr == "true"
+		active = &activeBool
+	}
+
 	// Parse pagination parameters
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
@@ -49,7 +56,15 @@ func (h *IndicatorHandler) GetAllIndicators(c *gin.Context) {
 		limit = 20
 	}
 
-	indicators, total, err := h.indicatorService.GetAllIndicators(c.Request.Context(), searchTerm, categories, page, limit)
+	indicators, total, err := h.indicatorService.GetAllIndicators(
+		c.Request.Context(),
+		searchTerm,
+		categories,
+		active,
+		page,
+		limit,
+	)
+
 	if err != nil {
 		h.logger.Error("Failed to get indicators", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch indicators"})
@@ -180,6 +195,7 @@ func (h *IndicatorHandler) CreateIndicator(c *gin.Context) {
 		Formula     string   `json:"formula"`
 		MinValue    *float64 `json:"min_value"`
 		MaxValue    *float64 `json:"max_value"`
+		IsActive    *bool    `json:"is_active"`
 		Parameters  []struct {
 			Name         string   `json:"name" binding:"required"`
 			Type         string   `json:"type" binding:"required"`
@@ -205,7 +221,8 @@ func (h *IndicatorHandler) CreateIndicator(c *gin.Context) {
 	h.logger.Info("Creating indicator",
 		zap.String("name", request.Name),
 		zap.String("category", request.Category),
-		zap.Int("parameters_count", len(request.Parameters)))
+		zap.Int("parameters_count", len(request.Parameters)),
+		zap.Any("is_active", request.IsActive))
 
 	// Convert request parameters to model parameters
 	var parameters []model.IndicatorParameterCreate
@@ -241,6 +258,7 @@ func (h *IndicatorHandler) CreateIndicator(c *gin.Context) {
 		request.Formula,
 		request.MinValue,
 		request.MaxValue,
+		request.IsActive,
 		parameters,
 	)
 
@@ -250,7 +268,10 @@ func (h *IndicatorHandler) CreateIndicator(c *gin.Context) {
 		return
 	}
 
-	h.logger.Info("Successfully created indicator", zap.Int("id", indicator.ID))
+	h.logger.Info("Successfully created indicator",
+		zap.Int("id", indicator.ID),
+		zap.Bool("is_active", indicator.IsActive))
+
 	c.JSON(http.StatusCreated, indicator)
 }
 
@@ -345,6 +366,7 @@ func (h *IndicatorHandler) UpdateIndicator(c *gin.Context) {
 		Formula     string   `json:"formula"`
 		MinValue    *float64 `json:"min_value"`
 		MaxValue    *float64 `json:"max_value"`
+		IsActive    *bool    `json:"is_active"`
 	}
 
 	if err := c.ShouldBindJSON(&request); err != nil {
@@ -360,6 +382,22 @@ func (h *IndicatorHandler) UpdateIndicator(c *gin.Context) {
 		Formula:     request.Formula,
 		MinValue:    request.MinValue,
 		MaxValue:    request.MaxValue,
+	}
+
+	// Set IsActive only if provided
+	if request.IsActive != nil {
+		indicator.IsActive = *request.IsActive
+		h.logger.Info("Updating indicator active status",
+			zap.Int("id", id),
+			zap.Bool("is_active", indicator.IsActive))
+	} else {
+		// Fetch current indicator to get current active status
+		currentIndicator, err := h.indicatorService.GetIndicator(c.Request.Context(), id)
+		if err == nil && currentIndicator != nil {
+			indicator.IsActive = currentIndicator.IsActive
+		} else {
+			indicator.IsActive = true // Default to true if we can't get current value
+		}
 	}
 
 	// Update the indicator
