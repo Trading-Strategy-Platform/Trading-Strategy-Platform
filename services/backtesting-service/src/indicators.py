@@ -14,6 +14,7 @@ import psycopg2
 from typing import Dict, List, Any, Callable, Optional
 import talib
 from talib import abstract
+from src import db
 
 logger = logging.getLogger(__name__)
 

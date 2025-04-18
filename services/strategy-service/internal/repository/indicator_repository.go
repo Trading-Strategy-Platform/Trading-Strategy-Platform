@@ -59,15 +59,19 @@ func (r *IndicatorRepository) GetAll(ctx context.Context, searchTerm string, cat
 		var indicator model.TechnicalIndicator
 		var updatedAt sql.NullTime
 		var parametersJSON []byte
+		// Usar sql.NullString para campos que pueden ser NULL
+		var formulaNull sql.NullString
+		var minValueNull sql.NullFloat64
+		var maxValueNull sql.NullFloat64
 
 		err := rows.Scan(
 			&indicator.ID,
 			&indicator.Name,
 			&indicator.Description,
 			&indicator.Category,
-			&indicator.Formula,
-			&indicator.MinValue,
-			&indicator.MaxValue,
+			&formulaNull,
+			&minValueNull,
+			&maxValueNull,
 			&indicator.CreatedAt,
 			&updatedAt,
 			&parametersJSON,
@@ -75,6 +79,22 @@ func (r *IndicatorRepository) GetAll(ctx context.Context, searchTerm string, cat
 		if err != nil {
 			r.logger.Error("Failed to scan indicator row", zap.Error(err))
 			return nil, 0, err
+		}
+
+		// Asignar valores de los campos NULL
+		if formulaNull.Valid {
+			indicator.Formula = formulaNull.String
+		} else {
+			indicator.Formula = "" // Asignar string vacío cuando es NULL
+		}
+
+		// Asignar valores para min_value y max_value solo si son válidos
+		if minValueNull.Valid {
+			indicator.MinValue = &minValueNull.Float64
+		}
+
+		if maxValueNull.Valid {
+			indicator.MaxValue = &maxValueNull.Float64
 		}
 
 		// Convert nullable time
@@ -205,15 +225,19 @@ func (r *IndicatorRepository) GetByID(ctx context.Context, id int) (*model.Techn
 	var indicator model.TechnicalIndicator
 	var updatedAt sql.NullTime
 	var parametersJSON []byte
+	// Usar sql.NullString y sql.NullFloat64 para campos que pueden ser NULL
+	var formulaNull sql.NullString
+	var minValueNull sql.NullFloat64
+	var maxValueNull sql.NullFloat64
 
 	err = rows.Scan(
 		&indicator.ID,
 		&indicator.Name,
 		&indicator.Description,
 		&indicator.Category,
-		&indicator.Formula,
-		&indicator.MinValue,
-		&indicator.MaxValue,
+		&formulaNull,
+		&minValueNull,
+		&maxValueNull,
 		&indicator.CreatedAt,
 		&updatedAt,
 		&parametersJSON,
@@ -222,6 +246,22 @@ func (r *IndicatorRepository) GetByID(ctx context.Context, id int) (*model.Techn
 	if err != nil {
 		r.logger.Error("Failed to scan indicator row", zap.Error(err))
 		return nil, err
+	}
+
+	// Asignar valores de los campos NULL
+	if formulaNull.Valid {
+		indicator.Formula = formulaNull.String
+	} else {
+		indicator.Formula = "" // Asignar string vacío cuando es NULL
+	}
+
+	// Asignar valores para min_value y max_value solo si son válidos
+	if minValueNull.Valid {
+		indicator.MinValue = &minValueNull.Float64
+	}
+
+	if maxValueNull.Valid {
+		indicator.MaxValue = &maxValueNull.Float64
 	}
 
 	// Convert nullable time
@@ -649,7 +689,16 @@ func (r *IndicatorRepository) SyncIndicators(ctx context.Context, indicators []m
 		// Process parameters
 		for _, param := range indicator.Parameters {
 			paramType := param.Type
+
+			// IMPORTANTE: Truncar el valor por defecto si es demasiado largo
 			defaultValue := param.Default
+			if len(defaultValue) > 50 {
+				r.logger.Warn("Truncating parameter default value that exceeds 50 characters",
+					zap.String("param_name", param.Name),
+					zap.String("indicator_name", indicator.Name),
+					zap.Int("original_length", len(defaultValue)))
+				defaultValue = defaultValue[:50]
+			}
 
 			// Determine if this is an enum parameter
 			hasOptions := len(param.Options) > 0
@@ -669,7 +718,9 @@ func (r *IndicatorRepository) SyncIndicators(ctx context.Context, indicators []m
 				if err != nil {
 					r.logger.Error("Failed to update parameter",
 						zap.Error(err),
-						zap.String("name", param.Name))
+						zap.String("name", param.Name),
+						zap.String("default_value", defaultValue),
+						zap.Int("default_value_length", len(defaultValue)))
 					return 0, err
 				}
 			} else {
@@ -682,7 +733,9 @@ func (r *IndicatorRepository) SyncIndicators(ctx context.Context, indicators []m
 				if err != nil {
 					r.logger.Error("Failed to insert parameter",
 						zap.Error(err),
-						zap.String("name", param.Name))
+						zap.String("name", param.Name),
+						zap.String("default_value", defaultValue),
+						zap.Int("default_value_length", len(defaultValue)))
 					return 0, err
 				}
 			}
@@ -714,6 +767,14 @@ func (r *IndicatorRepository) SyncIndicators(ctx context.Context, indicators []m
 				for _, option := range param.Options {
 					optionStr := fmt.Sprintf("%v", option) // Convert to string
 
+					// Truncar el valor de enumeración si es demasiado largo (también varchar(50))
+					if len(optionStr) > 50 {
+						r.logger.Warn("Truncating enum value that exceeds 50 characters",
+							zap.String("original_value", optionStr),
+							zap.Int("original_length", len(optionStr)))
+						optionStr = optionStr[:50]
+					}
+
 					if _, enumExists := existingEnumMap[optionStr]; !enumExists {
 						// Insert new enum value
 						_, err = tx.ExecContext(ctx,
@@ -724,7 +785,8 @@ func (r *IndicatorRepository) SyncIndicators(ctx context.Context, indicators []m
 						if err != nil {
 							r.logger.Error("Failed to insert enum value",
 								zap.Error(err),
-								zap.String("value", optionStr))
+								zap.String("value", optionStr),
+								zap.Int("value_length", len(optionStr)))
 							return 0, err
 						}
 					}

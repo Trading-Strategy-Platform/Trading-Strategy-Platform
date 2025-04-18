@@ -524,7 +524,7 @@ func (s *IndicatorService) SyncIndicatorsFromBacktestingService(ctx context.Cont
 	backtestingServiceURL := os.Getenv("BACKTEST_SERVICE_URL")
 	if backtestingServiceURL == "" {
 		// Default base URL if environment variable not set
-		backtestingServiceURL = "http://backtest-service:5000" // Correct container name
+		backtestingServiceURL = "http://backtesting-service:5000" // Corregido: name es "backtesting-service", no "backtest-service"
 	}
 
 	// Add the endpoint path
@@ -551,19 +551,29 @@ func (s *IndicatorService) SyncIndicatorsFromBacktestingService(ctx context.Cont
 			zap.Error(err),
 			zap.String("url", indicatorsURL))
 
-		// Try the backup URL if the main one fails
-		backupURL := "http://backtest-service:5000/indicators"
-		s.logger.Info("Trying backup URL", zap.String("backup_url", backupURL))
-
-		req, err = http.NewRequestWithContext(ctx, http.MethodGet, backupURL, nil)
-		if err != nil {
-			s.logger.Error("Failed to create request for backup URL", zap.Error(err))
-			return 0, err
+		// Try alternative names with different formats
+		alternativeURLs := []string{
+			"http://backtest-service:5000/indicators",
+			"http://backtesting_service:5000/indicators",
+			"http://backtest_service:5000/indicators",
 		}
 
-		resp, err = client.Do(req)
-		if err != nil {
-			s.logger.Error("Failed to connect using backup URL", zap.Error(err))
+		for _, altURL := range alternativeURLs {
+			s.logger.Info("Trying alternative URL", zap.String("url", altURL))
+			altReq, err := http.NewRequestWithContext(ctx, http.MethodGet, altURL, nil)
+			if err != nil {
+				continue
+			}
+
+			altResp, err := client.Do(altReq)
+			if err == nil {
+				s.logger.Info("Successfully connected using alternative URL", zap.String("url", altURL))
+				resp = altResp
+				break
+			}
+		}
+
+		if resp == nil {
 			return 0, fmt.Errorf("all connection attempts to backtesting service failed: %w", err)
 		}
 	}
