@@ -385,8 +385,21 @@ func (s *IndicatorService) getParameterByID(ctx context.Context, id int) (*model
         WHERE id = $1
     `
 
-	var param model.IndicatorParameter
-	err := s.db.GetContext(ctx, &param, query, id)
+	// Use a temporary struct with sql.NullString for nullable string fields
+	type tempParameter struct {
+		ID            int             `db:"id"`
+		IndicatorID   int             `db:"indicator_id"`
+		ParameterName string          `db:"parameter_name"`
+		ParameterType string          `db:"parameter_type"`
+		IsRequired    bool            `db:"is_required"`
+		MinValue      sql.NullFloat64 `db:"min_value"`
+		MaxValue      sql.NullFloat64 `db:"max_value"`
+		DefaultValue  sql.NullString  `db:"default_value"`
+		Description   sql.NullString  `db:"description"`
+	}
+
+	var tempParam tempParameter
+	err := s.db.GetContext(ctx, &tempParam, query, id)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil // Parameter not found
@@ -395,7 +408,35 @@ func (s *IndicatorService) getParameterByID(ctx context.Context, id int) (*model
 		return nil, fmt.Errorf("database error: %w", err)
 	}
 
-	return &param, nil
+	// Convert the temporary struct to a model struct
+	param := &model.IndicatorParameter{
+		ID:            tempParam.ID,
+		IndicatorID:   tempParam.IndicatorID,
+		ParameterName: tempParam.ParameterName,
+		ParameterType: tempParam.ParameterType,
+		IsRequired:    tempParam.IsRequired,
+		EnumValues:    []model.ParameterEnumValue{},
+	}
+
+	// Only set string values if they are valid (not NULL)
+	if tempParam.DefaultValue.Valid {
+		param.DefaultValue = tempParam.DefaultValue.String
+	}
+	if tempParam.Description.Valid {
+		param.Description = tempParam.Description.String
+	}
+
+	// Set float values if they are valid
+	if tempParam.MinValue.Valid {
+		minValue := tempParam.MinValue.Float64
+		param.MinValue = &minValue
+	}
+	if tempParam.MaxValue.Valid {
+		maxValue := tempParam.MaxValue.Float64
+		param.MaxValue = &maxValue
+	}
+
+	return param, nil
 }
 
 // getEnumValuesByParameterID gets enum values for a parameter

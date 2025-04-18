@@ -369,12 +369,13 @@ def sync_indicators_to_db(indicators_data: List[Dict[str, Any]]) -> Dict[str, An
             indicator_name = indicator['name']
             
             if indicator_name in existing_indicators:
-                # Update existing indicator
+                # Update existing indicator - now setting is_active=False
                 indicator_id = existing_indicators[indicator_name]
                 cursor.execute(
-                    "UPDATE indicators SET description = %s, updated_at = NOW() WHERE id = %s",
-                    (indicator['description'], indicator_id)
+                    "UPDATE indicators SET description = %s, is_active = %s, updated_at = NOW() WHERE id = %s",
+                    (indicator['description'], False, indicator_id)
                 )
+                logger.info(f"Updated indicator {indicator_name} with is_active=False")
             else:
                 # Insert new indicator with is_active=FALSE
                 category = categorize_indicator(indicator_name)

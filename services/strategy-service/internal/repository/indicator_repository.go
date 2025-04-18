@@ -644,10 +644,10 @@ func (r *IndicatorRepository) SyncIndicators(ctx context.Context, indicators []m
 		indicatorID, exists := existingIndicatorMap[indicator.Name]
 
 		if exists {
-			// Update existing indicator
+			// Update existing indicator - now setting is_active=false
 			_, err = tx.ExecContext(ctx,
-				"UPDATE indicators SET description = $1, updated_at = NOW() WHERE id = $2",
-				indicator.Description, indicatorID)
+				"UPDATE indicators SET description = $1, is_active = $2, updated_at = NOW() WHERE id = $3",
+				indicator.Description, false, indicatorID)
 			if err != nil {
 				r.logger.Error("Failed to update indicator",
 					zap.Error(err),
@@ -655,15 +655,15 @@ func (r *IndicatorRepository) SyncIndicators(ctx context.Context, indicators []m
 				return 0, err
 			}
 		} else {
-			// Insert new indicator
+			// Insert new indicator - explicitly set is_active=false
 			// Categorize indicator based on name
 			category := categorizeIndicator(indicator.Name)
 
 			err = tx.QueryRowContext(ctx,
 				`INSERT INTO indicators 
-                (name, description, category, created_at, updated_at) 
-                VALUES ($1, $2, $3, NOW(), NOW()) RETURNING id`,
-				indicator.Name, indicator.Description, category).Scan(&indicatorID)
+                (name, description, category, is_active, created_at, updated_at) 
+                VALUES ($1, $2, $3, $4, NOW(), NOW()) RETURNING id`,
+				indicator.Name, indicator.Description, category, false).Scan(&indicatorID)
 			if err != nil {
 				r.logger.Error("Failed to insert indicator",
 					zap.Error(err),
