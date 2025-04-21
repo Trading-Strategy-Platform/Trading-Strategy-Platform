@@ -124,8 +124,6 @@ func (s *StrategyService) UpdateStrategy(ctx context.Context, id int, update *mo
 		return nil, errors.New("access denied")
 	}
 
-	// Comment out or remove this validation block:
-
 	// Update strategy using update_strategy function
 	err = s.strategyRepo.Update(ctx, id, update, userID)
 	if err != nil {
@@ -199,6 +197,47 @@ func (s *StrategyService) GetVersions(ctx context.Context, strategyID int, userI
 
 	// Get versions with pagination passed to repository
 	return s.versionRepo.GetVersions(ctx, strategyID, userID, page, limit)
+}
+
+// GetVersionById retrieves a specific version of a strategy
+func (s *StrategyService) GetVersionById(ctx context.Context, strategyID, version, userID int) (*model.StrategyVersion, error) {
+	// First check if strategy exists
+	strategy, err := s.strategyRepo.GetByID(ctx, strategyID)
+	if err != nil {
+		return nil, err
+	}
+
+	if strategy == nil {
+		return nil, errors.New("strategy not found")
+	}
+
+	// Check if user has access to the strategy
+	hasAccess := false
+
+	// If user owns the strategy
+	if strategy.UserID == userID {
+		hasAccess = true
+	} else {
+		// Check if user has purchased the strategy
+		strategies, _, err := s.strategyRepo.GetUserStrategies(ctx, userID, "", true, nil, 1, 100)
+		if err != nil {
+			return nil, err
+		}
+
+		for _, strat := range strategies {
+			if strat.ID == strategyID && strat.AccessType == "purchased" {
+				hasAccess = true
+				break
+			}
+		}
+	}
+
+	if !hasAccess {
+		return nil, errors.New("access denied")
+	}
+
+	// Retrieve the specific version
+	return s.versionRepo.GetVersion(ctx, strategyID, version)
 }
 
 // UpdateThumbnail updates a strategy's thumbnail URL

@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -174,8 +175,17 @@ func (h *StrategyHandler) UpdateStrategy(c *gin.Context) {
 		return
 	}
 
-	// No structure validation or manipulation at all
+	// Get the original strategy to compare versions later
+	originalStrategy, err := h.strategyService.GetStrategy(c.Request.Context(), id, userID.(int))
+	if err != nil {
+		h.logger.Error("Failed to get original strategy", zap.Error(err), zap.Int("id", id))
+		utils.SendErrorResponse(c, http.StatusBadRequest, err.Error())
+		return
+	}
 
+	originalVersion := originalStrategy.Version
+
+	// Update the strategy
 	strategy, err := h.strategyService.UpdateStrategy(c.Request.Context(), id, &request, userID.(int))
 	if err != nil {
 		h.logger.Error("Failed to update strategy", zap.Error(err), zap.Int("id", id))
@@ -183,7 +193,18 @@ func (h *StrategyHandler) UpdateStrategy(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"data": strategy})
+	// Check if a new version was created
+	versionCreated := strategy.Version > originalVersion
+
+	response := gin.H{
+		"data": strategy,
+	}
+
+	if versionCreated {
+		response["message"] = fmt.Sprintf("Strategy updated. New version created: v%d", strategy.Version)
+	}
+
+	c.JSON(http.StatusOK, response)
 }
 
 // DeleteStrategy handles deleting a strategy
@@ -240,6 +261,51 @@ func (h *StrategyHandler) GetVersions(c *gin.Context) {
 
 	// Use standardized pagination response
 	utils.SendPaginatedResponse(c, http.StatusOK, versions, total, params.Page, params.Limit)
+}
+
+// GetVersionById handles retrieving a specific version of a strategy
+// GET /api/v1/strategies/{id}/versions/{version}
+func (h *StrategyHandler) GetVersionById(c *gin.Context) {
+	// Parse strategy ID
+	idStr := c.Param("id")
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		utils.SendErrorResponse(c, http.StatusBadRequest, "Invalid strategy ID")
+		return
+	}
+
+	// Parse version number
+	versionStr := c.Param("version")
+	version, err := strconv.Atoi(versionStr)
+	if err != nil {
+		utils.SendErrorResponse(c, http.StatusBadRequest, "Invalid version number")
+		return
+	}
+
+	// Get user ID from context
+	userID, exists := c.Get("userID")
+	if !exists {
+		utils.SendErrorResponse(c, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	// Get the specific version
+	strategyVersion, err := h.strategyService.GetVersionById(c.Request.Context(), id, version, userID.(int))
+	if err != nil {
+		h.logger.Error("Failed to get strategy version",
+			zap.Error(err),
+			zap.Int("strategy_id", id),
+			zap.Int("version", version))
+		utils.SendErrorResponse(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	if strategyVersion == nil {
+		utils.SendErrorResponse(c, http.StatusNotFound, "Strategy version not found or not accessible")
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"data": strategyVersion})
 }
 
 // UpdateActiveVersion handles updating the active version of a strategy for a user

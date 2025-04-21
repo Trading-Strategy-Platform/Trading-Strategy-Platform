@@ -223,7 +223,9 @@ func (r *StrategyRepository) Update(ctx context.Context, id int, update *model.S
 
 	// Generate change notes based on what's being updated
 	changeNotes := "Updated strategy"
-	if update.Structure != nil {
+	if update.ChangeNotes != nil && *update.ChangeNotes != "" {
+		changeNotes = *update.ChangeNotes
+	} else if update.Structure != nil {
 		changeNotes = "Updated strategy structure"
 	}
 
