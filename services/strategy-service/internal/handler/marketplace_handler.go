@@ -7,6 +7,7 @@ import (
 
 	"services/strategy-service/internal/model"
 	"services/strategy-service/internal/service"
+	"services/strategy-service/internal/utils"
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -29,9 +30,8 @@ func NewMarketplaceHandler(marketplaceService *service.MarketplaceService, logge
 // ListListings handles listing marketplace listings
 // GET /api/v1/marketplace
 func (h *MarketplaceHandler) ListListings(c *gin.Context) {
-	// Parse pagination parameters
-	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
+	// Parse pagination parameters using the utility function
+	params := utils.ParsePaginationParams(c, 20, 100) // default limit: 20, max limit: 100
 
 	// Parse search term
 	searchTerm := c.Query("search")
@@ -102,25 +102,18 @@ func (h *MarketplaceHandler) ListListings(c *gin.Context) {
 		tags,
 		minRating,
 		sortBy,
-		page,
-		limit,
+		params.Page,
+		params.Limit,
 	)
 
 	if err != nil {
 		h.logger.Error("Failed to get marketplace listings", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch listings"})
+		utils.SendErrorResponse(c, http.StatusInternalServerError, "Failed to fetch listings")
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"listings": listings,
-		"meta": gin.H{
-			"total": total,
-			"page":  page,
-			"limit": limit,
-			"pages": (total + limit - 1) / limit,
-		},
-	})
+	// Use standardized pagination response
+	utils.SendPaginatedResponse(c, http.StatusOK, listings, total, params.Page, params.Limit)
 }
 
 // CreateListing handles creating a new marketplace listing
@@ -128,7 +121,7 @@ func (h *MarketplaceHandler) ListListings(c *gin.Context) {
 func (h *MarketplaceHandler) CreateListing(c *gin.Context) {
 	var request model.MarketplaceCreate
 	if err := c.ShouldBindJSON(&request); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		utils.SendErrorResponse(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -138,18 +131,18 @@ func (h *MarketplaceHandler) CreateListing(c *gin.Context) {
 
 	userID, exists := c.Get("userID")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		utils.SendErrorResponse(c, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
 
 	listing, err := h.marketplaceService.CreateListing(c.Request.Context(), &request, userID.(int))
 	if err != nil {
 		h.logger.Error("Failed to create listing", zap.Error(err))
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		utils.SendErrorResponse(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	c.JSON(http.StatusCreated, listing)
+	c.JSON(http.StatusCreated, gin.H{"data": listing})
 }
 
 // DeleteListing handles deleting a marketplace listing
@@ -158,20 +151,20 @@ func (h *MarketplaceHandler) DeleteListing(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.Atoi(idStr)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid listing ID"})
+		utils.SendErrorResponse(c, http.StatusBadRequest, "Invalid listing ID")
 		return
 	}
 
 	userID, exists := c.Get("userID")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		utils.SendErrorResponse(c, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
 
 	err = h.marketplaceService.DeleteListing(c.Request.Context(), id, userID.(int))
 	if err != nil {
 		h.logger.Error("Failed to delete listing", zap.Error(err), zap.Int("id", id))
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		utils.SendErrorResponse(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -184,24 +177,24 @@ func (h *MarketplaceHandler) PurchaseStrategy(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.Atoi(idStr)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid listing ID"})
+		utils.SendErrorResponse(c, http.StatusBadRequest, "Invalid listing ID")
 		return
 	}
 
 	userID, exists := c.Get("userID")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		utils.SendErrorResponse(c, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
 
 	purchase, err := h.marketplaceService.PurchaseStrategy(c.Request.Context(), id, userID.(int))
 	if err != nil {
 		h.logger.Error("Failed to purchase strategy", zap.Error(err), zap.Int("listing_id", id))
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		utils.SendErrorResponse(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	c.JSON(http.StatusOK, purchase)
+	c.JSON(http.StatusOK, gin.H{"data": purchase})
 }
 
 // CancelSubscription handles canceling a marketplace subscription
@@ -210,20 +203,20 @@ func (h *MarketplaceHandler) CancelSubscription(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.Atoi(idStr)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid purchase ID"})
+		utils.SendErrorResponse(c, http.StatusBadRequest, "Invalid purchase ID")
 		return
 	}
 
 	userID, exists := c.Get("userID")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		utils.SendErrorResponse(c, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
 
 	err = h.marketplaceService.CancelSubscription(c.Request.Context(), id, userID.(int))
 	if err != nil {
 		h.logger.Error("Failed to cancel subscription", zap.Error(err), zap.Int("purchase_id", id))
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		utils.SendErrorResponse(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -236,42 +229,28 @@ func (h *MarketplaceHandler) GetReviews(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.Atoi(idStr)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid listing ID"})
+		utils.SendErrorResponse(c, http.StatusBadRequest, "Invalid listing ID")
 		return
 	}
 
-	// Parse pagination parameters
-	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "10"))
-	if page < 1 {
-		page = 1
-	}
-	if limit < 1 || limit > 50 {
-		limit = 10
-	}
+	// Parse pagination parameters using the utility function
+	params := utils.ParsePaginationParams(c, 10, 50) // default limit: 10, max limit: 50
 
 	reviews, total, err := h.marketplaceService.GetReviews(
 		c.Request.Context(),
 		id,
-		page,
-		limit,
+		params.Page,
+		params.Limit,
 	)
 
 	if err != nil {
 		h.logger.Error("Failed to get reviews", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch reviews"})
+		utils.SendErrorResponse(c, http.StatusInternalServerError, "Failed to fetch reviews")
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"reviews": reviews,
-		"meta": gin.H{
-			"total": total,
-			"page":  page,
-			"limit": limit,
-			"pages": (total + limit - 1) / limit,
-		},
-	})
+	// Use standardized pagination response
+	utils.SendPaginatedResponse(c, http.StatusOK, reviews, total, params.Page, params.Limit)
 }
 
 // CreateReview handles creating a review for a purchased strategy
@@ -280,7 +259,7 @@ func (h *MarketplaceHandler) CreateReview(c *gin.Context) {
 	idStr := c.Param("id")
 	marketplaceID, err := strconv.Atoi(idStr)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid listing ID"})
+		utils.SendErrorResponse(c, http.StatusBadRequest, "Invalid listing ID")
 		return
 	}
 
@@ -290,13 +269,13 @@ func (h *MarketplaceHandler) CreateReview(c *gin.Context) {
 	}
 
 	if err := c.ShouldBindJSON(&request); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		utils.SendErrorResponse(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
 	userID, exists := c.Get("userID")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		utils.SendErrorResponse(c, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
 
@@ -309,11 +288,11 @@ func (h *MarketplaceHandler) CreateReview(c *gin.Context) {
 	review, err := h.marketplaceService.CreateReview(c.Request.Context(), reviewCreate, userID.(int))
 	if err != nil {
 		h.logger.Error("Failed to create review", zap.Error(err))
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		utils.SendErrorResponse(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	c.JSON(http.StatusCreated, review)
+	c.JSON(http.StatusCreated, gin.H{"data": review})
 }
 
 // UpdateReview handles updating a review
@@ -322,7 +301,7 @@ func (h *MarketplaceHandler) UpdateReview(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.Atoi(idStr)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid review ID"})
+		utils.SendErrorResponse(c, http.StatusBadRequest, "Invalid review ID")
 		return
 	}
 
@@ -332,13 +311,13 @@ func (h *MarketplaceHandler) UpdateReview(c *gin.Context) {
 	}
 
 	if err := c.ShouldBindJSON(&request); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		utils.SendErrorResponse(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
 	userID, exists := c.Get("userID")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		utils.SendErrorResponse(c, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
 
@@ -352,7 +331,7 @@ func (h *MarketplaceHandler) UpdateReview(c *gin.Context) {
 
 	if err != nil {
 		h.logger.Error("Failed to update review", zap.Error(err), zap.Int("review_id", id))
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		utils.SendErrorResponse(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -365,20 +344,20 @@ func (h *MarketplaceHandler) DeleteReview(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.Atoi(idStr)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid review ID"})
+		utils.SendErrorResponse(c, http.StatusBadRequest, "Invalid review ID")
 		return
 	}
 
 	userID, exists := c.Get("userID")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		utils.SendErrorResponse(c, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
 
 	err = h.marketplaceService.DeleteReview(c.Request.Context(), id, userID.(int))
 	if err != nil {
 		h.logger.Error("Failed to delete review", zap.Error(err), zap.Int("review_id", id))
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		utils.SendErrorResponse(c, http.StatusBadRequest, err.Error())
 		return
 	}
 

@@ -2,7 +2,7 @@
 -- MARKET DATA (CANDLES) FUNCTIONS
 -- ==========================================
 
--- Fixed get_candles function with proper dollar quoting
+-- Fixed get_candles function with proper interval casting
 CREATE OR REPLACE FUNCTION get_candles(
     p_symbol_id INT,
     p_timeframe timeframe_type,
@@ -49,7 +49,7 @@ BEGIN
         RETURN QUERY
         SELECT 
             c.symbol_id,
-            time_bucket(interval_minutes || ' minutes', c.candle_time) AS candle_time,
+            time_bucket((interval_minutes || ' minutes')::interval, c.candle_time) AS candle_time,
             FIRST(c.open, c.candle_time) AS open,
             MAX(c.high) AS high,
             MIN(c.low) AS low,
@@ -58,7 +58,7 @@ BEGIN
         FROM candles c
         WHERE c.symbol_id = p_symbol_id
           AND c.candle_time BETWEEN p_start_time AND p_end_time
-        GROUP BY c.symbol_id, time_bucket(interval_minutes || ' minutes', c.candle_time)
+        GROUP BY c.symbol_id, time_bucket((interval_minutes || ' minutes')::interval, c.candle_time)
         ORDER BY candle_time DESC
         LIMIT p_limit;
     END IF;

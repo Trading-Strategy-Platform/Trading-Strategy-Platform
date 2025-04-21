@@ -31,9 +31,27 @@ func NewIndicatorRepository(db *sqlx.DB, logger *zap.Logger) *IndicatorRepositor
 }
 
 // GetAll retrieves all indicators with parameters and enum values using get_indicators function
-func (r *IndicatorRepository) GetAll(ctx context.Context, searchTerm string, categories []string, active *bool, page, limit int) ([]model.TechnicalIndicator, int, error) {
-	// Use the get_indicators function directly
-	query := `SELECT * FROM get_indicators($1, $2, $3)`
+// isAdmin parameter controls visibility of parameters
+func (r *IndicatorRepository) GetAll(ctx context.Context, searchTerm string, categories []string, active *bool, page, limit int, isAdmin bool) ([]model.TechnicalIndicator, int, error) {
+	// First, get total count with a separate COUNT query
+	countQuery := `
+		SELECT COUNT(*) 
+		FROM indicators i
+		WHERE 
+			($1::text IS NULL OR i.name ILIKE '%' || $1 || '%' OR i.description ILIKE '%' || $1 || '%')
+			AND ($2::text[] IS NULL OR array_length($2, 1) IS NULL OR i.category = ANY($2))
+			AND ($3::boolean IS NULL OR i.is_active = $3)
+	`
+
+	var totalCount int
+	err := r.db.GetContext(ctx, &totalCount, countQuery, searchTerm, pq.Array(categories), active)
+	if err != nil {
+		r.logger.Error("Failed to count indicators", zap.Error(err))
+		return nil, 0, err
+	}
+
+	// Use the updated get_indicators function with isAdmin parameter
+	query := `SELECT * FROM get_indicators($1, $2, $3, $4)`
 
 	var args []interface{}
 	args = append(args, searchTerm)
@@ -48,6 +66,9 @@ func (r *IndicatorRepository) GetAll(ctx context.Context, searchTerm string, cat
 	// Handle active filter
 	args = append(args, active)
 
+	// Add isAdmin parameter
+	args = append(args, isAdmin)
+
 	// Execute query
 	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -57,7 +78,7 @@ func (r *IndicatorRepository) GetAll(ctx context.Context, searchTerm string, cat
 	defer rows.Close()
 
 	// Scan rows into indicator objects
-	var allIndicators []model.TechnicalIndicator
+	var indicators []model.TechnicalIndicator
 	for rows.Next() {
 		var indicator model.TechnicalIndicator
 		var updatedAt sql.NullTime
@@ -106,7 +127,7 @@ func (r *IndicatorRepository) GetAll(ctx context.Context, searchTerm string, cat
 			indicator.UpdatedAt = &updatedAt.Time
 		}
 
-		// Parse parameters from JSON - now we expect a direct JSON array instead of an array type
+		// Parse parameters from JSON
 		indicator.Parameters = []model.IndicatorParameter{} // Initialize with empty array
 
 		if len(parametersJSON) > 0 && string(parametersJSON) != "[]" && string(parametersJSON) != "null" {
@@ -130,6 +151,7 @@ func (r *IndicatorRepository) GetAll(ctx context.Context, searchTerm string, cat
 					MaxValue     *float64        `json:"max_value,omitempty"`
 					DefaultValue string          `json:"default_value,omitempty"`
 					Description  string          `json:"description,omitempty"`
+					IsPublic     bool            `json:"is_public"`
 					EnumValues   json.RawMessage `json:"enum_values,omitempty"`
 				}
 
@@ -152,6 +174,7 @@ func (r *IndicatorRepository) GetAll(ctx context.Context, searchTerm string, cat
 					MaxValue:      param.MaxValue,
 					DefaultValue:  param.DefaultValue,
 					Description:   param.Description,
+					IsPublic:      param.IsPublic,
 					EnumValues:    []model.ParameterEnumValue{},
 				}
 
@@ -183,7 +206,7 @@ func (r *IndicatorRepository) GetAll(ctx context.Context, searchTerm string, cat
 			}
 		}
 
-		allIndicators = append(allIndicators, indicator)
+		indicators = append(indicators, indicator)
 	}
 
 	if err = rows.Err(); err != nil {
@@ -191,30 +214,16 @@ func (r *IndicatorRepository) GetAll(ctx context.Context, searchTerm string, cat
 		return nil, 0, err
 	}
 
-	// Get total count
-	total := len(allIndicators)
-
-	// Apply pagination
-	start := (page - 1) * limit
-	end := start + limit
-
-	if start >= total {
-		return []model.TechnicalIndicator{}, total, nil
-	}
-
-	if end > total {
-		end = total
-	}
-
-	return allIndicators[start:end], total, nil
+	return indicators, totalCount, nil
 }
 
 // GetByID retrieves an indicator by ID with parameters and enum values
-func (r *IndicatorRepository) GetByID(ctx context.Context, id int) (*model.TechnicalIndicator, error) {
-	// Use the get_indicator_by_id function
-	query := `SELECT * FROM get_indicator_by_id($1)`
+// isAdmin parameter controls visibility of parameters
+func (r *IndicatorRepository) GetByID(ctx context.Context, id int, isAdmin bool) (*model.TechnicalIndicator, error) {
+	// Use the updated get_indicator_by_id function with isAdmin parameter
+	query := `SELECT * FROM get_indicator_by_id($1, $2)`
 
-	rows, err := r.db.QueryContext(ctx, query, id)
+	rows, err := r.db.QueryContext(ctx, query, id, isAdmin)
 	if err != nil {
 		r.logger.Error("Failed to execute get indicator by ID query", zap.Error(err))
 		return nil, err
@@ -253,14 +262,14 @@ func (r *IndicatorRepository) GetByID(ctx context.Context, id int) (*model.Techn
 		return nil, err
 	}
 
-	// Asignar valores de los campos NULL
+	// Handle NULL fields
 	if formulaNull.Valid {
 		indicator.Formula = formulaNull.String
 	} else {
-		indicator.Formula = "" // Asignar string vacío cuando es NULL
+		indicator.Formula = ""
 	}
 
-	// Asignar valores para min_value y max_value solo si son válidos
+	// Assign values for min_value and max_value only if valid
 	if minValueNull.Valid {
 		indicator.MinValue = &minValueNull.Float64
 	}
@@ -277,7 +286,7 @@ func (r *IndicatorRepository) GetByID(ctx context.Context, id int) (*model.Techn
 	// Initialize parameters with empty array
 	indicator.Parameters = []model.IndicatorParameter{}
 
-	// Parse parameters from JSON - now we expect a direct JSON array
+	// Parse parameters from JSON
 	if len(parametersJSON) > 0 && string(parametersJSON) != "[]" && string(parametersJSON) != "null" {
 		// Parse the JSON array of parameters
 		var paramsArray []json.RawMessage
@@ -299,6 +308,7 @@ func (r *IndicatorRepository) GetByID(ctx context.Context, id int) (*model.Techn
 				MaxValue     *float64        `json:"max_value,omitempty"`
 				DefaultValue string          `json:"default_value,omitempty"`
 				Description  string          `json:"description,omitempty"`
+				IsPublic     bool            `json:"is_public"`
 				EnumValues   json.RawMessage `json:"enum_values,omitempty"`
 			}
 
@@ -321,6 +331,7 @@ func (r *IndicatorRepository) GetByID(ctx context.Context, id int) (*model.Techn
 				MaxValue:      param.MaxValue,
 				DefaultValue:  param.DefaultValue,
 				Description:   param.Description,
+				IsPublic:      param.IsPublic,
 				EnumValues:    []model.ParameterEnumValue{},
 			}
 
@@ -373,7 +384,7 @@ func (r *IndicatorRepository) Create(ctx context.Context, indicator *model.Techn
 		indicator.Formula,
 		indicator.MinValue,
 		indicator.MaxValue,
-		indicator.IsActive, // Added the is_active field
+		indicator.IsActive,
 		time.Now(),
 	).Scan(&id)
 
@@ -390,9 +401,9 @@ func (r *IndicatorRepository) CreateParameter(ctx context.Context, parameter *mo
 	query := `
 		INSERT INTO indicator_parameters (
 			indicator_id, parameter_name, parameter_type, is_required, 
-			min_value, max_value, default_value, description
+			min_value, max_value, default_value, description, is_public
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		RETURNING id
 	`
 
@@ -408,6 +419,7 @@ func (r *IndicatorRepository) CreateParameter(ctx context.Context, parameter *mo
 		parameter.MaxValue,
 		parameter.DefaultValue,
 		parameter.Description,
+		parameter.IsPublic,
 	).Scan(&id)
 
 	if err != nil {
@@ -517,7 +529,7 @@ func (r *IndicatorRepository) Update(ctx context.Context, id int, indicator *mod
 	return nil
 }
 
-// Delete a parameter by ID
+// DeleteParameter deletes a parameter by ID
 func (r *IndicatorRepository) DeleteParameter(ctx context.Context, id int) error {
 	query := `SELECT delete_parameter($1)`
 
@@ -535,15 +547,24 @@ func (r *IndicatorRepository) DeleteParameter(ctx context.Context, id int) error
 	return nil
 }
 
-// Update a parameter
+// UpdateParameter updates a parameter with the is_public flag
 func (r *IndicatorRepository) UpdateParameter(ctx context.Context, id int, param *model.IndicatorParameter) error {
-	query := `SELECT update_parameter($1, $2, $3, $4, $5, $6, $7, $8)`
+	query := `
+		UPDATE indicator_parameters 
+		SET parameter_name = $1, 
+			parameter_type = $2, 
+			is_required = $3, 
+			min_value = $4, 
+			max_value = $5, 
+			default_value = $6, 
+			description = $7, 
+			is_public = $8
+		WHERE id = $9
+	`
 
-	var success bool
-	err := r.db.QueryRowContext(
+	_, err := r.db.ExecContext(
 		ctx,
 		query,
-		id,
 		param.ParameterName,
 		param.ParameterType,
 		param.IsRequired,
@@ -551,21 +572,19 @@ func (r *IndicatorRepository) UpdateParameter(ctx context.Context, id int, param
 		param.MaxValue,
 		param.DefaultValue,
 		param.Description,
-	).Scan(&success)
+		param.IsPublic,
+		id,
+	)
 
 	if err != nil {
 		r.logger.Error("Failed to update parameter", zap.Error(err), zap.Int("id", id))
 		return err
 	}
 
-	if !success {
-		return errors.New("parameter not found")
-	}
-
 	return nil
 }
 
-// Delete an enum value by ID
+// DeleteEnumValue deletes an enum value by ID
 func (r *IndicatorRepository) DeleteEnumValue(ctx context.Context, id int) error {
 	query := `SELECT delete_enum_value($1)`
 
@@ -583,7 +602,7 @@ func (r *IndicatorRepository) DeleteEnumValue(ctx context.Context, id int) error
 	return nil
 }
 
-// Update an enum value
+// UpdateEnumValue updates an enum value
 func (r *IndicatorRepository) UpdateEnumValue(ctx context.Context, id int, enumVal *model.ParameterEnumValue) error {
 	query := `SELECT update_enum_value($1, $2, $3)`
 
@@ -606,6 +625,87 @@ func (r *IndicatorRepository) UpdateEnumValue(ctx context.Context, id int, enumV
 	}
 
 	return nil
+}
+
+// GetParameterByID retrieves a single parameter by its ID
+func (r *IndicatorRepository) GetParameterByID(ctx context.Context, id int) (*model.IndicatorParameter, error) {
+	query := `
+		SELECT id, indicator_id, parameter_name, parameter_type, is_required, 
+			min_value, max_value, default_value, description, is_public
+		FROM indicator_parameters
+		WHERE id = $1
+	`
+
+	var param model.IndicatorParameter
+	var minValueNull sql.NullFloat64
+	var maxValueNull sql.NullFloat64
+	var defaultValueNull sql.NullString
+	var descriptionNull sql.NullString
+
+	err := r.db.QueryRowContext(ctx, query, id).Scan(
+		&param.ID,
+		&param.IndicatorID,
+		&param.ParameterName,
+		&param.ParameterType,
+		&param.IsRequired,
+		&minValueNull,
+		&maxValueNull,
+		&defaultValueNull,
+		&descriptionNull,
+		&param.IsPublic,
+	)
+
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil // Parameter not found
+		}
+		r.logger.Error("Failed to get parameter by ID", zap.Error(err), zap.Int("id", id))
+		return nil, err
+	}
+
+	// Handle nullable fields
+	if minValueNull.Valid {
+		param.MinValue = &minValueNull.Float64
+	}
+	if maxValueNull.Valid {
+		param.MaxValue = &maxValueNull.Float64
+	}
+	if defaultValueNull.Valid {
+		param.DefaultValue = defaultValueNull.String
+	}
+	if descriptionNull.Valid {
+		param.Description = descriptionNull.String
+	}
+
+	// Get enum values for this parameter
+	enumValues, err := r.GetEnumValuesByParameterID(ctx, id)
+	if err != nil {
+		r.logger.Warn("Failed to get enum values for parameter",
+			zap.Error(err),
+			zap.Int("parameter_id", id))
+	} else {
+		param.EnumValues = enumValues
+	}
+
+	return &param, nil
+}
+
+// GetEnumValuesByParameterID retrieves all enum values for a parameter
+func (r *IndicatorRepository) GetEnumValuesByParameterID(ctx context.Context, parameterID int) ([]model.ParameterEnumValue, error) {
+	query := `
+		SELECT id, parameter_id, enum_value, display_name
+		FROM parameter_enum_values
+		WHERE parameter_id = $1
+		ORDER BY id
+	`
+
+	var enumValues []model.ParameterEnumValue
+	err := r.db.SelectContext(ctx, &enumValues, query, parameterID)
+	if err != nil {
+		return nil, err
+	}
+
+	return enumValues, nil
 }
 
 // SyncIndicators syncs indicators from the provided list
@@ -719,9 +819,9 @@ func (r *IndicatorRepository) SyncIndicators(ctx context.Context, indicators []m
 				// Update existing parameter
 				_, err = tx.ExecContext(ctx,
 					`UPDATE indicator_parameters 
-                     SET parameter_type = $1, default_value = $2 
-                     WHERE id = $3`,
-					paramType, defaultValue, paramID)
+                     SET parameter_type = $1, default_value = $2, is_public = $3 
+                     WHERE id = $4`,
+					paramType, defaultValue, true, paramID)
 				if err != nil {
 					r.logger.Error("Failed to update parameter",
 						zap.Error(err),
@@ -731,12 +831,12 @@ func (r *IndicatorRepository) SyncIndicators(ctx context.Context, indicators []m
 					return 0, err
 				}
 			} else {
-				// Insert new parameter
+				// Insert new parameter - default to public=true
 				err = tx.QueryRowContext(ctx,
 					`INSERT INTO indicator_parameters 
-                     (indicator_id, parameter_name, parameter_type, default_value, is_required) 
-                     VALUES ($1, $2, $3, $4, $5) RETURNING id`,
-					indicatorID, param.Name, paramType, defaultValue, true).Scan(&paramID)
+                     (indicator_id, parameter_name, parameter_type, default_value, is_required, is_public) 
+                     VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+					indicatorID, param.Name, paramType, defaultValue, true, true).Scan(&paramID)
 				if err != nil {
 					r.logger.Error("Failed to insert parameter",
 						zap.Error(err),

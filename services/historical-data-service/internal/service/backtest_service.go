@@ -51,7 +51,6 @@ func NewBacktestService(
 	}
 }
 
-// CreateBacktest creates a new backtest for a strategy
 func (s *BacktestService) CreateBacktest(
 	ctx context.Context,
 	request *model.BacktestRequest,
@@ -92,13 +91,20 @@ func (s *BacktestService) CreateBacktest(
 			return 0, err
 		}
 
-		if request.StartDate.Before(startDate) || request.EndDate.After(endDate) {
+		// Convert timestamps to date-only comparison by truncating time parts
+		requestStartDay := time.Date(request.StartDate.Year(), request.StartDate.Month(), request.StartDate.Day(), 0, 0, 0, 0, time.UTC)
+		requestEndDay := time.Date(request.EndDate.Year(), request.EndDate.Month(), request.EndDate.Day(), 23, 59, 59, 999999999, time.UTC)
+		availableStartDay := time.Date(startDate.Year(), startDate.Month(), startDate.Day(), 0, 0, 0, 0, time.UTC)
+		availableEndDay := time.Date(endDate.Year(), endDate.Month(), endDate.Day(), 23, 59, 59, 999999999, time.UTC)
+
+		// Add a small buffer (1 day) to account for potential timezone differences
+		if requestStartDay.AddDate(0, 0, -1).After(availableStartDay) || requestEndDay.AddDate(0, 0, 1).Before(availableEndDay) {
 			return 0, fmt.Errorf("requested date range (%s to %s) is outside available data range for symbol ID %d (%s to %s)",
-				request.StartDate.Format("2006-01-02"),
-				request.EndDate.Format("2006-01-02"),
+				requestStartDay.Format("2006-01-02"),
+				requestEndDay.Format("2006-01-02"),
 				symbolID,
-				startDate.Format("2006-01-02"),
-				endDate.Format("2006-01-02"))
+				availableStartDay.Format("2006-01-02"),
+				availableEndDay.Format("2006-01-02"))
 		}
 	}
 
@@ -148,6 +154,23 @@ func (s *BacktestService) runBacktest(
 	// Create a new context for background processing
 	ctx := context.Background()
 
+	// Added safety check for nil services
+	if s.strategyClient == nil {
+		s.logger.Error("Strategy client is nil",
+			zap.Int("backtestID", backtestID),
+			zap.Int("strategyID", request.StrategyID))
+		s.failBacktest(ctx, backtestID, "Internal service error: strategy client unavailable")
+		return
+	}
+
+	if s.backtestClient == nil {
+		s.logger.Error("Backtest client is nil",
+			zap.Int("backtestID", backtestID),
+			zap.Int("strategyID", request.StrategyID))
+		s.failBacktest(ctx, backtestID, "Internal service error: backtest client unavailable")
+		return
+	}
+
 	// Get strategy structure (either latest or specific version)
 	var strategyStructure json.RawMessage
 	var strategyVersion int
@@ -164,6 +187,10 @@ func (s *BacktestService) runBacktest(
 			s.failBacktest(ctx, backtestID, fmt.Sprintf("Failed to get strategy version: %v", err))
 			return
 		}
+		if version == nil {
+			s.failBacktest(ctx, backtestID, "Strategy version not found")
+			return
+		}
 		strategyStructure = version.Structure
 		strategyVersion = version.Version
 	} else {
@@ -173,8 +200,18 @@ func (s *BacktestService) runBacktest(
 			s.failBacktest(ctx, backtestID, fmt.Sprintf("Failed to get strategy: %v", err))
 			return
 		}
+		if strategy == nil {
+			s.failBacktest(ctx, backtestID, "Strategy not found")
+			return
+		}
 		strategyStructure = strategy.Structure
 		strategyVersion = strategy.Version
+	}
+
+	// Make sure the strategy structure is not nil
+	if strategyStructure == nil {
+		s.failBacktest(ctx, backtestID, "Strategy structure is empty")
+		return
 	}
 
 	// Validate strategy structure
@@ -335,9 +372,18 @@ func (s *BacktestService) runBacktest(
 
 // failBacktest marks a backtest as failed with an error message
 func (s *BacktestService) failBacktest(ctx context.Context, backtestID int, errorMessage string) {
+	if s.backtestRepo == nil {
+		if s.logger != nil {
+			s.logger.Error("Cannot fail backtest: backtest repository is nil",
+				zap.Int("backtestID", backtestID),
+				zap.String("errorMessage", errorMessage))
+		}
+		return
+	}
+
 	// Update all runs for this backtest to 'failed'
 	err := s.backtestRepo.UpdateBacktestRunsStatusBulk(ctx, backtestID, "failed")
-	if err != nil {
+	if err != nil && s.logger != nil {
 		s.logger.Error("Failed to mark backtest runs as failed",
 			zap.Error(err),
 			zap.Int("backtestID", backtestID))
@@ -345,7 +391,7 @@ func (s *BacktestService) failBacktest(ctx context.Context, backtestID int, erro
 
 	// Update backtest status to 'failed'
 	err = s.backtestRepo.UpdateBacktestStatus(ctx, backtestID, "failed", errorMessage)
-	if err != nil {
+	if err != nil && s.logger != nil {
 		s.logger.Error("Failed to mark backtest as failed",
 			zap.Error(err),
 			zap.Int("backtestID", backtestID))

@@ -27,12 +27,15 @@ func NewStrategyRepository(db *sqlx.DB, logger *zap.Logger) *StrategyRepository 
 	}
 }
 
-// GetUserStrategies retrieves strategies using the get_my_strategies function
+// GetUserStrategies retrieves strategies with proper database-level pagination
 func (r *StrategyRepository) GetUserStrategies(ctx context.Context, userID int, searchTerm string, purchasedOnly bool, tags []int, page, limit int) ([]model.ExtendedStrategy, int, error) {
-	// Query using get_my_strategies function
-	query := `SELECT * FROM get_my_strategies($1, $2, $3, $4)`
-
-	var allStrategies []model.ExtendedStrategy
+	// First, count total records with a modified version of get_my_strategies
+	// that returns only the count without full data
+	countQuery := `
+		SELECT COUNT(*) FROM (
+			SELECT * FROM get_my_strategies($1, $2, $3, $4)
+		) AS total_count
+	`
 
 	// Ensure tags is initialized to empty array if nil
 	tagsParam := pq.Array(tags)
@@ -40,7 +43,8 @@ func (r *StrategyRepository) GetUserStrategies(ctx context.Context, userID int, 
 		tagsParam = pq.Array([]int{})
 	}
 
-	err := r.db.SelectContext(ctx, &allStrategies, query,
+	var totalCount int
+	err := r.db.GetContext(ctx, &totalCount, countQuery,
 		userID,
 		searchTerm,
 		purchasedOnly,
@@ -48,29 +52,40 @@ func (r *StrategyRepository) GetUserStrategies(ctx context.Context, userID int, 
 	)
 
 	if err != nil {
+		r.logger.Error("Failed to count user strategies", zap.Error(err))
+		return nil, 0, err
+	}
+
+	// Now get the actual paginated data
+	// Calculate offset
+	offset := (page - 1) * limit
+
+	// Use the same function, but now apply LIMIT and OFFSET in SQL
+	query := `
+		SELECT * FROM (
+			SELECT * FROM get_my_strategies($1, $2, $3, $4)
+		) AS filtered_strategies
+		ORDER BY created_at DESC
+		LIMIT $5 OFFSET $6
+	`
+
+	var strategies []model.ExtendedStrategy
+	err = r.db.SelectContext(ctx, &strategies, query,
+		userID,
+		searchTerm,
+		purchasedOnly,
+		tagsParam,
+		limit,
+		offset,
+	)
+
+	if err != nil {
 		r.logger.Error("Failed to get user strategies", zap.Error(err))
 		return nil, 0, err
 	}
 
-	// Get total count before pagination
-	total := len(allStrategies)
-
-	// Apply pagination
-	start := (page - 1) * limit
-	end := start + limit
-
-	if start >= total {
-		return []model.ExtendedStrategy{}, total, nil
-	}
-
-	if end > total {
-		end = total
-	}
-
-	paginatedStrategies := allStrategies[start:end]
-
 	// Fetch tags for each strategy in the paginated results
-	for i, strategy := range paginatedStrategies {
+	for i, strategy := range strategies {
 		if len(strategy.TagIDs) > 0 {
 			tags, err := r.getTagsByIDs(ctx, strategy.TagIDs)
 			if err != nil {
@@ -79,12 +94,12 @@ func (r *StrategyRepository) GetUserStrategies(ctx context.Context, userID int, 
 					zap.Int("strategy_id", strategy.ID),
 				)
 			} else {
-				paginatedStrategies[i].Tags = tags
+				strategies[i].Tags = tags
 			}
 		}
 	}
 
-	return paginatedStrategies, total, nil
+	return strategies, totalCount, nil
 }
 
 // Create adds a new strategy using add_strategy function

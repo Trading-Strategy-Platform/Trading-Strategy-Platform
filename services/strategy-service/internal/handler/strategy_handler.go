@@ -1,4 +1,3 @@
-// services/strategy-service/internal/handler/strategy_handler.go
 package handler
 
 import (
@@ -9,6 +8,7 @@ import (
 
 	"services/strategy-service/internal/model"
 	"services/strategy-service/internal/service"
+	"services/strategy-service/internal/utils"
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -40,19 +40,12 @@ func NewStrategyHandler(strategyService *service.StrategyService, userClient Use
 func (h *StrategyHandler) ListUserStrategies(c *gin.Context) {
 	userID, exists := c.Get("userID")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		utils.SendErrorResponse(c, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
 
-	// Parse pagination parameters
-	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "10"))
-	if page < 1 {
-		page = 1
-	}
-	if limit < 1 || limit > 100 {
-		limit = 10
-	}
+	// Parse pagination parameters using the utility function
+	params := utils.ParsePaginationParams(c, 10, 100) // default limit: 10, max limit: 100
 
 	// Parse search term
 	searchTerm := c.Query("search")
@@ -76,25 +69,18 @@ func (h *StrategyHandler) ListUserStrategies(c *gin.Context) {
 		searchTerm,
 		purchasedOnly,
 		tagIDs,
-		page,
-		limit,
+		params.Page,
+		params.Limit,
 	)
 
 	if err != nil {
 		h.logger.Error("Failed to get user strategies", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch strategies"})
+		utils.SendErrorResponse(c, http.StatusInternalServerError, "Failed to fetch strategies")
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"strategies": strategies,
-		"meta": gin.H{
-			"total": total,
-			"page":  page,
-			"limit": limit,
-			"pages": (total + limit - 1) / limit, // Calculate total pages
-		},
-	})
+	// Use standardized pagination response
+	utils.SendPaginatedResponse(c, http.StatusOK, strategies, total, params.Page, params.Limit)
 }
 
 // CreateStrategy handles creating a new strategy
@@ -102,13 +88,13 @@ func (h *StrategyHandler) ListUserStrategies(c *gin.Context) {
 func (h *StrategyHandler) CreateStrategy(c *gin.Context) {
 	var request model.StrategyCreate
 	if err := c.ShouldBindJSON(&request); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		utils.SendErrorResponse(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
 	userID, exists := c.Get("userID")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		utils.SendErrorResponse(c, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
 
@@ -120,11 +106,11 @@ func (h *StrategyHandler) CreateStrategy(c *gin.Context) {
 	strategy, err := h.strategyService.CreateStrategy(c.Request.Context(), &request, userID.(int))
 	if err != nil {
 		h.logger.Error("Failed to create strategy", zap.Error(err))
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		utils.SendErrorResponse(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	c.JSON(http.StatusCreated, strategy)
+	c.JSON(http.StatusCreated, gin.H{"data": strategy})
 }
 
 // GetStrategy handles retrieving a strategy by ID
@@ -133,20 +119,20 @@ func (h *StrategyHandler) GetStrategy(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.Atoi(idStr)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid strategy ID"})
+		utils.SendErrorResponse(c, http.StatusBadRequest, "Invalid strategy ID")
 		return
 	}
 
 	userID, exists := c.Get("userID")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		utils.SendErrorResponse(c, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
 
 	strategy, err := h.strategyService.GetStrategy(c.Request.Context(), id, userID.(int))
 	if err != nil {
 		h.logger.Error("Failed to get strategy", zap.Error(err), zap.Int("id", id))
-		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		utils.SendErrorResponse(c, http.StatusNotFound, err.Error())
 		return
 	}
 
@@ -163,7 +149,7 @@ func (h *StrategyHandler) GetStrategy(c *gin.Context) {
 		"creator_name": creatorName,
 	}
 
-	c.JSON(http.StatusOK, response)
+	c.JSON(http.StatusOK, gin.H{"data": response})
 }
 
 // UpdateStrategy handles updating a strategy
@@ -172,19 +158,19 @@ func (h *StrategyHandler) UpdateStrategy(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.Atoi(idStr)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid strategy ID"})
+		utils.SendErrorResponse(c, http.StatusBadRequest, "Invalid strategy ID")
 		return
 	}
 
 	userID, exists := c.Get("userID")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		utils.SendErrorResponse(c, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
 
 	var request model.StrategyUpdate
 	if err := c.ShouldBindJSON(&request); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		utils.SendErrorResponse(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -193,11 +179,11 @@ func (h *StrategyHandler) UpdateStrategy(c *gin.Context) {
 	strategy, err := h.strategyService.UpdateStrategy(c.Request.Context(), id, &request, userID.(int))
 	if err != nil {
 		h.logger.Error("Failed to update strategy", zap.Error(err), zap.Int("id", id))
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		utils.SendErrorResponse(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	c.JSON(http.StatusOK, strategy)
+	c.JSON(http.StatusOK, gin.H{"data": strategy})
 }
 
 // DeleteStrategy handles deleting a strategy
@@ -206,20 +192,20 @@ func (h *StrategyHandler) DeleteStrategy(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.Atoi(idStr)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid strategy ID"})
+		utils.SendErrorResponse(c, http.StatusBadRequest, "Invalid strategy ID")
 		return
 	}
 
 	userID, exists := c.Get("userID")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		utils.SendErrorResponse(c, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
 
 	err = h.strategyService.DeleteStrategy(c.Request.Context(), id, userID.(int))
 	if err != nil {
 		h.logger.Error("Failed to delete strategy", zap.Error(err), zap.Int("id", id))
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		utils.SendErrorResponse(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -232,42 +218,28 @@ func (h *StrategyHandler) GetVersions(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.Atoi(idStr)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid strategy ID"})
+		utils.SendErrorResponse(c, http.StatusBadRequest, "Invalid strategy ID")
 		return
 	}
 
 	userID, exists := c.Get("userID")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		utils.SendErrorResponse(c, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
 
-	// Parse pagination parameters
-	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
-	if page < 1 {
-		page = 1
-	}
-	if limit < 1 || limit > 100 {
-		limit = 20
-	}
+	// Parse pagination parameters using the utility function
+	params := utils.ParsePaginationParams(c, 20, 100) // default limit: 20, max limit: 100
 
-	versions, total, err := h.strategyService.GetVersions(c.Request.Context(), id, userID.(int), page, limit)
+	versions, total, err := h.strategyService.GetVersions(c.Request.Context(), id, userID.(int), params.Page, params.Limit)
 	if err != nil {
 		h.logger.Error("Failed to get versions", zap.Error(err), zap.Int("strategy_id", id))
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		utils.SendErrorResponse(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"versions": versions,
-		"meta": gin.H{
-			"total": total,
-			"page":  page,
-			"limit": limit,
-			"pages": (total + limit - 1) / limit,
-		},
-	})
+	// Use standardized pagination response
+	utils.SendPaginatedResponse(c, http.StatusOK, versions, total, params.Page, params.Limit)
 }
 
 // UpdateActiveVersion handles updating the active version of a strategy for a user
@@ -276,7 +248,7 @@ func (h *StrategyHandler) UpdateActiveVersion(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.Atoi(idStr)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid strategy ID"})
+		utils.SendErrorResponse(c, http.StatusBadRequest, "Invalid strategy ID")
 		return
 	}
 
@@ -285,13 +257,13 @@ func (h *StrategyHandler) UpdateActiveVersion(c *gin.Context) {
 	}
 
 	if err := c.ShouldBindJSON(&request); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		utils.SendErrorResponse(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
 	userID, exists := c.Get("userID")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		utils.SendErrorResponse(c, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
 
@@ -307,7 +279,7 @@ func (h *StrategyHandler) UpdateActiveVersion(c *gin.Context) {
 			zap.Error(err),
 			zap.Int("strategy_id", id),
 			zap.Int("version", request.Version))
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		utils.SendErrorResponse(c, http.StatusBadRequest, err.Error())
 		return
 	}
 

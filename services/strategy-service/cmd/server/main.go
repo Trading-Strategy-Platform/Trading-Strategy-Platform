@@ -84,7 +84,8 @@ func main() {
 	// Initialize handlers
 	strategyHandler := handler.NewStrategyHandler(strategyService, userClient, logger)
 	tagHandler := handler.NewTagHandler(tagService, logger)
-	indicatorHandler := handler.NewIndicatorHandler(indicatorService, logger)
+	// Updated to pass userClient to IndicatorHandler for role checking
+	indicatorHandler := handler.NewIndicatorHandler(indicatorService, userClient, logger)
 	marketplaceHandler := handler.NewMarketplaceHandler(marketplaceService, logger)
 	thumbnailHandler := handler.NewThumbnailHandler(strategyService, mediaClient, logger)
 

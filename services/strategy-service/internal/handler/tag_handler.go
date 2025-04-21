@@ -5,6 +5,7 @@ import (
 	"strconv"
 
 	"services/strategy-service/internal/service"
+	"services/strategy-service/internal/utils"
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -27,35 +28,21 @@ func NewTagHandler(tagService *service.TagService, logger *zap.Logger) *TagHandl
 // GetAllTags handles retrieving all tags
 // GET /api/v1/strategy-tags
 func (h *TagHandler) GetAllTags(c *gin.Context) {
-	// Parse pagination parameters
-	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "100"))
-	if page < 1 {
-		page = 1
-	}
-	if limit < 1 || limit > 500 {
-		limit = 100
-	}
+	// Parse pagination parameters using the utility function
+	params := utils.ParsePaginationParams(c, 100, 500) // default limit: 100, max limit: 500
 
 	// Parse search parameter
 	searchTerm := c.Query("search")
 
-	tags, total, err := h.tagService.GetAllTags(c.Request.Context(), searchTerm, page, limit)
+	tags, total, err := h.tagService.GetAllTags(c.Request.Context(), searchTerm, params.Page, params.Limit)
 	if err != nil {
 		h.logger.Error("Failed to get tags", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch tags"})
+		utils.SendErrorResponse(c, http.StatusInternalServerError, "Failed to fetch tags")
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"tags": tags,
-		"meta": gin.H{
-			"total": total,
-			"page":  page,
-			"limit": limit,
-			"pages": (total + limit - 1) / limit,
-		},
-	})
+	// Use standardized pagination response
+	utils.SendPaginatedResponse(c, http.StatusOK, tags, total, params.Page, params.Limit)
 }
 
 // CreateTag handles creating a new tag
@@ -66,18 +53,18 @@ func (h *TagHandler) CreateTag(c *gin.Context) {
 	}
 
 	if err := c.ShouldBindJSON(&request); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		utils.SendErrorResponse(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
 	tag, err := h.tagService.CreateTag(c.Request.Context(), request.Name)
 	if err != nil {
 		h.logger.Error("Failed to create tag", zap.Error(err))
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		utils.SendErrorResponse(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	c.JSON(http.StatusCreated, tag)
+	c.JSON(http.StatusCreated, gin.H{"data": tag})
 }
 
 // UpdateTag handles updating an existing tag
@@ -87,7 +74,7 @@ func (h *TagHandler) UpdateTag(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.Atoi(idStr)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid tag ID"})
+		utils.SendErrorResponse(c, http.StatusBadRequest, "Invalid tag ID")
 		return
 	}
 
@@ -97,7 +84,7 @@ func (h *TagHandler) UpdateTag(c *gin.Context) {
 	}
 
 	if err := c.ShouldBindJSON(&request); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		utils.SendErrorResponse(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -108,14 +95,14 @@ func (h *TagHandler) UpdateTag(c *gin.Context) {
 
 		// Return appropriate status code based on error
 		if err.Error() == "tag not found" {
-			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+			utils.SendErrorResponse(c, http.StatusNotFound, err.Error())
 		} else {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			utils.SendErrorResponse(c, http.StatusBadRequest, err.Error())
 		}
 		return
 	}
 
-	c.JSON(http.StatusOK, tag)
+	c.JSON(http.StatusOK, gin.H{"data": tag})
 }
 
 // DeleteTag handles deleting a tag
@@ -125,7 +112,7 @@ func (h *TagHandler) DeleteTag(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.Atoi(idStr)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid tag ID"})
+		utils.SendErrorResponse(c, http.StatusBadRequest, "Invalid tag ID")
 		return
 	}
 
@@ -136,13 +123,9 @@ func (h *TagHandler) DeleteTag(c *gin.Context) {
 
 		// Return appropriate status code based on error
 		if err.Error() == "tag not found or is in use" {
-			if err.Error() == "tag not found or is in use" {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "Cannot delete tag because it's in use or doesn't exist"})
-			} else {
-				c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
-			}
+			utils.SendErrorResponse(c, http.StatusBadRequest, "Cannot delete tag because it's in use or doesn't exist")
 		} else {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete tag"})
+			utils.SendErrorResponse(c, http.StatusInternalServerError, "Failed to delete tag")
 		}
 		return
 	}

@@ -30,6 +30,7 @@ type IndicatorParameter struct {
 	MaxValue      *float64             `json:"max_value,omitempty" db:"max_value"`
 	DefaultValue  string               `json:"default_value,omitempty" db:"default_value"`
 	Description   string               `json:"description,omitempty" db:"description"`
+	IsPublic      bool                 `json:"is_public" db:"is_public"` // New field to control visibility
 	EnumValues    []ParameterEnumValue `json:"enum_values,omitempty" db:"-"`
 }
 
@@ -51,6 +52,7 @@ type IndicatorParameterCreate struct {
 	MaxValue      *float64                   `json:"max_value,omitempty"`
 	DefaultValue  string                     `json:"default_value,omitempty"`
 	Description   string                     `json:"description,omitempty"`
+	IsPublic      bool                       `json:"is_public"` // New field to control visibility
 	EnumValues    []ParameterEnumValueCreate `json:"enum_values,omitempty"`
 }
 

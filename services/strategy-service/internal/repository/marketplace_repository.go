@@ -26,13 +26,10 @@ func NewMarketplaceRepository(db *sqlx.DB, logger *zap.Logger) *MarketplaceRepos
 	}
 }
 
-// GetAll retrieves marketplace listings using get_marketplace_strategies function
+// GetAll retrieves marketplace listings with proper database-level pagination
 func (r *MarketplaceRepository) GetAll(ctx context.Context, searchTerm string, minPrice *float64, maxPrice *float64, isFree *bool, tags []int, minRating *float64, sortBy string, page, limit int) ([]model.MarketplaceItem, int, error) {
 	// Calculate offset from page and limit
 	offset := (page - 1) * limit
-
-	// Use the SQL function
-	query := `SELECT * FROM get_marketplace_strategies($1, $2, $3, $4, $5, $6, $7, $8, $9)`
 
 	// Convert Go nil values to SQL NULL values where needed
 	var minPriceSQL interface{} = sql.NullFloat64{Float64: 0, Valid: false}
@@ -61,6 +58,27 @@ func (r *MarketplaceRepository) GetAll(ctx context.Context, searchTerm string, m
 		tagsParam = pq.Array([]int{})
 	}
 
+	// First, get total count using count_marketplace_strategies function
+	countQuery := `SELECT count_marketplace_strategies($1, $2, $3, $4, $5, $6)`
+
+	var total int
+	err := r.db.GetContext(ctx, &total, countQuery,
+		searchTerm,
+		minPriceSQL,
+		maxPriceSQL,
+		isFree,
+		tagsParam,
+		minRatingSQL,
+	)
+
+	if err != nil {
+		r.logger.Error("Failed to count marketplace listings", zap.Error(err))
+		return nil, 0, err
+	}
+
+	// Now, get paginated data using get_marketplace_strategies function
+	dataQuery := `SELECT * FROM get_marketplace_strategies($1, $2, $3, $4, $5, $6, $7, $8, $9)`
+
 	// Define a struct that matches the SQL function columns exactly
 	type listing struct {
 		ID                 int          `db:"id"`
@@ -81,7 +99,7 @@ func (r *MarketplaceRepository) GetAll(ctx context.Context, searchTerm string, m
 
 	var listings []listing
 
-	err := r.db.SelectContext(ctx, &listings, query,
+	err = r.db.SelectContext(ctx, &listings, dataQuery,
 		searchTerm,   // p_search_term
 		minPriceSQL,  // p_min_price
 		maxPriceSQL,  // p_max_price
@@ -112,35 +130,19 @@ func (r *MarketplaceRepository) GetAll(ctx context.Context, searchTerm string, m
 			SubscriptionPeriod: l.SubscriptionPeriod,
 			IsActive:           l.IsActive,
 			DescriptionPublic:  l.DescriptionPublic,
-			CreatedAt:          l.CreatedAt.Time,
-			UpdatedAt:          nil,
 			AverageRating:      l.AverageRating,
 			ReviewsCount:       int(l.ReviewsCount),
 		}
 
-		// Only set UpdatedAt if it's valid
+		// Set CreatedAt if valid
+		if l.CreatedAt.Valid {
+			items[i].CreatedAt = l.CreatedAt.Time
+		}
+
+		// Set UpdatedAt if valid
 		if l.UpdatedAt.Valid {
 			items[i].UpdatedAt = &l.UpdatedAt.Time
 		}
-	}
-
-	// Count query for total results
-	countQuery := `SELECT COUNT(*) FROM get_marketplace_strategies($1, $2, $3, $4, $5, $6, $7, NULL, NULL)`
-
-	var total int
-	err = r.db.GetContext(ctx, &total, countQuery,
-		searchTerm,
-		minPriceSQL,
-		maxPriceSQL,
-		isFree,
-		tagsParam,
-		minRatingSQL,
-		sortBy,
-	)
-
-	if err != nil {
-		r.logger.Warn("Failed to get total count, using result length", zap.Error(err))
-		total = len(items)
 	}
 
 	return items, total, nil

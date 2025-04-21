@@ -44,7 +44,8 @@ FROM
 CREATE OR REPLACE FUNCTION get_indicators(
     p_search VARCHAR,
     p_categories VARCHAR[],
-    p_active BOOLEAN = NULL
+    p_active BOOLEAN = NULL,
+    p_is_admin BOOLEAN = FALSE -- New parameter to control visibility
 )
 RETURNS TABLE (
     id INT,
@@ -82,6 +83,7 @@ BEGIN
                 'max_value', p.max_value,
                 'default_value', p.default_value,
                 'description', p.description,
+                'is_public', p.is_public,
                 'enum_values', COALESCE(
                     (SELECT jsonb_agg(jsonb_build_object(
                         'id', ev.id,
@@ -93,6 +95,8 @@ BEGIN
             ))
             FROM indicator_parameters p
             WHERE p.indicator_id = i.id
+              -- Filter by is_public if not admin
+              AND (p_is_admin OR p.is_public)
             ), '[]'::jsonb
         ) AS parameters
     FROM 
@@ -107,7 +111,10 @@ END;
 $$ LANGUAGE plpgsql;
 
 -- Update get_indicator_by_id function
-CREATE OR REPLACE FUNCTION get_indicator_by_id(p_indicator_id INT)
+CREATE OR REPLACE FUNCTION get_indicator_by_id(
+    p_indicator_id INT,
+    p_is_admin BOOLEAN = FALSE -- New parameter to control visibility
+)
 RETURNS TABLE (
     id INT,
     name VARCHAR(50),
@@ -144,6 +151,7 @@ BEGIN
                 'max_value', p.max_value,
                 'default_value', p.default_value,
                 'description', p.description,
+                'is_public', p.is_public,
                 'enum_values', COALESCE(
                     (SELECT jsonb_agg(jsonb_build_object(
                         'id', ev.id,
@@ -155,6 +163,8 @@ BEGIN
             ))
             FROM indicator_parameters p
             WHERE p.indicator_id = i.id
+              -- Filter by is_public if not admin
+              AND (p_is_admin OR p.is_public)
             ), '[]'::jsonb
         ) AS parameters
     FROM 

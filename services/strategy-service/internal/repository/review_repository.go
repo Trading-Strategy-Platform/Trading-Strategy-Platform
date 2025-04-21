@@ -91,19 +91,32 @@ func (r *ReviewRepository) Delete(ctx context.Context, id int, userID int) error
 	return nil
 }
 
-// GetByMarketplaceID retrieves reviews for a marketplace listing using get_strategy_reviews function
+// GetByMarketplaceID retrieves reviews for a marketplace listing with proper database-level pagination
 func (r *ReviewRepository) GetByMarketplaceID(ctx context.Context, marketplaceID int, page, limit int) ([]model.StrategyReview, int, error) {
-	query := `SELECT * FROM get_strategy_reviews($1, $2, $3)`
+	// First, count total reviews for this marketplace listing
+	countQuery := `
+		SELECT COUNT(*)
+		FROM strategy_reviews
+		WHERE marketplace_id = $1
+	`
 
-	// Calculate offset
+	var totalCount int
+	err := r.db.GetContext(ctx, &totalCount, countQuery, marketplaceID)
+	if err != nil {
+		r.logger.Error("Failed to count reviews", zap.Error(err))
+		return nil, 0, err
+	}
+
+	// Calculate offset for pagination
 	offset := (page - 1) * limit
+
+	// Now, use the get_strategy_reviews function with LIMIT and OFFSET directly in the SQL
+	query := `SELECT * FROM get_strategy_reviews($1, $2, $3)`
 
 	// Execute query
 	var reviews []struct {
 		ReviewID  int       `db:"review_id"`
 		UserID    int       `db:"user_id"`
-		Username  string    `db:"username"`
-		UserPhoto string    `db:"user_photo"`
 		Rating    int       `db:"rating"`
 		Comment   string    `db:"comment"`
 		CreatedAt time.Time `db:"created_at"`
@@ -111,22 +124,9 @@ func (r *ReviewRepository) GetByMarketplaceID(ctx context.Context, marketplaceID
 	}
 
 	// Using limit and offset for pagination
-	err := r.db.SelectContext(ctx, &reviews, query, marketplaceID, limit, offset)
+	err = r.db.SelectContext(ctx, &reviews, query, marketplaceID, limit, offset)
 	if err != nil {
 		r.logger.Error("Failed to get reviews", zap.Error(err))
-		return nil, 0, err
-	}
-
-	// Count total reviews separately, because the SQL function doesn't return it
-	countQuery := `
-		SELECT COUNT(*)
-		FROM strategy_reviews
-		WHERE marketplace_id = $1
-	`
-	var total int
-	err = r.db.GetContext(ctx, &total, countQuery, marketplaceID)
-	if err != nil {
-		r.logger.Error("Failed to count reviews", zap.Error(err))
 		return nil, 0, err
 	}
 
@@ -141,9 +141,8 @@ func (r *ReviewRepository) GetByMarketplaceID(ctx context.Context, marketplaceID
 			Comment:       r.Comment,
 			CreatedAt:     r.CreatedAt,
 			UpdatedAt:     &r.UpdatedAt,
-			UserName:      r.Username,
 		}
 	}
 
-	return result, total, nil
+	return result, totalCount, nil
 }
