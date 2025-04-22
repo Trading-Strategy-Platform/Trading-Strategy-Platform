@@ -233,7 +233,13 @@ func (s *MarketplaceService) CancelSubscription(ctx context.Context, purchaseID 
 }
 
 // GetReviews retrieves reviews for a marketplace listing using get_strategy_reviews function
-func (s *MarketplaceService) GetReviews(ctx context.Context, marketplaceID int, page, limit int) ([]model.StrategyReview, int, error) {
+func (s *MarketplaceService) GetReviews(
+	ctx context.Context,
+	marketplaceID int,
+	minRating *float64,
+	page,
+	limit int,
+) ([]model.StrategyReview, int, error) {
 	// Check if listing exists
 	listing, err := s.marketplaceRepo.GetByID(ctx, marketplaceID)
 	if err != nil {
@@ -252,8 +258,14 @@ func (s *MarketplaceService) GetReviews(ctx context.Context, marketplaceID int, 
 		limit = 10
 	}
 
-	// Get reviews with pagination
-	reviews, total, err := s.reviewRepo.GetByMarketplaceID(ctx, marketplaceID, page, limit)
+	// Get reviews with pagination and minimum rating filter
+	reviews, total, err := s.reviewRepo.GetByMarketplaceID(
+		ctx,
+		marketplaceID,
+		minRating,
+		page,
+		limit,
+	)
 	if err != nil {
 		return nil, 0, err
 	}

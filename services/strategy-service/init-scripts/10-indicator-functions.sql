@@ -45,7 +45,9 @@ CREATE OR REPLACE FUNCTION get_indicators(
     p_search VARCHAR,
     p_categories VARCHAR[],
     p_active BOOLEAN = NULL,
-    p_is_admin BOOLEAN = FALSE -- New parameter to control visibility
+    p_is_admin BOOLEAN = FALSE,
+    p_limit INT DEFAULT 20,
+    p_offset INT DEFAULT 0
 )
 RETURNS TABLE (
     id INT,
@@ -106,7 +108,8 @@ BEGIN
         AND (p_categories IS NULL OR array_length(p_categories, 1) IS NULL OR i.category = ANY(p_categories))
         AND (p_active IS NULL OR i.is_active = p_active)
     ORDER BY 
-        i.name;
+        i.name
+    LIMIT p_limit OFFSET p_offset;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -311,5 +314,26 @@ BEGIN
     
     GET DIAGNOSTICS affected_rows = ROW_COUNT;
     RETURN affected_rows > 0;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION count_indicators(
+    p_search VARCHAR,
+    p_categories VARCHAR[],
+    p_active BOOLEAN = NULL
+)
+RETURNS BIGINT AS $$
+DECLARE
+    indicator_count BIGINT;
+BEGIN
+    SELECT COUNT(*)
+    INTO indicator_count
+    FROM indicators i
+    WHERE
+        (p_search IS NULL OR i.name ILIKE '%' || p_search || '%' OR i.description ILIKE '%' || p_search || '%')
+        AND (p_categories IS NULL OR array_length(p_categories, 1) IS NULL OR i.category = ANY(p_categories))
+        AND (p_active IS NULL OR i.is_active = p_active);
+        
+    RETURN indicator_count;
 END;
 $$ LANGUAGE plpgsql;

@@ -100,9 +100,9 @@ func (h *IndicatorHandler) GetAllIndicators(c *gin.Context) {
 	utils.SendPaginatedResponse(c, http.StatusOK, indicators, total, params.Page, params.Limit)
 }
 
-// GetCategories handles retrieving indicator categories
+// GetIndicatorCategories handles retrieving indicator categories
 // GET /api/v1/indicators/categories
-func (h *IndicatorHandler) GetCategories(c *gin.Context) {
+func (h *IndicatorHandler) GetIndicatorCategories(c *gin.Context) {
 	// Log the request with a distinctive message
 	h.logger.Info("CATEGORIES ENDPOINT EXPLICITLY CALLED",
 		zap.String("path", c.Request.URL.Path),
@@ -112,7 +112,7 @@ func (h *IndicatorHandler) GetCategories(c *gin.Context) {
 	// Get the timestamp (will be ignored, just for cache busting)
 	_ = c.Query("t")
 
-	categories, err := h.indicatorService.GetCategories(c.Request.Context())
+	categories, err := h.indicatorService.GetIndicatorCategories(c.Request.Context())
 	if err != nil {
 		h.logger.Error("Failed to get indicator categories", zap.Error(err))
 		utils.SendErrorResponse(c, http.StatusInternalServerError, "Failed to fetch indicator categories")
@@ -354,9 +354,9 @@ func (h *IndicatorHandler) UpdateIndicator(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"data": updatedIndicator})
 }
 
-// AddParameter handles adding a parameter to an indicator
+// AddIndicatorParameter handles adding a parameter to an indicator
 // POST /api/v1/indicators/{id}/parameters
-func (h *IndicatorHandler) AddParameter(c *gin.Context) {
+func (h *IndicatorHandler) AddIndicatorParameter(c *gin.Context) {
 	// Check if user has admin role
 	if !h.checkIsAdmin(c) {
 		utils.SendErrorResponse(c, http.StatusForbidden, "Admin access required to add parameters")
@@ -390,7 +390,7 @@ func (h *IndicatorHandler) AddParameter(c *gin.Context) {
 		return
 	}
 
-	parameter, err := h.indicatorService.AddParameter(
+	parameter, err := h.indicatorService.AddIndicatorParameter(
 		c.Request.Context(),
 		id,
 		request.ParameterName,
@@ -423,9 +423,9 @@ type ParameterRequest struct {
 	IsPublic      bool     `json:"is_public"`
 }
 
-// AddEnumValue handles adding an enum value to a parameter
+// AddParameterEnumValue handles adding an enum value to a parameter
 // POST /api/v1/parameters/{id}/enum-values
-func (h *IndicatorHandler) AddEnumValue(c *gin.Context) {
+func (h *IndicatorHandler) AddParameterEnumValue(c *gin.Context) {
 	// Check if user has admin role
 	if !h.checkIsAdmin(c) {
 		utils.SendErrorResponse(c, http.StatusForbidden, "Admin access required to add enum values")
@@ -449,7 +449,7 @@ func (h *IndicatorHandler) AddEnumValue(c *gin.Context) {
 		return
 	}
 
-	enumValue, err := h.indicatorService.AddEnumValue(
+	enumValue, err := h.indicatorService.AddParameterEnumValue(
 		c.Request.Context(),
 		id,
 		request.EnumValue,
@@ -467,7 +467,7 @@ func (h *IndicatorHandler) AddEnumValue(c *gin.Context) {
 
 // DeleteParameter handles deleting a parameter
 // DELETE /api/v1/parameters/{id}
-func (h *IndicatorHandler) DeleteParameter(c *gin.Context) {
+func (h *IndicatorHandler) DeleteIndicatorParameter(c *gin.Context) {
 	// Check if user has admin role
 	if !h.checkIsAdmin(c) {
 		utils.SendErrorResponse(c, http.StatusForbidden, "Admin access required to delete parameters")
@@ -483,7 +483,7 @@ func (h *IndicatorHandler) DeleteParameter(c *gin.Context) {
 	}
 
 	// Delete the parameter
-	err = h.indicatorService.DeleteParameter(c.Request.Context(), id)
+	err = h.indicatorService.DeleteIndicatorParameter(c.Request.Context(), id)
 	if err != nil {
 		h.logger.Error("Failed to delete parameter", zap.Error(err), zap.Int("id", id))
 		utils.SendErrorResponse(c, http.StatusBadRequest, err.Error())
@@ -493,9 +493,9 @@ func (h *IndicatorHandler) DeleteParameter(c *gin.Context) {
 	c.Status(http.StatusNoContent)
 }
 
-// UpdateParameter handles updating a parameter
+// UpdateIndicatorParameter handles updating a parameter
 // PUT /api/v1/parameters/{id}
-func (h *IndicatorHandler) UpdateParameter(c *gin.Context) {
+func (h *IndicatorHandler) UpdateIndicatorParameter(c *gin.Context) {
 	// Check if user has admin role
 	if !h.checkIsAdmin(c) {
 		utils.SendErrorResponse(c, http.StatusForbidden, "Admin access required to update parameters")
@@ -541,7 +541,7 @@ func (h *IndicatorHandler) UpdateParameter(c *gin.Context) {
 	}
 
 	// Update the parameter
-	updatedParameter, err := h.indicatorService.UpdateParameter(c.Request.Context(), id, parameter)
+	updatedParameter, err := h.indicatorService.UpdateIndicatorParameter(c.Request.Context(), id, parameter)
 	if err != nil {
 		h.logger.Error("Failed to update parameter", zap.Error(err), zap.Int("id", id))
 		utils.SendErrorResponse(c, http.StatusBadRequest, err.Error())
@@ -551,9 +551,9 @@ func (h *IndicatorHandler) UpdateParameter(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"data": updatedParameter})
 }
 
-// DeleteEnumValue handles deleting an enum value
+// DeleteParameterEnumValue handles deleting an enum value
 // DELETE /api/v1/enum-values/{id}
-func (h *IndicatorHandler) DeleteEnumValue(c *gin.Context) {
+func (h *IndicatorHandler) DeleteParameterEnumValue(c *gin.Context) {
 	// Check if user has admin role
 	if !h.checkIsAdmin(c) {
 		utils.SendErrorResponse(c, http.StatusForbidden, "Admin access required to delete enum values")
@@ -569,7 +569,7 @@ func (h *IndicatorHandler) DeleteEnumValue(c *gin.Context) {
 	}
 
 	// Delete the enum value
-	err = h.indicatorService.DeleteEnumValue(c.Request.Context(), id)
+	err = h.indicatorService.DeleteParameterEnumValue(c.Request.Context(), id)
 	if err != nil {
 		h.logger.Error("Failed to delete enum value", zap.Error(err), zap.Int("id", id))
 		utils.SendErrorResponse(c, http.StatusBadRequest, err.Error())
@@ -579,9 +579,9 @@ func (h *IndicatorHandler) DeleteEnumValue(c *gin.Context) {
 	c.Status(http.StatusNoContent)
 }
 
-// UpdateEnumValue handles updating an enum value
+// UpdateParameterEnumValue handles updating an enum value
 // PUT /api/v1/enum-values/{id}
-func (h *IndicatorHandler) UpdateEnumValue(c *gin.Context) {
+func (h *IndicatorHandler) UpdateParameterEnumValue(c *gin.Context) {
 	// Check if user has admin role
 	if !h.checkIsAdmin(c) {
 		utils.SendErrorResponse(c, http.StatusForbidden, "Admin access required to update enum values")
@@ -614,7 +614,7 @@ func (h *IndicatorHandler) UpdateEnumValue(c *gin.Context) {
 	}
 
 	// Update the enum value
-	updatedEnumValue, err := h.indicatorService.UpdateEnumValue(c.Request.Context(), id, enumValue)
+	updatedEnumValue, err := h.indicatorService.UpdateParameterEnumValue(c.Request.Context(), id, enumValue)
 	if err != nil {
 		h.logger.Error("Failed to update enum value", zap.Error(err), zap.Int("id", id))
 		utils.SendErrorResponse(c, http.StatusBadRequest, err.Error())

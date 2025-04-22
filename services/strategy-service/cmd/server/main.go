@@ -214,20 +214,20 @@ func setupRouter(
 		indicators := v1.Group("/indicators")
 		{
 			// 1. Base endpoint - public routes
-			indicators.GET("", indicatorHandler.GetAllIndicators)         // GET /api/v1/indicators
-			indicators.GET("/categories", indicatorHandler.GetCategories) // GET /api/v1/indicators/categories
-			indicators.GET("/:id", indicatorHandler.GetIndicator)         // GET /api/v1/indicators/{id}
+			indicators.GET("", indicatorHandler.GetAllIndicators)                  // GET /api/v1/indicators
+			indicators.GET("/categories", indicatorHandler.GetIndicatorCategories) // GET /api/v1/indicators/categories
+			indicators.GET("/:id", indicatorHandler.GetIndicator)                  // GET /api/v1/indicators/{id}
 
 			// 2. Admin-only routes for managing indicators
 			adminIndicators := indicators.Group("")
 			adminIndicators.Use(middleware.AuthMiddleware(userClient, logger))
 			adminIndicators.Use(middleware.RequireRole(userClient, "admin"))
 
-			adminIndicators.POST("", indicatorHandler.CreateIndicator)             // POST /api/v1/indicators
-			adminIndicators.PUT("/:id", indicatorHandler.UpdateIndicator)          // PUT /api/v1/indicators/{id}
-			adminIndicators.DELETE("/:id", indicatorHandler.DeleteIndicator)       // DELETE /api/v1/indicators/{id}
-			adminIndicators.POST("/sync", indicatorHandler.SyncIndicators)         // POST /api/v1/indicators/sync
-			adminIndicators.POST("/:id/parameters", indicatorHandler.AddParameter) // POST /api/v1/indicators/{id}/parameters
+			adminIndicators.POST("", indicatorHandler.CreateIndicator)                      // POST /api/v1/indicators
+			adminIndicators.PUT("/:id", indicatorHandler.UpdateIndicator)                   // PUT /api/v1/indicators/{id}
+			adminIndicators.DELETE("/:id", indicatorHandler.DeleteIndicator)                // DELETE /api/v1/indicators/{id}
+			adminIndicators.POST("/sync", indicatorHandler.SyncIndicators)                  // POST /api/v1/indicators/sync
+			adminIndicators.POST("/:id/parameters", indicatorHandler.AddIndicatorParameter) // POST /api/v1/indicators/{id}/parameters
 		}
 
 		// ==================== PARAMETER ROUTES ====================
@@ -238,9 +238,9 @@ func setupRouter(
 			adminParameters.Use(middleware.AuthMiddleware(userClient, logger))
 			adminParameters.Use(middleware.RequireRole(userClient, "admin"))
 
-			adminParameters.PUT("/:id", indicatorHandler.UpdateParameter)           // PUT /api/v1/parameters/{id}
-			adminParameters.DELETE("/:id", indicatorHandler.DeleteParameter)        // DELETE /api/v1/parameters/{id}
-			adminParameters.POST("/:id/enum-values", indicatorHandler.AddEnumValue) // POST /api/v1/parameters/{id}/enum-values
+			adminParameters.PUT("/:id", indicatorHandler.UpdateIndicatorParameter)           // PUT /api/v1/parameters/{id}
+			adminParameters.DELETE("/:id", indicatorHandler.DeleteIndicatorParameter)        // DELETE /api/v1/parameters/{id}
+			adminParameters.POST("/:id/enum-values", indicatorHandler.AddParameterEnumValue) // POST /api/v1/parameters/{id}/enum-values
 		}
 
 		// ==================== ENUM VALUES ROUTES ====================
@@ -251,8 +251,8 @@ func setupRouter(
 			adminEnumValues.Use(middleware.AuthMiddleware(userClient, logger))
 			adminEnumValues.Use(middleware.RequireRole(userClient, "admin"))
 
-			adminEnumValues.PUT("/:id", indicatorHandler.UpdateEnumValue)    // PUT /api/v1/enum-values/{id}
-			adminEnumValues.DELETE("/:id", indicatorHandler.DeleteEnumValue) // DELETE /api/v1/enum-values/{id}
+			adminEnumValues.PUT("/:id", indicatorHandler.UpdateParameterEnumValue)    // PUT /api/v1/enum-values/{id}
+			adminEnumValues.DELETE("/:id", indicatorHandler.DeleteParameterEnumValue) // DELETE /api/v1/enum-values/{id}
 		}
 
 		// ==================== STRATEGY ROUTES ====================

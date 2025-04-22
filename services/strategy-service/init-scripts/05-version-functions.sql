@@ -5,7 +5,9 @@
 -- Get all versions of a strategy that the user has access to
 CREATE OR REPLACE FUNCTION get_accessible_strategy_versions(
     p_user_id INT,
-    p_strategy_id INT
+    p_strategy_id INT,
+    p_limit INT DEFAULT 20,
+    p_offset INT DEFAULT 0
 )
 RETURNS TABLE (
     version INT,
@@ -31,7 +33,8 @@ BEGIN
             sv.strategy_id = p_strategy_id
             AND sv.is_deleted = FALSE
         ORDER BY 
-            sv.version DESC;
+            sv.version DESC
+        LIMIT p_limit OFFSET p_offset;
     ELSE
         -- For purchasers, return only versions they've purchased
         RETURN QUERY
@@ -55,7 +58,8 @@ BEGIN
             AND sp.buyer_id = p_user_id
             AND (sp.subscription_end IS NULL OR sp.subscription_end > NOW())
         ORDER BY 
-            sv.version DESC;
+            sv.version DESC
+        LIMIT p_limit OFFSET p_offset;
     END IF;
 END;
 $$ LANGUAGE plpgsql;
@@ -121,5 +125,37 @@ BEGIN
     END IF;
     
     RETURN TRUE;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION count_accessible_strategy_versions(
+    p_user_id INT,
+    p_strategy_id INT
+)
+RETURNS BIGINT AS $$
+DECLARE
+    version_count BIGINT;
+BEGIN
+    -- For strategy owners, count all versions
+    IF EXISTS (SELECT 1 FROM strategies WHERE id = p_strategy_id AND user_id = p_user_id) THEN
+        SELECT COUNT(*)
+        INTO version_count
+        FROM strategy_versions sv
+        WHERE sv.strategy_id = p_strategy_id
+          AND sv.is_deleted = FALSE;
+    ELSE
+        -- For purchasers, count only versions they've purchased
+        SELECT COUNT(*)
+        INTO version_count
+        FROM strategy_versions sv
+        JOIN strategy_purchases sp ON sp.strategy_version = sv.version
+        JOIN strategy_marketplace sm ON sp.marketplace_id = sm.id AND sm.strategy_id = p_strategy_id
+        WHERE sv.strategy_id = p_strategy_id
+          AND sv.is_deleted = FALSE
+          AND sp.buyer_id = p_user_id
+          AND (sp.subscription_end IS NULL OR sp.subscription_end > NOW());
+    END IF;
+    
+    RETURN version_count;
 END;
 $$ LANGUAGE plpgsql;

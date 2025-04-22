@@ -236,9 +236,19 @@ func (h *MarketplaceHandler) GetReviews(c *gin.Context) {
 	// Parse pagination parameters using the utility function
 	params := utils.ParsePaginationParams(c, 10, 50) // default limit: 10, max limit: 50
 
+	// Parse min_rating filter
+	var minRating *float64
+	if minRatingStr := c.Query("min_rating"); minRatingStr != "" {
+		minRatingVal, err := strconv.ParseFloat(minRatingStr, 64)
+		if err == nil {
+			minRating = &minRatingVal
+		}
+	}
+
 	reviews, total, err := h.marketplaceService.GetReviews(
 		c.Request.Context(),
 		id,
+		minRating,
 		params.Page,
 		params.Limit,
 	)

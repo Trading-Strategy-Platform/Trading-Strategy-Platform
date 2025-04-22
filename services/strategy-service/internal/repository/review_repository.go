@@ -92,16 +92,18 @@ func (r *ReviewRepository) Delete(ctx context.Context, id int, userID int) error
 }
 
 // GetByMarketplaceID retrieves reviews for a marketplace listing with proper database-level pagination
-func (r *ReviewRepository) GetByMarketplaceID(ctx context.Context, marketplaceID int, page, limit int) ([]model.StrategyReview, int, error) {
-	// First, count total reviews for this marketplace listing
-	countQuery := `
-		SELECT COUNT(*)
-		FROM strategy_reviews
-		WHERE marketplace_id = $1
-	`
+func (r *ReviewRepository) GetByMarketplaceID(
+	ctx context.Context,
+	marketplaceID int,
+	minRating *float64,
+	page,
+	limit int,
+) ([]model.StrategyReview, int, error) {
+	// First, count total reviews with filtering applied
+	countQuery := `SELECT count_strategy_reviews($1, $2)`
 
 	var totalCount int
-	err := r.db.GetContext(ctx, &totalCount, countQuery, marketplaceID)
+	err := r.db.GetContext(ctx, &totalCount, countQuery, marketplaceID, minRating)
 	if err != nil {
 		r.logger.Error("Failed to count reviews", zap.Error(err))
 		return nil, 0, err
@@ -110,8 +112,8 @@ func (r *ReviewRepository) GetByMarketplaceID(ctx context.Context, marketplaceID
 	// Calculate offset for pagination
 	offset := (page - 1) * limit
 
-	// Now, use the get_strategy_reviews function with LIMIT and OFFSET directly in the SQL
-	query := `SELECT * FROM get_strategy_reviews($1, $2, $3)`
+	// Use the updated get_strategy_reviews function with minRating parameter
+	query := `SELECT * FROM get_strategy_reviews($1, $2, $3, $4)`
 
 	// Execute query
 	var reviews []struct {
@@ -123,8 +125,8 @@ func (r *ReviewRepository) GetByMarketplaceID(ctx context.Context, marketplaceID
 		UpdatedAt time.Time `db:"updated_at"`
 	}
 
-	// Using limit and offset for pagination
-	err = r.db.SelectContext(ctx, &reviews, query, marketplaceID, limit, offset)
+	// Using parameters: marketplace ID, min rating, limit, offset
+	err = r.db.SelectContext(ctx, &reviews, query, marketplaceID, minRating, limit, offset)
 	if err != nil {
 		r.logger.Error("Failed to get reviews", zap.Error(err))
 		return nil, 0, err

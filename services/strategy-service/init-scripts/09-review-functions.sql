@@ -131,6 +131,7 @@ $$ LANGUAGE plpgsql;
 -- Get reviews for a strategy
 CREATE OR REPLACE FUNCTION get_strategy_reviews(
     p_strategy_id INT,
+    p_min_rating FLOAT DEFAULT NULL,
     p_limit INT DEFAULT 10,
     p_offset INT DEFAULT 0
 )
@@ -156,9 +157,30 @@ BEGIN
         JOIN strategy_marketplace m ON r.marketplace_id = m.id
     WHERE 
         m.strategy_id = p_strategy_id
-    ORDER BY 
+        AND (p_min_rating IS NULL OR r.rating >= p_min_rating)
+    ORDER BY
         r.created_at DESC
-    LIMIT p_limit
-    OFFSET p_offset;
+    LIMIT p_limit OFFSET p_offset;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION count_strategy_reviews(
+    p_strategy_id INT,
+    p_min_rating FLOAT DEFAULT NULL
+)
+RETURNS BIGINT AS $$
+DECLARE
+    review_count BIGINT;
+BEGIN
+    SELECT COUNT(*)
+    INTO review_count
+    FROM 
+        strategy_reviews r
+        JOIN strategy_marketplace m ON r.marketplace_id = m.id
+    WHERE 
+        m.strategy_id = p_strategy_id
+        AND (p_min_rating IS NULL OR r.rating >= p_min_rating);
+        
+    RETURN review_count;
 END;
 $$ LANGUAGE plpgsql;

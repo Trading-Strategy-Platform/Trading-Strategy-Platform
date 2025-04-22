@@ -29,25 +29,23 @@ func NewVersionRepository(db *sqlx.DB, logger *zap.Logger) *VersionRepository {
 
 // GetVersions retrieves all versions for a strategy with proper database-level pagination
 func (r *VersionRepository) GetVersions(ctx context.Context, strategyID int, userID int, page, limit int) ([]model.StrategyVersion, int, error) {
-	// First, count total accessible versions
-	countQuery := `
-		SELECT COUNT(*) FROM get_accessible_strategy_versions($1, $2)
-	`
+	// Calculate offset
+	offset := (page - 1) * limit
 
+	// First, count total accessible versions using the count function
 	var totalCount int
-	err := r.db.GetContext(ctx, &totalCount, countQuery, userID, strategyID)
+	err := r.db.GetContext(ctx, &totalCount, `
+		SELECT count_accessible_strategy_versions($1, $2)
+	`, userID, strategyID)
+
 	if err != nil {
 		r.logger.Error("Failed to count strategy versions", zap.Error(err))
 		return nil, 0, err
 	}
 
-	// Now get paginated accessible versions
-	// Calculate offset
-	offset := (page - 1) * limit
-
+	// Get paginated accessible versions using the function with pagination parameters
 	versionQuery := `
-		SELECT * FROM get_accessible_strategy_versions($1, $2)
-		LIMIT $3 OFFSET $4
+		SELECT * FROM get_accessible_strategy_versions($1, $2, $3, $4)
 	`
 
 	var versionResults []struct {

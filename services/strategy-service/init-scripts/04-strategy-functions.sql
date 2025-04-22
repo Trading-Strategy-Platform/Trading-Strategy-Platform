@@ -66,34 +66,36 @@ WHERE
 
 -- Get all my strategies with filtering
 CREATE OR REPLACE FUNCTION get_my_strategies(
-    p_user_id integer,
-    p_search_term character varying DEFAULT NULL,
-    p_purchased_only boolean DEFAULT false,
-    p_tags integer[] DEFAULT NULL
+    p_user_id INTEGER,
+    p_search_term CHARACTER VARYING DEFAULT NULL,
+    p_purchased_only BOOLEAN DEFAULT FALSE,
+    p_tags INTEGER[] DEFAULT NULL,
+    p_limit INTEGER DEFAULT 10,
+    p_offset INTEGER DEFAULT 0
 )
 RETURNS TABLE (
-    id integer,
-    name varchar(100),
-    description text,
-    thumbnail_url varchar(255),
-    owner_id integer,
-    owner_user_id integer,
-    is_public boolean,
-    is_active boolean,
-    version integer,
-    created_at timestamp,
-    updated_at timestamp,
-    access_type text,
-    purchase_id integer,
-    purchase_date timestamp,
-    tag_ids integer[],
-    structure jsonb
+    id INTEGER,
+    name VARCHAR(100),
+    description TEXT,
+    thumbnail_url VARCHAR(255),
+    owner_id INTEGER,
+    owner_user_id INTEGER,
+    is_public BOOLEAN,
+    is_active BOOLEAN,
+    version INTEGER,
+    created_at TIMESTAMP,
+    updated_at TIMESTAMP,
+    access_type TEXT,
+    purchase_id INTEGER,
+    purchase_date TIMESTAMP,
+    tag_ids INTEGER[],
+    structure JSONB
 ) AS $$
 DECLARE
-    owned_search_condition text := '';
-    purchased_search_condition text := '';
-    tags_condition text := '';
-    query text;
+    owned_search_condition TEXT := '';
+    purchased_search_condition TEXT := '';
+    tags_condition TEXT := '';
+    query TEXT;
 BEGIN
     -- Build separate search conditions for owned vs purchased strategies
     IF p_search_term IS NOT NULL THEN
@@ -225,11 +227,12 @@ BEGIN
                 tags_condition;
     END IF;
     
-    -- Close the CTE and order the results
+    -- Close the CTE and order the results, add pagination
     query := query || '
         )
         SELECT * FROM combined_results
-        ORDER BY created_at DESC';
+        ORDER BY created_at DESC
+        LIMIT ' || p_limit || ' OFFSET ' || p_offset;
         
     -- Execute the dynamically built query
     RETURN QUERY EXECUTE query;
@@ -413,5 +416,84 @@ BEGIN
     
     GET DIAGNOSTICS affected_rows = ROW_COUNT;
     RETURN affected_rows > 0;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION count_my_strategies(
+    p_user_id INTEGER,
+    p_search_term CHARACTER VARYING DEFAULT NULL,
+    p_purchased_only BOOLEAN DEFAULT FALSE,
+    p_tags INTEGER[] DEFAULT NULL
+)
+RETURNS BIGINT AS $$
+DECLARE
+    owned_search_condition TEXT := '';
+    purchased_search_condition TEXT := '';
+    tags_condition TEXT := '';
+    query TEXT;
+    total_count BIGINT;
+BEGIN
+    -- Build separate search conditions for owned vs purchased strategies
+    IF p_search_term IS NOT NULL THEN
+        owned_search_condition := ' AND (s.name ILIKE ''%' || p_search_term || '%'' OR s.description ILIKE ''%' || p_search_term || '%'')';
+        purchased_search_condition := ' AND (s.name ILIKE ''%' || p_search_term || '%'' OR s.description ILIKE ''%' || p_search_term || '%'' OR m.description_public ILIKE ''%' || p_search_term || '%'')';
+    END IF;
+    
+    -- Build tags condition if tags are provided
+    IF p_tags IS NOT NULL AND array_length(p_tags, 1) > 0 THEN
+        tags_condition := ' AND EXISTS (SELECT 1 FROM strategy_tag_mappings WHERE strategy_id = s.id AND tag_id = ANY(''' || p_tags::text || '''::int[]))';
+    END IF;
+
+    -- Start building the count query
+    query := 'SELECT COUNT(*) FROM (';
+    
+    -- Part 1: Include owned strategies if not filtering by purchased only
+    IF NOT p_purchased_only THEN
+        query := query || '
+            SELECT s.id 
+            FROM strategies s
+            WHERE s.user_id = ' || p_user_id || '
+                AND s.is_active = TRUE' ||
+                owned_search_condition || 
+                tags_condition;
+
+        -- Add UNION if we're going to add more parts
+        query := query || ' UNION ALL ';
+    END IF;
+    
+    -- Part 2: Always include active purchased strategies
+    query := query || '
+        SELECT s.id
+        FROM strategy_purchases p
+        JOIN strategy_marketplace m ON p.marketplace_id = m.id
+        JOIN strategies s ON m.strategy_id = s.id
+        WHERE p.buyer_id = ' || p_user_id || '
+            AND s.is_active = TRUE 
+            AND (p.subscription_end IS NULL OR p.subscription_end > NOW())' ||
+            purchased_search_condition || 
+            tags_condition;
+            
+    -- Part 3: Include expired subscriptions if not filtering by purchased only
+    IF NOT p_purchased_only THEN
+        query := query || ' UNION ALL
+            SELECT s.id
+            FROM strategy_purchases p
+            JOIN strategy_marketplace m ON p.marketplace_id = m.id
+            JOIN strategies s ON m.strategy_id = s.id
+            WHERE p.buyer_id = ' || p_user_id || '
+                AND s.is_active = TRUE 
+                AND p.subscription_end IS NOT NULL
+                AND p.subscription_end <= NOW()' ||
+                purchased_search_condition || 
+                tags_condition;
+    END IF;
+    
+    -- Close the subquery
+    query := query || ') AS total_strategies';
+        
+    -- Execute the count query
+    EXECUTE query INTO total_count;
+    
+    RETURN total_count;
 END;
 $$ LANGUAGE plpgsql;

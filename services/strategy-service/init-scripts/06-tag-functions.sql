@@ -3,7 +3,11 @@
 -- Contains functions for tag operations
 
 -- Get strategy tags
-CREATE OR REPLACE FUNCTION get_strategy_tags(p_search VARCHAR DEFAULT NULL)
+CREATE OR REPLACE FUNCTION get_strategy_tags(
+    p_search VARCHAR DEFAULT NULL,
+    p_limit INT DEFAULT 100,
+    p_offset INT DEFAULT 0
+)
 RETURNS TABLE (
     id INT,
     name VARCHAR(50)
@@ -15,7 +19,8 @@ BEGIN
     WHERE 
         p_search IS NULL 
         OR t.name ILIKE '%' || p_search || '%'
-    ORDER BY t.name;
+    ORDER BY t.name
+    LIMIT p_limit OFFSET p_offset;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -65,5 +70,23 @@ BEGIN
     
     GET DIAGNOSTICS affected_rows = ROW_COUNT;
     RETURN affected_rows > 0;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION count_strategy_tags(
+    p_search VARCHAR DEFAULT NULL
+)
+RETURNS BIGINT AS $$
+DECLARE
+    tag_count BIGINT;
+BEGIN
+    SELECT COUNT(*)
+    INTO tag_count
+    FROM strategy_tags t
+    WHERE 
+        p_search IS NULL 
+        OR t.name ILIKE '%' || p_search || '%';
+        
+    RETURN tag_count;
 END;
 $$ LANGUAGE plpgsql;

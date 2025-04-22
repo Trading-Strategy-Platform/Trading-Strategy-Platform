@@ -26,34 +26,23 @@ func NewTagRepository(db *sqlx.DB, logger *zap.Logger) *TagRepository {
 
 // GetAll retrieves all tags with proper database-level pagination
 func (r *TagRepository) GetAll(ctx context.Context, searchTerm string, page, limit int) ([]model.Tag, int, error) {
-	// First, get total count with a separate COUNT query
-	countQuery := `
-		SELECT COUNT(*) 
-		FROM strategy_tags
-		WHERE ($1::text IS NULL OR name ILIKE '%' || $1 || '%')
-	`
+	// Calculate offset
+	offset := (page - 1) * limit
 
+	// First, get total count using the count function
 	var totalCount int
-	err := r.db.GetContext(ctx, &totalCount, countQuery, searchTerm)
+	err := r.db.GetContext(ctx, &totalCount, `SELECT count_strategy_tags($1)`, searchTerm)
 	if err != nil {
 		r.logger.Error("Failed to count tags", zap.Error(err), zap.String("search", searchTerm))
 		return nil, 0, err
 	}
 
-	// Calculate offset for pagination
-	offset := (page - 1) * limit
-
-	// Now, use a separate query with LIMIT and OFFSET for pagination
-	query := `
-		SELECT id, name 
-		FROM strategy_tags
-		WHERE ($1::text IS NULL OR name ILIKE '%' || $1 || '%')
-		ORDER BY name
-		LIMIT $2 OFFSET $3
-	`
-
+	// Now, get paginated tags using the function with pagination parameters
 	var tags []model.Tag
-	err = r.db.SelectContext(ctx, &tags, query, searchTerm, limit, offset)
+	err = r.db.SelectContext(ctx, &tags, `
+		SELECT * FROM get_strategy_tags($1, $2, $3)
+	`, searchTerm, limit, offset)
+
 	if err != nil {
 		r.logger.Error("Failed to get tags", zap.Error(err), zap.String("search", searchTerm))
 		return nil, 0, err

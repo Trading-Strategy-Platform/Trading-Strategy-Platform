@@ -29,13 +29,8 @@ func NewStrategyRepository(db *sqlx.DB, logger *zap.Logger) *StrategyRepository 
 
 // GetUserStrategies retrieves strategies with proper database-level pagination
 func (r *StrategyRepository) GetUserStrategies(ctx context.Context, userID int, searchTerm string, purchasedOnly bool, tags []int, page, limit int) ([]model.ExtendedStrategy, int, error) {
-	// First, count total records with a modified version of get_my_strategies
-	// that returns only the count without full data
-	countQuery := `
-		SELECT COUNT(*) FROM (
-			SELECT * FROM get_my_strategies($1, $2, $3, $4)
-		) AS total_count
-	`
+	// Calculate offset
+	offset := (page - 1) * limit
 
 	// Ensure tags is initialized to empty array if nil
 	tagsParam := pq.Array(tags)
@@ -43,8 +38,9 @@ func (r *StrategyRepository) GetUserStrategies(ctx context.Context, userID int, 
 		tagsParam = pq.Array([]int{})
 	}
 
+	// First, get total count using the count function
 	var totalCount int
-	err := r.db.GetContext(ctx, &totalCount, countQuery,
+	err := r.db.GetContext(ctx, &totalCount, `SELECT count_my_strategies($1, $2, $3, $4)`,
 		userID,
 		searchTerm,
 		purchasedOnly,
@@ -56,21 +52,11 @@ func (r *StrategyRepository) GetUserStrategies(ctx context.Context, userID int, 
 		return nil, 0, err
 	}
 
-	// Now get the actual paginated data
-	// Calculate offset
-	offset := (page - 1) * limit
-
-	// Use the same function, but now apply LIMIT and OFFSET in SQL
-	query := `
-		SELECT * FROM (
-			SELECT * FROM get_my_strategies($1, $2, $3, $4)
-		) AS filtered_strategies
-		ORDER BY created_at DESC
-		LIMIT $5 OFFSET $6
-	`
-
+	// Now get the actual paginated data from the function with pagination parameters
 	var strategies []model.ExtendedStrategy
-	err = r.db.SelectContext(ctx, &strategies, query,
+	err = r.db.SelectContext(ctx, &strategies, `
+		SELECT * FROM get_my_strategies($1, $2, $3, $4, $5, $6)
+	`,
 		userID,
 		searchTerm,
 		purchasedOnly,
