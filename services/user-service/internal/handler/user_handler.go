@@ -170,28 +170,6 @@ func (h *UserHandler) ListUsers(c *gin.Context) {
 	})
 }
 
-// GetUserRoles gets a user's roles (admin only)
-// GET /api/v1/admin/users/{id}/roles
-func (h *UserHandler) GetUserRoles(c *gin.Context) {
-	idStr := c.Param("id")
-	id, err := strconv.Atoi(idStr)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid user ID"})
-		return
-	}
-
-	role, err := h.userService.GetRole(c.Request.Context(), id)
-	if err != nil {
-		h.logger.Error("failed to get user role", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get user role"})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"roles": []string{role},
-	})
-}
-
 // BatchGetServiceUsers handles fetching multiple users by ID for service-to-service communication
 // GET /api/v1/service/users/batch?ids=1,2,3
 func (h *UserHandler) BatchGetServiceUsers(c *gin.Context) {

@@ -1,7 +1,7 @@
-// internal/middleware/auth.go
 package middleware
 
 import (
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -32,7 +32,7 @@ func AuthMiddleware(authService *service.AuthService, logger *zap.Logger) gin.Ha
 
 		// Validate the token
 		tokenString := headerParts[1]
-		userID, err := authService.ValidateToken(tokenString)
+		userID, role, err := authService.ValidateToken(tokenString)
 		if err != nil {
 			logger.Debug("token validation failed", zap.Error(err))
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid or expired token"})
@@ -40,32 +40,20 @@ func AuthMiddleware(authService *service.AuthService, logger *zap.Logger) gin.Ha
 			return
 		}
 
-		// Set user ID in context
+		// Set user ID and role in context
 		c.Set("userID", userID)
+		c.Set("userRole", role)
 		c.Next()
 	}
 }
 
 // RequireRole middleware checks if the user has the required role
-func RequireRole(userService *service.UserService, requiredRoles ...string) gin.HandlerFunc {
+func RequireRole(requiredRoles ...string) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		userID, exists := c.Get("userID")
+		// Get role from context (set by AuthMiddleware)
+		userRole, exists := c.Get("userRole")
 		if !exists {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
-			c.Abort()
-			return
-		}
-
-		// Get user to check role
-		user, err := userService.GetByID(c, userID.(int))
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get user data"})
-			c.Abort()
-			return
-		}
-
-		if user == nil {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "User not found"})
 			c.Abort()
 			return
 		}
@@ -73,7 +61,7 @@ func RequireRole(userService *service.UserService, requiredRoles ...string) gin.
 		// Check if user has one of the required roles
 		hasRole := false
 		for _, role := range requiredRoles {
-			if user.Role == role {
+			if userRole.(string) == role {
 				hasRole = true
 				break
 			}
@@ -87,4 +75,44 @@ func RequireRole(userService *service.UserService, requiredRoles ...string) gin.
 
 		c.Next()
 	}
+}
+
+// ServiceAuthMiddleware creates middleware for service-to-service authentication
+func ServiceAuthMiddleware(expectedKey string, logger *zap.Logger) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		// Get service key from header
+		serviceKey := c.GetHeader("X-Service-Key")
+		if serviceKey == "" {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "Service key required"})
+			c.Abort()
+			return
+		}
+
+		// Simple comparison for service key
+		if serviceKey != expectedKey {
+			logger.Warn("Invalid service key in request",
+				zap.String("IP", c.ClientIP()),
+				zap.String("Path", c.Request.URL.Path))
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid service key"})
+			c.Abort()
+			return
+		}
+
+		c.Next()
+	}
+}
+
+// ExtractToken extracts the JWT token from authorization header
+func ExtractToken(c *gin.Context) (string, error) {
+	authHeader := c.GetHeader("Authorization")
+	if authHeader == "" {
+		return "", fmt.Errorf("authorization header required")
+	}
+
+	parts := strings.Split(authHeader, " ")
+	if len(parts) != 2 || parts[0] != "Bearer" {
+		return "", fmt.Errorf("invalid authorization format")
+	}
+
+	return parts[1], nil
 }

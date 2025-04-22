@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -112,16 +113,29 @@ func (h *AuthHandler) LogoutAll(c *gin.Context) {
 // Validate handles token validation
 // GET /api/v1/auth/validate
 func (h *AuthHandler) Validate(c *gin.Context) {
-	// The AuthMiddleware has already validated the token and set the userID in the context
+	// The AuthMiddleware has already validated the token and set the userID and userRole in the context
 	userID, exists := c.Get("userID")
 	if !exists {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Not authenticated"})
 		return
 	}
 
+	// Get the role from context (set by AuthMiddleware)
+	userRole, exists := c.Get("userRole")
+	if !exists {
+		// Default to user if role not found (should not happen with updated middleware)
+		userRole = "user"
+	}
+
+	// Set headers for Nginx auth_request module
+	c.Header("X-User-ID", fmt.Sprintf("%d", userID))
+	c.Header("X-User-Role", userRole.(string))
+
+	// Return success response
 	c.JSON(http.StatusOK, gin.H{
 		"valid":   true,
 		"user_id": userID,
+		"role":    userRole,
 	})
 }
 

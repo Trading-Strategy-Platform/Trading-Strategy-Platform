@@ -272,32 +272,6 @@ func (s *UserService) ListUsers(ctx context.Context, page, limit int) ([]model.U
 	return users, count, nil
 }
 
-// GetRole gets a user's role
-func (s *UserService) GetRole(ctx context.Context, id int) (string, error) {
-	// Try cache if Redis is available
-	if s.redisClient != nil {
-		cacheKey := fmt.Sprintf("user:role:%d", id)
-		role, err := s.redisClient.Get(ctx, cacheKey).Result()
-		if err == nil {
-			return role, nil
-		}
-	}
-
-	// Get from database
-	role, err := s.userRepo.GetRole(ctx, id)
-	if err != nil {
-		return "", err
-	}
-
-	// Cache the result if Redis is available
-	if s.redisClient != nil && role != "" {
-		cacheKey := fmt.Sprintf("user:role:%d", id)
-		s.redisClient.Set(ctx, cacheKey, role, 30*time.Minute)
-	}
-
-	return role, nil
-}
-
 // CheckUserExists checks if a user exists
 func (s *UserService) CheckUserExists(ctx context.Context, id int) (bool, error) {
 	// Try cache if Redis is available

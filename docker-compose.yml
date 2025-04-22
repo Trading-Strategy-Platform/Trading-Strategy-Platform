@@ -61,7 +61,68 @@ services:
       - historical-service-network
       - backtest-service-network  # Added to ensure backtest service can access it
   
-  # SERVICES WITH CHANGES
+  # NGINX API GATEWAY
+  api-gateway:
+    image: nginx:stable-alpine
+    container_name: api-gateway
+    ports:
+      - "8080:80"
+      - "8443:443"  # For HTTPS when configured
+    volumes:
+      - ./services/api-gateway/nginx/conf/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./services/api-gateway/nginx/conf/conf.d:/etc/nginx/conf.d:ro
+      - ./services/api-gateway/nginx/conf/proxy_params:/etc/nginx/proxy_params:ro
+      - ./services/api-gateway/nginx/ssl:/etc/nginx/ssl:ro
+      - ./services/api-gateway/nginx/logs:/var/log/nginx
+      - ./services/api-gateway/nginx/cache:/var/cache/nginx
+    networks:
+      - api-gateway-network
+      - user-service-network
+      - strategy-service-network
+      - historical-service-network
+      - media-service-network
+      - backtest-service-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    depends_on:
+      - user-service
+      - strategy-service
+      - historical-service
+      - media-service
+      - backtest-service
+  
+  # KAFKA INTEGRATION SERVICE
+  kafka-integration:
+    build:
+      context: ./services/api-gateway/kafka-integration
+      dockerfile: Dockerfile
+    container_name: kafka-integration
+    volumes:
+      - ./services/api-gateway/nginx/logs:/var/log/nginx:ro
+    depends_on:
+      - api-gateway
+      - kafka
+    environment:
+      - NODE_ENV=production
+      - KAFKA_BROKERS=kafka:9092
+      - LOG_LEVEL=info
+    networks:
+      - kafka-network
+      - api-gateway-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "/app/src/healthcheck.js"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+  
+  # SERVICES
   strategy-service:
     build:
       context: ./services/strategy-service
@@ -72,9 +133,9 @@ services:
       - kafka
       - redis
       - media-service
-      - backtest-service  # Added dependency on backtest-service
+      - backtest-service
     ports:
-      - "8082:8082"  # Map host 8082 to container 8082
+      - "8082:8082"
     environment:
       DB_HOST: strategy-db
       DB_PORT: 5432
@@ -86,15 +147,15 @@ services:
       REDIS_URL: redis:6379
       MEDIA_SERVICE_URL: http://media-service:8085
       MEDIA_SERVICE_KEY: media-service-key
-      BACKTEST_SERVICE_URL: http://backtest-service:5000  # Added backtest service URL
+      BACKTEST_SERVICE_URL: http://backtest-service:5000
     networks:
       - strategy-service-network
       - kafka-network
       - redis-network
       - api-gateway-network
       - media-service-network
-      - backtest-service-network  # Added network for backtest service
-    healthcheck:  # Added healthcheck
+      - backtest-service-network
+    healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8082/health"]
       interval: 30s
       timeout: 10s
@@ -104,11 +165,11 @@ services:
   backtest-service:
     build:
       context: ./services/backtesting-service
-      dockerfile: Dockerfile  # Make sure to update this Dockerfile with the changes
+      dockerfile: Dockerfile
     container_name: backtest-service
     depends_on:
       - historical-db
-      - strategy-db  # Added dependency on strategy database
+      - strategy-db
     ports:
       - "5000:5000"
     environment:
@@ -129,18 +190,17 @@ services:
     networks:
       - backtest-service-network
       - api-gateway-network
-      - historical-service-network  # For historical DB access
-      - strategy-service-network    # Added for strategy DB access
+      - historical-service-network
+      - strategy-service-network
     volumes:
-      - ./services/backtesting-service/src:/app/src  # For development
-    healthcheck:  # Added enhanced healthcheck
+      - ./services/backtesting-service/src:/app/src
+    healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 10s
   
-  # OTHER SERVICES (UNCHANGED)
   user-service:
     build:
       context: ./services/user-service
@@ -152,7 +212,7 @@ services:
       - redis
       - media-service
     ports:
-      - "8081:8083"  # Map host 8081 to container 8083
+      - "8081:8083"
     environment:
       DB_HOST: user-db
       DB_PORT: 5432
@@ -181,7 +241,7 @@ services:
       - kafka
       - backtest-service
     ports:
-      - "8083:8081"  # Map host 8083 to container 8081
+      - "8083:8081"
     environment:
       DB_HOST: historical-db
       DB_PORT: 5432
@@ -204,7 +264,7 @@ services:
       dockerfile: Dockerfile
     container_name: media-service
     ports:
-      - "8085:8085"  # Map host 8085 to container 8085
+      - "8085:8085"
     environment:
       STORAGE_TYPE: local
       BASE_PATH: /data/images
@@ -215,26 +275,6 @@ services:
     networks:
       - media-service-network
       - api-gateway-network
-  
-  api-gateway:
-    build:
-      context: ./services/api-gateway
-      dockerfile: Dockerfile
-    container_name: api-gateway
-    ports:
-      - "8080:8080"
-    environment:
-      USER_SERVICE_URL: http://user-service:8083
-      STRATEGY_SERVICE_URL: http://strategy-service:8082
-      HISTORICAL_SERVICE_URL: http://historical-service:8081
-      MEDIA_SERVICE_URL: http://media-service:8085
-    networks:
-      - api-gateway-network
-    depends_on:
-      - user-service
-      - strategy-service
-      - historical-service
-      - media-service
   
   # INFRASTRUCTURE
   zookeeper:

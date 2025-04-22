@@ -66,14 +66,14 @@ func (s *AuthService) Register(ctx context.Context, userCreate *model.UserCreate
 		return nil, err
 	}
 
-	// Generate tokens
-	accessToken, refreshToken, expiresAt, err := s.generateTokens(userID)
+	// Get the created user to access the role
+	user, err := s.userRepo.GetByID(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
 
-	// Get the created user
-	user, err := s.userRepo.GetByID(ctx, userID)
+	// Generate tokens with role information
+	accessToken, refreshToken, expiresAt, err := s.generateTokens(userID, user.Role)
 	if err != nil {
 		return nil, err
 	}
@@ -81,6 +81,14 @@ func (s *AuthService) Register(ctx context.Context, userCreate *model.UserCreate
 	// Update last login time
 	if err := s.authRepo.UpdateLastLogin(ctx, userID); err != nil {
 		s.logger.Warn("failed to update last login", zap.Error(err), zap.Int("userID", userID))
+	}
+
+	// Store refresh token in the database
+	ip := ""
+	ua := ""
+	_, err = s.authRepo.CreateUserSession(ctx, userID, refreshToken, expiresAt, ip, ua)
+	if err != nil {
+		s.logger.Warn("failed to create user session", zap.Error(err))
 	}
 
 	return &model.TokenResponse{
@@ -113,8 +121,8 @@ func (s *AuthService) Login(ctx context.Context, login *model.UserLogin) (*model
 		return nil, errors.New("invalid email or password")
 	}
 
-	// Generate tokens
-	accessToken, refreshToken, expiresAt, err := s.generateTokens(user.ID)
+	// Generate tokens with user role
+	accessToken, refreshToken, expiresAt, err := s.generateTokens(user.ID, user.Role)
 	if err != nil {
 		return nil, err
 	}
@@ -182,7 +190,7 @@ func (s *AuthService) RefreshToken(ctx context.Context, refreshToken string) (*m
 		return nil, errors.New("session not found or expired")
 	}
 
-	// Get user
+	// Get user with role information
 	user, err := s.userRepo.GetByID(ctx, userID)
 	if err != nil {
 		return nil, err
@@ -191,8 +199,8 @@ func (s *AuthService) RefreshToken(ctx context.Context, refreshToken string) (*m
 		return nil, errors.New("user not found or inactive")
 	}
 
-	// Generate new tokens
-	accessToken, newRefreshToken, expiresAt, err := s.generateTokens(userID)
+	// Generate new tokens with role
+	accessToken, newRefreshToken, expiresAt, err := s.generateTokens(userID, user.Role)
 	if err != nil {
 		return nil, err
 	}
@@ -203,10 +211,13 @@ func (s *AuthService) RefreshToken(ctx context.Context, refreshToken string) (*m
 		s.logger.Warn("failed to delete old session", zap.Error(err))
 	}
 
-	// Store session info
+	// Store new session
 	ip := ""
 	ua := ""
-	_, err = s.authRepo.CreateUserSession(ctx, user.ID, refreshToken, expiresAt, ip, ua)
+	_, err = s.authRepo.CreateUserSession(ctx, user.ID, newRefreshToken, expiresAt, ip, ua)
+	if err != nil {
+		s.logger.Warn("failed to create new session", zap.Error(err))
+	}
 
 	return &model.TokenResponse{
 		AccessToken:  accessToken,
@@ -275,17 +286,18 @@ func (s *AuthService) ChangePassword(ctx context.Context, id int, change *model.
 	return nil
 }
 
-// generateTokens creates a new pair of access and refresh tokens
-func (s *AuthService) generateTokens(userID int) (accessToken, refreshToken string, expiresAt time.Time, err error) {
+// generateTokens creates a new pair of access and refresh tokens with role information
+func (s *AuthService) generateTokens(userID int, role string) (accessToken, refreshToken string, expiresAt time.Time, err error) {
 	// Access token expiry
 	accessExpiry := time.Now().Add(s.cfg.Auth.AccessTokenDuration)
 
-	// Create access token
+	// Create access token with role information
 	accessClaims := jwt.MapClaims{
 		"sub":  userID,
 		"exp":  accessExpiry.Unix(),
 		"iat":  time.Now().Unix(),
 		"type": "access",
+		"role": role, // Include role in the token
 	}
 
 	access := jwt.NewWithClaims(jwt.SigningMethodHS256, accessClaims)
@@ -314,8 +326,8 @@ func (s *AuthService) generateTokens(userID int) (accessToken, refreshToken stri
 	return accessToken, refreshToken, accessExpiry, nil
 }
 
-// ValidateToken validates a JWT token and returns the user ID if valid
-func (s *AuthService) ValidateToken(tokenString string) (int, error) {
+// ValidateToken validates a JWT token and returns the user ID and role if valid
+func (s *AuthService) ValidateToken(tokenString string) (int, string, error) {
 	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
 		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
 			return nil, errors.New("unexpected signing method")
@@ -324,34 +336,41 @@ func (s *AuthService) ValidateToken(tokenString string) (int, error) {
 	})
 
 	if err != nil {
-		return 0, err
+		return 0, "", err
 	}
 
 	if !token.Valid {
-		return 0, errors.New("invalid token")
+		return 0, "", errors.New("invalid token")
 	}
 
 	claims, ok := token.Claims.(jwt.MapClaims)
 	if !ok {
-		return 0, errors.New("invalid claims")
+		return 0, "", errors.New("invalid claims")
 	}
 
 	// Check token type
 	tokenType, ok := claims["type"].(string)
 	if !ok || tokenType != "access" {
-		return 0, errors.New("invalid token type")
+		return 0, "", errors.New("invalid token type")
 	}
 
 	// Extract user ID
 	userIDFloat, ok := claims["sub"].(float64)
 	if !ok {
-		return 0, errors.New("invalid user ID in token")
+		return 0, "", errors.New("invalid user ID in token")
 	}
 
-	return int(userIDFloat), nil
+	// Extract role
+	role, ok := claims["role"].(string)
+	if !ok {
+		// Default to 'user' if role not found (for backward compatibility)
+		role = "user"
+	}
+
+	return int(userIDFloat), role, nil
 }
 
-// ValidateServiceKey validates a service key
-func (s *AuthService) ValidateServiceKey(ctx context.Context, serviceName, keyHash string) (bool, error) {
-	return s.authRepo.ValidateServiceKey(ctx, serviceName, keyHash)
+// GetJWTSecret returns the JWT secret for service-to-service validation
+func (s *AuthService) GetJWTSecret() string {
+	return s.cfg.Auth.JWTSecret
 }

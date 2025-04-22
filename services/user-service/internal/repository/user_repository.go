@@ -168,19 +168,3 @@ func (r *UserRepository) Count(ctx context.Context) (int, error) {
 
 	return count, nil
 }
-
-// GetRole returns the role of a user using get_user_role function
-func (r *UserRepository) GetRole(ctx context.Context, id int) (string, error) {
-	query := `SELECT get_user_role($1)`
-
-	var role string
-	if err := r.db.GetContext(ctx, &role, query, id); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return "", nil
-		}
-		r.logger.Error("failed to get user role", zap.Error(err), zap.Int("id", id))
-		return "", err
-	}
-
-	return role, nil
-}

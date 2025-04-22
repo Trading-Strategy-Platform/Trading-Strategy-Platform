@@ -221,10 +221,12 @@ func setupRouter(
 	// API routes
 	v1 := router.Group("/api/v1")
 	{
-		// Auth routes
+		// ==================== AUTH ROUTES ====================
 		auth := v1.Group("/auth")
 		{
 			authHandler := handler.NewAuthHandler(authService, logger)
+
+			// Public auth routes - these are critical
 			auth.POST("/register", authHandler.Register)
 			auth.POST("/login", authHandler.Login)
 			auth.POST("/refresh-token", authHandler.RefreshToken)
@@ -234,77 +236,82 @@ func setupRouter(
 			authProtected.Use(middleware.AuthMiddleware(authService, logger))
 			authProtected.POST("/logout", authHandler.Logout)
 			authProtected.POST("/logout-all", authHandler.LogoutAll)
+
+			// Only validation endpoint needed - for Nginx auth_request
+			// Even this could be eliminated if Nginx used JWT libraries directly
 			authProtected.GET("/validate", authHandler.Validate)
 		}
 
-		// User routes (protected)
+		// ==================== USER ROUTES ====================
 		users := v1.Group("/users")
 		{
-			// All user routes require authentication
+			// All require auth middleware - role checking happens inside handlers based on token
 			users.Use(middleware.AuthMiddleware(authService, logger))
 
-			// User profile handlers
+			// User handlers
 			userHandler := handler.NewUserHandler(userService, logger)
+			passwordHandler := handler.NewPasswordHandler(authService, logger)
+			prefHandler := handler.NewPreferenceHandler(preferenceService, logger)
+			notifHandler := handler.NewNotificationHandler(notificationService, logger)
+			profileHandler := handler.NewProfileHandler(profileService, logger)
+
+			// User profile routes
 			users.GET("/me", userHandler.GetCurrentUser)
 			users.PUT("/me", userHandler.UpdateCurrentUser)
 			users.DELETE("/me", userHandler.DeleteCurrentUser)
 
 			// Password management
-			passwordHandler := handler.NewPasswordHandler(authService, logger)
 			users.PUT("/me/password", passwordHandler.ChangePassword)
 
-			// User preferences handlers
-			prefHandler := handler.NewPreferenceHandler(preferenceService, logger)
+			// User preferences routes
 			users.GET("/me/preferences", prefHandler.GetUserPreferences)
 			users.PUT("/me/preferences", prefHandler.UpdateUserPreferences)
 			users.POST("/me/preferences/reset", prefHandler.ResetUserPreferences)
 
-			// User notifications handlers
-			notifHandler := handler.NewNotificationHandler(notificationService, logger)
+			// User notifications routes
 			users.GET("/me/notifications", notifHandler.GetNotifications)
 			users.GET("/me/notifications/count", notifHandler.GetUnreadCount)
 			users.PUT("/me/notifications/:id/read", notifHandler.MarkNotificationAsRead)
 			users.PUT("/me/notifications/read-all", notifHandler.MarkAllAsRead)
 
-			// Profile photo handlers
-			profileHandler := handler.NewProfileHandler(profileService, logger)
+			// Profile photo routes
 			users.GET("/me/profile-photo", profileHandler.GetProfilePhoto)
 			users.POST("/me/profile-photo", profileHandler.UploadProfilePhoto)
 			users.DELETE("/me/profile-photo", profileHandler.DeleteProfilePhoto)
 		}
 
-		// Admin routes (protected with role check)
+		// ==================== ADMIN ROUTES ====================
 		admin := v1.Group("/admin")
 		{
+			// Admin routes require auth middleware WITH role check
 			admin.Use(middleware.AuthMiddleware(authService, logger))
-			admin.Use(middleware.RequireRole(userService, "admin"))
+			admin.Use(middleware.RequireRole("admin")) // Check role from token
 
-			// User management (admin)
 			userHandler := handler.NewUserHandler(userService, logger)
+			notifHandler := handler.NewNotificationHandler(notificationService, logger)
+
+			// User management (admin only)
 			admin.GET("/users", userHandler.ListUsers)
 			admin.GET("/users/:id", userHandler.GetUserByID)
 			admin.PUT("/users/:id", userHandler.UpdateUser)
-			admin.GET("/users/:id/roles", userHandler.GetUserRoles)
 
 			// Notification management (admin)
-			notifHandler := handler.NewNotificationHandler(notificationService, logger)
 			admin.POST("/notifications", notifHandler.CreateNotification)
 		}
 
-		// Service-to-service API
+		// ==================== SERVICE API ====================
+		// Only for data not available in tokens
 		service := v1.Group("/service")
 		{
-			// This is for direct service-to-service communication
-			// No auth middleware, but will verify service keys in the handlers
+			// Protected with service key
+			service.Use(middleware.ServiceAuthMiddleware(cfg.ServiceKey, logger))
 
-			// Service user endpoints
-			serviceUsers := service.Group("/users")
-			{
-				userHandler := handler.NewUserHandler(userService, logger)
-				serviceUsers.GET("/batch", userHandler.BatchGetServiceUsers)
-			}
+			serviceHandler := handler.NewServiceHandler(userService, logger)
 
-			// Add other service endpoints as needed
+			// User profile data (only for getting data NOT in the token)
+			service.GET("/users/batch", serviceHandler.BatchGetUsers)
+			service.GET("/users/:id", serviceHandler.GetUserByID)
+
 		}
 	}
 
