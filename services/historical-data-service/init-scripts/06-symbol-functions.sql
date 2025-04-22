@@ -2,7 +2,11 @@
 CREATE OR REPLACE FUNCTION get_symbols(
     p_search_term VARCHAR DEFAULT NULL,
     p_asset_type VARCHAR DEFAULT NULL,
-    p_exchange VARCHAR DEFAULT NULL
+    p_exchange VARCHAR DEFAULT NULL,
+    p_sort_by VARCHAR DEFAULT 'symbol',
+    p_sort_direction VARCHAR DEFAULT 'ASC',
+    p_limit INT DEFAULT 100,
+    p_offset INT DEFAULT 0
 )
 RETURNS TABLE (
     id INT,
@@ -16,6 +20,17 @@ RETURNS TABLE (
     updated_at TIMESTAMPTZ
 ) AS $$
 BEGIN
+    -- Validate sort field
+    IF p_sort_by NOT IN ('symbol', 'name', 'asset_type', 'exchange', 'created_at', 'data_available') THEN
+        p_sort_by := 'symbol';
+    END IF;
+    
+    -- Normalize sort direction
+    p_sort_direction := UPPER(p_sort_direction);
+    IF p_sort_direction NOT IN ('ASC', 'DESC') THEN
+        p_sort_direction := 'ASC';
+    END IF;
+
     RETURN QUERY
     SELECT 
         s.id,
@@ -45,7 +60,51 @@ BEGIN
             OR s.exchange = p_exchange
         )
     ORDER BY 
-        s.symbol;
+        CASE WHEN p_sort_by = 'symbol' AND p_sort_direction = 'ASC' THEN s.symbol END ASC,
+        CASE WHEN p_sort_by = 'symbol' AND p_sort_direction = 'DESC' THEN s.symbol END DESC,
+        CASE WHEN p_sort_by = 'name' AND p_sort_direction = 'ASC' THEN s.name END ASC,
+        CASE WHEN p_sort_by = 'name' AND p_sort_direction = 'DESC' THEN s.name END DESC,
+        CASE WHEN p_sort_by = 'asset_type' AND p_sort_direction = 'ASC' THEN s.asset_type END ASC,
+        CASE WHEN p_sort_by = 'asset_type' AND p_sort_direction = 'DESC' THEN s.asset_type END DESC,
+        CASE WHEN p_sort_by = 'exchange' AND p_sort_direction = 'ASC' THEN s.exchange END ASC,
+        CASE WHEN p_sort_by = 'exchange' AND p_sort_direction = 'DESC' THEN s.exchange END DESC,
+        CASE WHEN p_sort_by = 'created_at' AND p_sort_direction = 'ASC' THEN s.created_at END ASC,
+        CASE WHEN p_sort_by = 'created_at' AND p_sort_direction = 'DESC' THEN s.created_at END DESC,
+        CASE WHEN p_sort_by = 'data_available' AND p_sort_direction = 'ASC' THEN s.data_available END ASC,
+        CASE WHEN p_sort_by = 'data_available' AND p_sort_direction = 'DESC' THEN s.data_available END DESC
+    LIMIT p_limit OFFSET p_offset;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION count_symbols(
+    p_search_term VARCHAR DEFAULT NULL,
+    p_asset_type VARCHAR DEFAULT NULL,
+    p_exchange VARCHAR DEFAULT NULL
+)
+RETURNS BIGINT AS $$
+DECLARE
+    symbol_count BIGINT;
+BEGIN
+    SELECT COUNT(*)
+    INTO symbol_count
+    FROM symbols s
+    WHERE 
+        s.is_active = TRUE
+        AND (
+            p_search_term IS NULL 
+            OR s.symbol ILIKE '%' || p_search_term || '%' 
+            OR s.name ILIKE '%' || p_search_term || '%'
+        )
+        AND (
+            p_asset_type IS NULL 
+            OR s.asset_type = p_asset_type
+        )
+        AND (
+            p_exchange IS NULL 
+            OR s.exchange = p_exchange
+        );
+    
+    RETURN symbol_count;
 END;
 $$ LANGUAGE plpgsql;
 

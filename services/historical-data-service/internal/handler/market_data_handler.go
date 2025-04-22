@@ -7,6 +7,7 @@ import (
 
 	"services/historical-data-service/internal/model"
 	"services/historical-data-service/internal/service"
+	"services/historical-data-service/internal/utils"
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -26,7 +27,7 @@ func NewMarketDataHandler(marketDataService *service.MarketDataService, logger *
 	}
 }
 
-// GetCandles handles retrieving candle data with dynamic timeframe
+// GetCandles handles retrieving candle data with dynamic timeframe and pagination
 // GET /api/v1/market-data/candles
 func (h *MarketDataHandler) GetCandles(c *gin.Context) {
 	// Parse query parameters
@@ -36,7 +37,7 @@ func (h *MarketDataHandler) GetCandles(c *gin.Context) {
 	symbolIDStr := c.Query("symbol_id")
 	symbolID, err := strconv.Atoi(symbolIDStr)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid symbol ID"})
+		utils.SendErrorResponse(c, http.StatusBadRequest, "Invalid symbol ID")
 		return
 	}
 	query.SymbolID = symbolID
@@ -44,7 +45,7 @@ func (h *MarketDataHandler) GetCandles(c *gin.Context) {
 	// Parse timeframe
 	timeframe := c.Query("timeframe")
 	if timeframe == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Timeframe is required"})
+		utils.SendErrorResponse(c, http.StatusBadRequest, "Timeframe is required")
 		return
 	}
 	query.Timeframe = timeframe
@@ -56,7 +57,7 @@ func (h *MarketDataHandler) GetCandles(c *gin.Context) {
 			// Try an alternate format
 			startDate, err = time.Parse("2006-01-02", startStr)
 			if err != nil {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid start_date format. Use YYYY-MM-DD or RFC3339"})
+				utils.SendErrorResponse(c, http.StatusBadRequest, "Invalid start_date format. Use YYYY-MM-DD or RFC3339")
 				return
 			}
 		}
@@ -69,34 +70,35 @@ func (h *MarketDataHandler) GetCandles(c *gin.Context) {
 			// Try an alternate format
 			endDate, err = time.Parse("2006-01-02", endStr)
 			if err != nil {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid end_date format. Use YYYY-MM-DD or RFC3339"})
+				utils.SendErrorResponse(c, http.StatusBadRequest, "Invalid end_date format. Use YYYY-MM-DD or RFC3339")
 				return
 			}
 		}
 		query.EndDate = &endDate
 	}
 
-	if limitStr := c.Query("limit"); limitStr != "" {
-		limit, err := strconv.Atoi(limitStr)
-		if err != nil || limit <= 0 {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid limit"})
-			return
-		}
-		query.Limit = &limit
-	}
+	// Parse pagination parameters
+	params := utils.ParsePaginationParams(c, 1000, 5000) // default: 1000, max: 5000
 
-	// Get candle data
-	candles, err := h.marketDataService.GetCandles(c.Request.Context(), &query)
+	// Get candle data with pagination
+	candles, total, err := h.marketDataService.GetCandles(
+		c.Request.Context(),
+		&query,
+		params.Page,
+		params.Limit,
+	)
+
 	if err != nil {
 		h.logger.Error("Failed to get candles",
 			zap.Error(err),
 			zap.Int("symbolID", query.SymbolID),
 			zap.String("timeframe", query.Timeframe))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get candle data"})
+		utils.SendErrorResponse(c, http.StatusInternalServerError, "Failed to get candle data")
 		return
 	}
 
-	c.JSON(http.StatusOK, candles)
+	// Use standardized pagination response
+	utils.SendPaginatedResponse(c, http.StatusOK, candles, total, params.Page, params.Limit)
 }
 
 // BatchImportCandles handles batch importing of candle data

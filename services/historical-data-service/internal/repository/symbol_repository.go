@@ -24,47 +24,63 @@ func NewSymbolRepository(db *sqlx.DB, logger *zap.Logger) *SymbolRepository {
 	}
 }
 
-// GetAllSymbols retrieves all available symbols using get_symbols function
-func (r *SymbolRepository) GetAllSymbols(ctx context.Context) ([]model.Symbol, error) {
-	query := `SELECT * FROM get_symbols(NULL, NULL, NULL)`
+// CountSymbols counts symbols with optional filtering
+func (r *SymbolRepository) CountSymbols(
+	ctx context.Context,
+	searchTerm string,
+	assetType string,
+	exchange string,
+) (int, error) {
+	query := `SELECT count_symbols($1, $2, $3)`
 
-	var symbols []model.Symbol
-	err := r.db.SelectContext(ctx, &symbols, query)
+	var count int
+	err := r.db.GetContext(ctx, &count, query, searchTerm, assetType, exchange)
 	if err != nil {
-		r.logger.Error("Failed to get all symbols", zap.Error(err))
-		return nil, err
-	}
-
-	return symbols, nil
-}
-
-// GetSymbolsByFilter retrieves symbols with filtering using get_symbols function
-func (r *SymbolRepository) GetSymbolsByFilter(ctx context.Context, searchTerm, assetType, exchange string) ([]model.Symbol, error) {
-	query := `SELECT * FROM get_symbols($1, $2, $3)`
-
-	var searchTermParam *string
-	if searchTerm != "" {
-		searchTermParam = &searchTerm
-	}
-
-	var assetTypeParam *string
-	if assetType != "" {
-		assetTypeParam = &assetType
-	}
-
-	var exchangeParam *string
-	if exchange != "" {
-		exchangeParam = &exchange
-	}
-
-	var symbols []model.Symbol
-	err := r.db.SelectContext(ctx, &symbols, query, searchTermParam, assetTypeParam, exchangeParam)
-	if err != nil {
-		r.logger.Error("Failed to get symbols by filter",
+		r.logger.Error("Failed to count symbols",
 			zap.Error(err),
 			zap.String("searchTerm", searchTerm),
 			zap.String("assetType", assetType),
 			zap.String("exchange", exchange))
+		return 0, err
+	}
+
+	return count, nil
+}
+
+// GetAllSymbols retrieves all available symbols using get_symbols function with pagination and sorting
+func (r *SymbolRepository) GetAllSymbols(
+	ctx context.Context,
+	searchTerm string,
+	assetType string,
+	exchange string,
+	sortBy string,
+	sortDirection string,
+	limit int,
+	offset int,
+) ([]model.Symbol, error) {
+	query := `SELECT * FROM get_symbols($1, $2, $3, $4, $5, $6, $7)`
+
+	var symbols []model.Symbol
+	err := r.db.SelectContext(
+		ctx,
+		&symbols,
+		query,
+		searchTerm,
+		assetType,
+		exchange,
+		sortBy,
+		sortDirection,
+		limit,
+		offset,
+	)
+	if err != nil {
+		r.logger.Error("Failed to get symbols",
+			zap.Error(err),
+			zap.String("searchTerm", searchTerm),
+			zap.String("assetType", assetType),
+			zap.String("exchange", exchange),
+			zap.String("sortBy", sortBy),
+			zap.String("sortDirection", sortDirection))
 		return nil, err
 	}
 

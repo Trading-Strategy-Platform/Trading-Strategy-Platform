@@ -6,6 +6,7 @@ import (
 
 	"services/historical-data-service/internal/model"
 	"services/historical-data-service/internal/repository"
+	"services/historical-data-service/internal/utils"
 
 	"go.uber.org/zap"
 )
@@ -24,14 +25,79 @@ func NewSymbolService(symbolRepo *repository.SymbolRepository, logger *zap.Logge
 	}
 }
 
-// GetAllSymbols retrieves all available symbols
+// GetAllSymbols retrieves all symbols without filtering (for backward compatibility)
 func (s *SymbolService) GetAllSymbols(ctx context.Context) ([]model.Symbol, error) {
-	return s.symbolRepo.GetAllSymbols(ctx)
+	symbols, err := s.symbolRepo.GetAllSymbols(
+		ctx,
+		"",       // no search term
+		"",       // no asset type filter
+		"",       // no exchange filter
+		"symbol", // default sort by symbol
+		"ASC",    // default sort ascending
+		1000,     // default large limit
+		0,        // no offset
+	)
+	return symbols, err
 }
 
-// GetSymbolsByFilter retrieves symbols with filter parameters
+// GetSymbolsWithPagination retrieves all available symbols with pagination and sorting
+func (s *SymbolService) GetSymbolsWithPagination(
+	ctx context.Context,
+	searchTerm string,
+	assetType string,
+	exchange string,
+	sortBy string,
+	sortDirection string,
+	page int,
+	limit int,
+) ([]model.Symbol, int, error) {
+	// Validate and set default sort parameters
+	if sortBy == "" {
+		sortBy = "symbol"
+	}
+
+	// Normalize sort direction
+	sortDirection = utils.NormalizeSortDirection(sortDirection)
+
+	// Calculate offset
+	offset := utils.CalculateOffset(page, limit)
+
+	// Get total count for pagination
+	total, err := s.symbolRepo.CountSymbols(ctx, searchTerm, assetType, exchange)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	// Get symbols with pagination and sorting
+	symbols, err := s.symbolRepo.GetAllSymbols(
+		ctx,
+		searchTerm,
+		assetType,
+		exchange,
+		sortBy,
+		sortDirection,
+		limit,
+		offset,
+	)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	return symbols, total, nil
+}
+
+// GetSymbolsByFilter retrieves symbols with filter parameters (for backward compatibility)
 func (s *SymbolService) GetSymbolsByFilter(ctx context.Context, filter *model.SymbolFilter) ([]model.Symbol, error) {
-	return s.symbolRepo.GetSymbolsByFilter(ctx, filter.SearchTerm, filter.AssetType, filter.Exchange)
+	return s.symbolRepo.GetAllSymbols(
+		ctx,
+		filter.SearchTerm,
+		filter.AssetType,
+		filter.Exchange,
+		"symbol", // default sort by symbol
+		"ASC",    // default sort ascending
+		1000,     // default large limit
+		0,        // no offset
+	)
 }
 
 // GetSymbolByID retrieves a symbol by ID

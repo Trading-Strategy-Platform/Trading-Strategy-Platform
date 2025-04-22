@@ -57,7 +57,7 @@ func fixDataAvailabilityFlags(
 	ctx := context.Background()
 
 	// Get all symbols
-	symbols, err := symbolRepo.GetAllSymbols(ctx)
+	symbols, err := symbolRepo.GetAllSymbols(ctx, "", "", "", "", "", 0, 0)
 	if err != nil {
 		return err
 	}

@@ -6,6 +6,7 @@ import (
 
 	"services/historical-data-service/internal/model"
 	"services/historical-data-service/internal/service"
+	"services/historical-data-service/internal/utils"
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -25,7 +26,7 @@ func NewSymbolHandler(symbolService *service.SymbolService, logger *zap.Logger) 
 	}
 }
 
-// GetAllSymbols handles retrieving all symbols
+// GetAllSymbols handles retrieving all symbols with filtering, pagination and sorting
 // GET /api/v1/symbols
 func (h *SymbolHandler) GetAllSymbols(c *gin.Context) {
 	// Get query parameters for filtering
@@ -33,33 +34,47 @@ func (h *SymbolHandler) GetAllSymbols(c *gin.Context) {
 	assetType := c.Query("asset_type")
 	exchange := c.Query("exchange")
 
-	// If no filters provided, get all symbols
-	if searchTerm == "" && assetType == "" && exchange == "" {
+	// Parse sorting parameters
+	sortBy := c.DefaultQuery("sort_by", "symbol")
+	sortDirection := c.DefaultQuery("sort_direction", "ASC")
+
+	// Parse pagination parameters
+	params := utils.ParsePaginationParams(c, 20, 100) // default limit: 20, max limit: 100
+
+	// If no filters and no pagination/sorting specified, use the simple method
+	if searchTerm == "" && assetType == "" && exchange == "" &&
+		sortBy == "symbol" && sortDirection == "ASC" &&
+		params.Page == 1 && params.Limit == 20 {
 		symbols, err := h.symbolService.GetAllSymbols(c.Request.Context())
 		if err != nil {
 			h.logger.Error("Failed to get all symbols", zap.Error(err))
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve symbols"})
+			utils.SendErrorResponse(c, http.StatusInternalServerError, "Failed to retrieve symbols")
 			return
 		}
 		c.JSON(http.StatusOK, symbols)
 		return
 	}
 
-	// Apply filters
-	filter := &model.SymbolFilter{
-		SearchTerm: searchTerm,
-		AssetType:  assetType,
-		Exchange:   exchange,
-	}
+	// Use the paginated method
+	symbols, total, err := h.symbolService.GetSymbolsWithPagination(
+		c.Request.Context(),
+		searchTerm,
+		assetType,
+		exchange,
+		sortBy,
+		sortDirection,
+		params.Page,
+		params.Limit,
+	)
 
-	symbols, err := h.symbolService.GetSymbolsByFilter(c.Request.Context(), filter)
 	if err != nil {
 		h.logger.Error("Failed to get filtered symbols", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve symbols"})
+		utils.SendErrorResponse(c, http.StatusInternalServerError, "Failed to retrieve symbols")
 		return
 	}
 
-	c.JSON(http.StatusOK, symbols)
+	// Use standardized pagination response
+	utils.SendPaginatedResponse(c, http.StatusOK, symbols, total, params.Page, params.Limit)
 }
 
 // GetSymbol handles retrieving a symbol by ID
@@ -69,7 +84,7 @@ func (h *SymbolHandler) GetSymbol(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.Atoi(idStr)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid symbol ID"})
+		utils.SendErrorResponse(c, http.StatusBadRequest, "Invalid symbol ID")
 		return
 	}
 
@@ -77,12 +92,12 @@ func (h *SymbolHandler) GetSymbol(c *gin.Context) {
 	symbol, err := h.symbolService.GetSymbolByID(c.Request.Context(), id)
 	if err != nil {
 		h.logger.Error("Failed to get symbol", zap.Error(err), zap.Int("id", id))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve symbol"})
+		utils.SendErrorResponse(c, http.StatusInternalServerError, "Failed to retrieve symbol")
 		return
 	}
 
 	if symbol == nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Symbol not found"})
+		utils.SendErrorResponse(c, http.StatusNotFound, "Symbol not found")
 		return
 	}
 
@@ -94,7 +109,7 @@ func (h *SymbolHandler) GetSymbol(c *gin.Context) {
 func (h *SymbolHandler) CreateSymbol(c *gin.Context) {
 	var symbol model.Symbol
 	if err := c.ShouldBindJSON(&symbol); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		utils.SendErrorResponse(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -102,7 +117,7 @@ func (h *SymbolHandler) CreateSymbol(c *gin.Context) {
 	id, err := h.symbolService.CreateSymbol(c.Request.Context(), &symbol)
 	if err != nil {
 		h.logger.Error("Failed to create symbol", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create symbol: " + err.Error()})
+		utils.SendErrorResponse(c, http.StatusInternalServerError, "Failed to create symbol: "+err.Error())
 		return
 	}
 
@@ -119,13 +134,13 @@ func (h *SymbolHandler) UpdateSymbol(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.Atoi(idStr)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid symbol ID"})
+		utils.SendErrorResponse(c, http.StatusBadRequest, "Invalid symbol ID")
 		return
 	}
 
 	var symbol model.Symbol
 	if err := c.ShouldBindJSON(&symbol); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		utils.SendErrorResponse(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -136,12 +151,12 @@ func (h *SymbolHandler) UpdateSymbol(c *gin.Context) {
 	success, err := h.symbolService.UpdateSymbol(c.Request.Context(), &symbol)
 	if err != nil {
 		h.logger.Error("Failed to update symbol", zap.Error(err), zap.Int("id", id))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update symbol: " + err.Error()})
+		utils.SendErrorResponse(c, http.StatusInternalServerError, "Failed to update symbol: "+err.Error())
 		return
 	}
 
 	if !success {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Symbol not found"})
+		utils.SendErrorResponse(c, http.StatusNotFound, "Symbol not found")
 		return
 	}
 
@@ -155,7 +170,7 @@ func (h *SymbolHandler) DeleteSymbol(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.Atoi(idStr)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid symbol ID"})
+		utils.SendErrorResponse(c, http.StatusBadRequest, "Invalid symbol ID")
 		return
 	}
 
@@ -163,12 +178,12 @@ func (h *SymbolHandler) DeleteSymbol(c *gin.Context) {
 	success, err := h.symbolService.DeleteSymbol(c.Request.Context(), id)
 	if err != nil {
 		h.logger.Error("Failed to delete symbol", zap.Error(err), zap.Int("id", id))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete symbol: " + err.Error()})
+		utils.SendErrorResponse(c, http.StatusInternalServerError, "Failed to delete symbol: "+err.Error())
 		return
 	}
 
 	if !success {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Symbol not found"})
+		utils.SendErrorResponse(c, http.StatusNotFound, "Symbol not found")
 		return
 	}
 

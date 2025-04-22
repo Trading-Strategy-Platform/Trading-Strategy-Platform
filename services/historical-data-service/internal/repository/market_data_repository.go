@@ -33,8 +33,9 @@ func (r *MarketDataRepository) GetCandles(
 	startTime *time.Time,
 	endTime *time.Time,
 	limit *int,
+	offset *int,
 ) ([]model.Candle, error) {
-	query := `SELECT * FROM get_candles($1, $2, $3, $4, $5)`
+	query := `SELECT * FROM get_candles($1, $2, $3, $4, $5, $6)`
 
 	// Use default limit if not provided
 	var limitValue *int
@@ -43,6 +44,14 @@ func (r *MarketDataRepository) GetCandles(
 		limitValue = &defaultLimit
 	} else {
 		limitValue = limit
+	}
+
+	// Use default offset if not provided
+	var offsetValue int
+	if offset == nil {
+		offsetValue = 0
+	} else {
+		offsetValue = *offset
 	}
 
 	// Default time boundaries if not provided
@@ -70,6 +79,7 @@ func (r *MarketDataRepository) GetCandles(
 		startTimeValue,
 		endTimeValue,
 		limitValue,
+		offsetValue,
 	)
 
 	if err != nil {
@@ -81,6 +91,53 @@ func (r *MarketDataRepository) GetCandles(
 	}
 
 	return candles, nil
+}
+
+// CountCandles counts the total number of candles for pagination
+func (r *MarketDataRepository) CountCandles(
+	ctx context.Context,
+	symbolID int,
+	timeframe string,
+	startTime *time.Time,
+	endTime *time.Time,
+) (int, error) {
+	query := `SELECT count_candles($1, $2, $3, $4)`
+
+	// Default time boundaries if not provided
+	var startTimeValue time.Time
+	if startTime == nil {
+		startTimeValue = time.Now().AddDate(-1, 0, 0) // 1 year ago
+	} else {
+		startTimeValue = *startTime
+	}
+
+	var endTimeValue time.Time
+	if endTime == nil {
+		endTimeValue = time.Now() // now
+	} else {
+		endTimeValue = *endTime
+	}
+
+	var count int
+	err := r.db.GetContext(
+		ctx,
+		&count,
+		query,
+		symbolID,
+		timeframe,
+		startTimeValue,
+		endTimeValue,
+	)
+
+	if err != nil {
+		r.logger.Error("Failed to count candles",
+			zap.Error(err),
+			zap.Int("symbolID", symbolID),
+			zap.String("timeframe", timeframe))
+		return 0, err
+	}
+
+	return count, nil
 }
 
 // GetDataRanges returns all available data ranges for a symbol and timeframe
@@ -241,7 +298,7 @@ func (r *MarketDataRepository) HasData(
 ) (bool, error) {
 	// Get a single candle to check if data exists
 	limit := 1
-	candles, err := r.GetCandles(ctx, symbolID, timeframe, nil, nil, &limit)
+	candles, err := r.GetCandles(ctx, symbolID, timeframe, nil, nil, &limit, nil)
 	if err != nil {
 		r.logger.Error("Failed to check if market data exists",
 			zap.Error(err),

@@ -31,35 +31,54 @@ func NewMarketDataService(
 	}
 }
 
-// GetCandles retrieves candle data with dynamic timeframe
+// GetCandles retrieves candle data with dynamic timeframe and pagination
 func (s *MarketDataService) GetCandles(
 	ctx context.Context,
 	query *model.MarketDataQuery,
-) ([]model.Candle, error) {
+	page int,
+	limit int,
+) ([]model.Candle, int, error) {
 	// Validate inputs
 	if query.SymbolID <= 0 {
-		return nil, errors.New("invalid symbol ID")
+		return nil, 0, errors.New("invalid symbol ID")
 	}
 
 	if query.Timeframe == "" {
-		return nil, errors.New("timeframe is required")
+		return nil, 0, errors.New("timeframe is required")
 	}
 
-	// Call repository function
+	// Calculate offset
+	offset := (page - 1) * limit
+	offsetPtr := &offset
+
+	// Get total count for pagination
+	total, err := s.marketDataRepo.CountCandles(
+		ctx,
+		query.SymbolID,
+		query.Timeframe,
+		query.StartDate,
+		query.EndDate,
+	)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	// Call repository function with pagination
 	candles, err := s.marketDataRepo.GetCandles(
 		ctx,
 		query.SymbolID,
 		query.Timeframe,
 		query.StartDate,
 		query.EndDate,
-		query.Limit,
+		&limit,
+		offsetPtr,
 	)
 
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
-	return candles, nil
+	return candles, total, nil
 }
 
 // BatchImportCandles handles batch importing of candle data

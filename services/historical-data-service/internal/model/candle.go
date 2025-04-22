@@ -33,6 +33,7 @@ type MarketDataQuery struct {
 	StartDate *time.Time `json:"start_date" form:"start_date"`
 	EndDate   *time.Time `json:"end_date" form:"end_date"`
 	Limit     *int       `json:"limit" form:"limit"`
+	Page      *int       `json:"page" form:"page"`
 }
 
 // DateRange represents a range of dates

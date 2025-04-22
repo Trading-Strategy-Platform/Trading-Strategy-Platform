@@ -8,7 +8,8 @@ CREATE OR REPLACE FUNCTION get_candles(
     p_timeframe timeframe_type,
     p_start_time TIMESTAMPTZ,
     p_end_time TIMESTAMPTZ,
-    p_limit INT DEFAULT NULL
+    p_limit INT DEFAULT NULL,
+    p_offset INT DEFAULT 0
 )
 RETURNS TABLE (
     symbol_id INT,
@@ -35,7 +36,7 @@ BEGIN
         ELSE interval_minutes := 1; -- Default to 1 minute
     END CASE;
     
-    -- Return 1m data directly
+    -- Return 1m data directly with pagination
     IF interval_minutes = 1 THEN
         RETURN QUERY
         SELECT c.symbol_id, c.candle_time, c.open, c.high, c.low, c.close, c.volume
@@ -43,9 +44,10 @@ BEGIN
         WHERE c.symbol_id = p_symbol_id
           AND c.candle_time BETWEEN p_start_time AND p_end_time
         ORDER BY c.candle_time DESC
-        LIMIT p_limit;
+        LIMIT p_limit
+        OFFSET p_offset;
     ELSE
-        -- Aggregate candles for higher timeframes
+        -- Aggregate candles for higher timeframes with pagination
         RETURN QUERY
         SELECT 
             c.symbol_id,
@@ -60,8 +62,54 @@ BEGIN
           AND c.candle_time BETWEEN p_start_time AND p_end_time
         GROUP BY c.symbol_id, time_bucket((interval_minutes || ' minutes')::interval, c.candle_time)
         ORDER BY candle_time DESC
-        LIMIT p_limit;
+        LIMIT p_limit
+        OFFSET p_offset;
     END IF;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Add a function to count total candles for pagination
+CREATE OR REPLACE FUNCTION count_candles(
+    p_symbol_id INT,
+    p_timeframe timeframe_type,
+    p_start_time TIMESTAMPTZ,
+    p_end_time TIMESTAMPTZ
+)
+RETURNS BIGINT AS $$
+DECLARE
+    interval_minutes INT;
+    candle_count BIGINT;
+BEGIN
+    -- Map timeframe to minutes
+    CASE p_timeframe
+        WHEN '1m' THEN interval_minutes := 1;
+        WHEN '5m' THEN interval_minutes := 5;
+        WHEN '15m' THEN interval_minutes := 15;
+        WHEN '30m' THEN interval_minutes := 30;
+        WHEN '1h' THEN interval_minutes := 60;
+        WHEN '4h' THEN interval_minutes := 240;
+        WHEN '1d' THEN interval_minutes := 1440;
+        WHEN '1w' THEN interval_minutes := 10080;
+        ELSE interval_minutes := 1; -- Default to 1 minute
+    END CASE;
+    
+    -- Count for 1m data directly
+    IF interval_minutes = 1 THEN
+        SELECT COUNT(*)
+        INTO candle_count
+        FROM candles c
+        WHERE c.symbol_id = p_symbol_id
+          AND c.candle_time BETWEEN p_start_time AND p_end_time;
+    ELSE
+        -- Count aggregated candles for higher timeframes
+        SELECT COUNT(DISTINCT time_bucket((interval_minutes || ' minutes')::interval, c.candle_time))
+        INTO candle_count
+        FROM candles c
+        WHERE c.symbol_id = p_symbol_id
+          AND c.candle_time BETWEEN p_start_time AND p_end_time;
+    END IF;
+    
+    RETURN candle_count;
 END;
 $$ LANGUAGE plpgsql;
 

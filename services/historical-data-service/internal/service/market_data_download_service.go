@@ -72,7 +72,7 @@ func (s *MarketDataDownloadService) GetAvailableSymbols(ctx context.Context, sou
 // CheckSymbolStatus checks if a symbol exists in the database and what date ranges are available
 func (s *MarketDataDownloadService) CheckSymbolStatus(ctx context.Context, symbol, timeframe string) (*model.SymbolDataStatus, error) {
 	// Check if symbol exists in our database
-	symbols, err := s.symbolRepo.GetSymbolsByFilter(ctx, symbol, "", "")
+	symbols, err := s.symbolRepo.GetAllSymbols(ctx, symbol, "", "", "", "", 0, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -155,7 +155,7 @@ func (s *MarketDataDownloadService) CheckSymbolStatus(ctx context.Context, symbo
 // InitiateDataDownload starts a download job for historical data
 func (s *MarketDataDownloadService) InitiateDataDownload(ctx context.Context, request *model.MarketDataDownloadRequest) (int, error) {
 	// Check if the symbol already exists in our database
-	symbols, err := s.symbolRepo.GetSymbolsByFilter(ctx, request.Symbol, "", "")
+	symbols, err := s.symbolRepo.GetAllSymbols(ctx, request.Symbol, "", "", "", "", 0, 0)
 	if err != nil {
 		return 0, err
 	}
