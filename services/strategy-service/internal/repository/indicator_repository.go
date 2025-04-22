@@ -30,11 +30,41 @@ func NewIndicatorRepository(db *sqlx.DB, logger *zap.Logger) *IndicatorRepositor
 	}
 }
 
-// GetAll retrieves all indicators with parameters and enum values using get_indicators function
+// GetAllIndicators retrieves all indicators with parameters and enum values using get_indicators function
 // isAdmin parameter controls visibility of parameters
-func (r *IndicatorRepository) GetAllIndicators(ctx context.Context, searchTerm string, categories []string, active *bool, page, limit int, isAdmin bool) ([]model.TechnicalIndicator, int, error) {
+// Added sortBy and sortDirection parameters for sorting
+func (r *IndicatorRepository) GetAllIndicators(
+	ctx context.Context,
+	searchTerm string,
+	categories []string,
+	active *bool,
+	sortBy string,
+	sortDirection string,
+	page,
+	limit int,
+	isAdmin bool,
+) ([]model.TechnicalIndicator, int, error) {
 	// Calculate offset
 	offset := (page - 1) * limit
+
+	// Validate sort field
+	validSortFields := map[string]bool{
+		"name":       true,
+		"category":   true,
+		"created_at": true,
+		"updated_at": true,
+	}
+
+	if !validSortFields[sortBy] {
+		sortBy = "name" // Default sort by name
+	}
+
+	// Validate sort direction
+	if sortDirection != "ASC" && sortDirection != "asc" {
+		sortDirection = "DESC"
+	} else {
+		sortDirection = "ASC"
+	}
 
 	// First, get total count with the count function
 	countQuery := `SELECT count_indicators($1, $2, $3)`
@@ -46,8 +76,9 @@ func (r *IndicatorRepository) GetAllIndicators(ctx context.Context, searchTerm s
 		return nil, 0, err
 	}
 
-	// Use the updated get_indicators function with isAdmin and pagination parameters
-	query := `SELECT * FROM get_indicators($1, $2, $3, $4, $5, $6)`
+	// Use the updated get_indicators function with isAdmin, sorting and pagination parameters
+	// Note: This would require modifying the SQL function to accept sort parameters
+	query := `SELECT * FROM get_indicators($1, $2, $3, $4, $5, $6, $7, $8)`
 
 	var args []interface{}
 	args = append(args, searchTerm)
@@ -64,6 +95,10 @@ func (r *IndicatorRepository) GetAllIndicators(ctx context.Context, searchTerm s
 
 	// Add isAdmin parameter
 	args = append(args, isAdmin)
+
+	// Add sorting parameters
+	args = append(args, sortBy)
+	args = append(args, sortDirection)
 
 	// Add pagination parameters
 	args = append(args, limit, offset)
@@ -216,7 +251,7 @@ func (r *IndicatorRepository) GetAllIndicators(ctx context.Context, searchTerm s
 	return indicators, totalCount, nil
 }
 
-// GetByID retrieves an indicator by ID with parameters and enum values
+// GetIndicatorByID retrieves an indicator by ID with parameters and enum values
 // isAdmin parameter controls visibility of parameters
 func (r *IndicatorRepository) GetIndicatorByID(ctx context.Context, id int, isAdmin bool) (*model.TechnicalIndicator, error) {
 	// Use the updated get_indicator_by_id function with isAdmin parameter
@@ -365,7 +400,7 @@ func (r *IndicatorRepository) GetIndicatorByID(ctx context.Context, id int, isAd
 	return &indicator, nil
 }
 
-// Create adds a new indicator to the database
+// CreateIndicator adds a new indicator to the database
 func (r *IndicatorRepository) CreateIndicator(ctx context.Context, indicator *model.TechnicalIndicator) (int, error) {
 	query := `
 		INSERT INTO indicators (name, description, category, formula, min_value, max_value, is_active, created_at, updated_at)
@@ -395,7 +430,7 @@ func (r *IndicatorRepository) CreateIndicator(ctx context.Context, indicator *mo
 	return id, nil
 }
 
-// CreateParameter adds a parameter to an indicator
+// CreateIndicatorParameter adds a parameter to an indicator
 func (r *IndicatorRepository) CreateIndicatorParameter(ctx context.Context, parameter *model.IndicatorParameterCreate) (int, error) {
 	query := `
 		INSERT INTO indicator_parameters (
@@ -429,8 +464,8 @@ func (r *IndicatorRepository) CreateIndicatorParameter(ctx context.Context, para
 	return id, nil
 }
 
-// CreateEnumValue adds an enum value to a parameter
-func (r *IndicatorRepository) CreateParameterEnumValue(ctx context.Context, enumValue *model.ParameterEnumValueCreate) (int, error) {
+// CreateIndicatorParameterEnumValue adds an enum value to a parameter
+func (r *IndicatorRepository) CreateIndicatorParameterEnumValue(ctx context.Context, enumValue *model.ParameterEnumValueCreate) (int, error) {
 	query := `
 		INSERT INTO parameter_enum_values (parameter_id, enum_value, display_name)
 		VALUES ($1, $2, $3)
@@ -454,7 +489,7 @@ func (r *IndicatorRepository) CreateParameterEnumValue(ctx context.Context, enum
 	return id, nil
 }
 
-// GetCategories retrieves indicator categories
+// GetIndicatorCategories retrieves indicator categories
 type CategoryData struct {
 	Category string `db:"category" json:"category"`
 	Count    int64  `db:"count" json:"count"`
@@ -480,7 +515,7 @@ func (r *IndicatorRepository) GetIndicatorCategories(ctx context.Context) ([]Cat
 	return categories, nil
 }
 
-// Delete an indicator by ID
+// DeleteIndicator deletes an indicator by ID
 func (r *IndicatorRepository) DeleteIndicator(ctx context.Context, id int) error {
 	query := `SELECT delete_indicator($1)`
 
@@ -498,7 +533,7 @@ func (r *IndicatorRepository) DeleteIndicator(ctx context.Context, id int) error
 	return nil
 }
 
-// Update an indicator
+// UpdateIndicator updates an indicator
 func (r *IndicatorRepository) UpdateIndicator(ctx context.Context, id int, indicator *model.TechnicalIndicator) error {
 	query := `SELECT update_indicator($1, $2, $3, $4, $5, $6, $7, $8)`
 
@@ -528,7 +563,7 @@ func (r *IndicatorRepository) UpdateIndicator(ctx context.Context, id int, indic
 	return nil
 }
 
-// DeleteParameter deletes a parameter by ID
+// DeleteIndicatorParameter deletes a parameter by ID
 func (r *IndicatorRepository) DeleteIndicatorParameter(ctx context.Context, id int) error {
 	query := `SELECT delete_parameter($1)`
 
@@ -546,7 +581,7 @@ func (r *IndicatorRepository) DeleteIndicatorParameter(ctx context.Context, id i
 	return nil
 }
 
-// UpdateParameter updates a parameter with the is_public flag
+// UpdateIndicatorParameter updates a parameter with the is_public flag
 func (r *IndicatorRepository) UpdateIndicatorParameter(ctx context.Context, id int, param *model.IndicatorParameter) error {
 	query := `
 		UPDATE indicator_parameters 
@@ -583,8 +618,8 @@ func (r *IndicatorRepository) UpdateIndicatorParameter(ctx context.Context, id i
 	return nil
 }
 
-// DeleteParameterEnumValue deletes an enum value by ID
-func (r *IndicatorRepository) DeleteParameterEnumValue(ctx context.Context, id int) error {
+// DeleteIndicatorParameterEnumValue deletes an enum value by ID
+func (r *IndicatorRepository) DeleteIndicatorParameterEnumValue(ctx context.Context, id int) error {
 	query := `SELECT delete_enum_value($1)`
 
 	var success bool
@@ -601,8 +636,8 @@ func (r *IndicatorRepository) DeleteParameterEnumValue(ctx context.Context, id i
 	return nil
 }
 
-// UpdateEnumValue updates an enum value
-func (r *IndicatorRepository) UpdateParameterEnumValue(ctx context.Context, id int, enumVal *model.ParameterEnumValue) error {
+// UpdateIndicatorParameterEnumValue updates an enum value
+func (r *IndicatorRepository) UpdateIndicatorParameterEnumValue(ctx context.Context, id int, enumVal *model.ParameterEnumValue) error {
 	query := `SELECT update_enum_value($1, $2, $3)`
 
 	var success bool
@@ -626,8 +661,8 @@ func (r *IndicatorRepository) UpdateParameterEnumValue(ctx context.Context, id i
 	return nil
 }
 
-// GetParameterByID retrieves a single parameter by its ID
-func (r *IndicatorRepository) GetParameterByID(ctx context.Context, id int) (*model.IndicatorParameter, error) {
+// GetIndicatorParameterByID retrieves a single parameter by its ID
+func (r *IndicatorRepository) GetIndicatorParameterByID(ctx context.Context, id int) (*model.IndicatorParameter, error) {
 	query := `
 		SELECT id, indicator_id, parameter_name, parameter_type, is_required, 
 			min_value, max_value, default_value, description, is_public
@@ -677,7 +712,7 @@ func (r *IndicatorRepository) GetParameterByID(ctx context.Context, id int) (*mo
 	}
 
 	// Get enum values for this parameter
-	enumValues, err := r.GetEnumValuesByParameterID(ctx, id)
+	enumValues, err := r.GetIndicatorParameterEnumValuesByParameterID(ctx, id)
 	if err != nil {
 		r.logger.Warn("Failed to get enum values for parameter",
 			zap.Error(err),
@@ -689,8 +724,8 @@ func (r *IndicatorRepository) GetParameterByID(ctx context.Context, id int) (*mo
 	return &param, nil
 }
 
-// GetEnumValuesByParameterID retrieves all enum values for a parameter
-func (r *IndicatorRepository) GetEnumValuesByParameterID(ctx context.Context, parameterID int) ([]model.ParameterEnumValue, error) {
+// GetIndicatorParameterEnumValuesByParameterID retrieves all enum values for a parameter
+func (r *IndicatorRepository) GetIndicatorParameterEnumValuesByParameterID(ctx context.Context, parameterID int) ([]model.ParameterEnumValue, error) {
 	query := `
 		SELECT id, parameter_id, enum_value, display_name
 		FROM parameter_enum_values

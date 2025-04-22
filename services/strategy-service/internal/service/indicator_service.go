@@ -2,13 +2,13 @@ package service
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"services/strategy-service/internal/model"
@@ -34,11 +34,6 @@ func NewIndicatorService(db *sqlx.DB, indicatorRepo *repository.IndicatorReposit
 	}
 }
 
-// GetDB provides direct access to the database for debugging purposes
-func (s *IndicatorService) GetDB() *sqlx.DB {
-	return s.db
-}
-
 // GetAllIndicators retrieves all technical indicators with their parameters and enum values
 // Now includes isAdmin parameter to control visibility of parameters
 func (s *IndicatorService) GetAllIndicators(
@@ -46,6 +41,8 @@ func (s *IndicatorService) GetAllIndicators(
 	searchTerm string,
 	categories []string,
 	active *bool,
+	sortBy string,
+	sortDirection string,
 	page,
 	limit int,
 	isAdmin bool,
@@ -58,8 +55,41 @@ func (s *IndicatorService) GetAllIndicators(
 		limit = 20
 	}
 
+	// Validate sort field
+	validSortFields := map[string]bool{
+		"name":       true,
+		"category":   true,
+		"created_at": true,
+		"updated_at": true,
+	}
+
+	if !validSortFields[sortBy] {
+		sortBy = "name" // Default sort by name
+	}
+
+	// Validate sort direction
+	sortDirection = strings.ToUpper(sortDirection)
+	if sortDirection != "ASC" && sortDirection != "DESC" {
+		sortDirection = "ASC" // Default ascending for indicators
+	}
+
+	// Forward the parameters to the repository layer
+	return s.indicatorRepo.GetAllIndicators(ctx, searchTerm, categories, active, sortBy, sortDirection, page, limit, isAdmin)
+}
+
+// GetIndicator retrieves a specific indicator by ID with parameters and enum values
+func (s *IndicatorService) GetIndicator(ctx context.Context, id int, isAdmin bool) (*model.TechnicalIndicator, error) {
 	// Forward the isAdmin flag to the repository layer
-	return s.indicatorRepo.GetAllIndicators(ctx, searchTerm, categories, active, page, limit, isAdmin)
+	indicator, err := s.indicatorRepo.GetIndicatorByID(ctx, id, isAdmin)
+	if err != nil {
+		return nil, err
+	}
+
+	if indicator == nil {
+		return nil, errors.New("indicator not found")
+	}
+
+	return indicator, nil
 }
 
 // CreateIndicator creates a new technical indicator with parameters and enum values
@@ -148,7 +178,7 @@ func (s *IndicatorService) CreateIndicator(
 			enumValueCreate.ParameterID = paramID
 
 			// Create the enum value
-			enumID, err := s.indicatorRepo.CreateParameterEnumValue(ctx, &enumValueCreate)
+			enumID, err := s.indicatorRepo.CreateIndicatorParameterEnumValue(ctx, &enumValueCreate)
 			if err != nil {
 				s.logger.Error("Failed to add enum value", zap.Error(err))
 				return nil, err
@@ -182,97 +212,6 @@ func (s *IndicatorService) CreateIndicator(
 	return indicator, nil
 }
 
-// AddParameterEnumValue adds an enum value to a parameter
-func (s *IndicatorService) AddParameterEnumValue(
-	ctx context.Context,
-	parameterID int,
-	enumValue string,
-	displayName string,
-) (*model.ParameterEnumValue, error) {
-	// Create enum value object
-	enumCreate := &model.ParameterEnumValueCreate{
-		ParameterID: parameterID,
-		EnumValue:   enumValue,
-		DisplayName: displayName,
-	}
-
-	// Add enum value to database
-	enumID, err := s.indicatorRepo.CreateParameterEnumValue(ctx, enumCreate)
-	if err != nil {
-		return nil, err
-	}
-
-	// Return the created enum value
-	return &model.ParameterEnumValue{
-		ID:          enumID,
-		ParameterID: parameterID,
-		EnumValue:   enumValue,
-		DisplayName: displayName,
-	}, nil
-}
-
-// GetIndicator retrieves a specific indicator by ID with parameters and enum values
-// Now includes isAdmin parameter to control visibility of parameters
-func (s *IndicatorService) GetIndicator(ctx context.Context, id int, isAdmin bool) (*model.TechnicalIndicator, error) {
-	// Forward the isAdmin flag to the repository layer
-	indicator, err := s.indicatorRepo.GetIndicatorByID(ctx, id, isAdmin)
-	if err != nil {
-		return nil, err
-	}
-
-	if indicator == nil {
-		return nil, errors.New("indicator not found")
-	}
-
-	return indicator, nil
-}
-
-// GetCategories retrieves indicator categories
-type CategoryInfo struct {
-	Category string `json:"category"`
-	Count    int64  `json:"count"`
-}
-
-// GetCategories retrieves indicator categories
-func (s *IndicatorService) GetIndicatorCategories(ctx context.Context) ([]CategoryInfo, error) {
-	repoCategories, err := s.indicatorRepo.GetIndicatorCategories(ctx)
-	if err != nil {
-		s.logger.Error("Failed to get indicator categories", zap.Error(err))
-		return nil, err
-	}
-
-	// Convert repository type to service type
-	serviceCategories := make([]CategoryInfo, len(repoCategories))
-	for i, cat := range repoCategories {
-		serviceCategories[i] = CategoryInfo{
-			Category: cat.Category,
-			Count:    cat.Count,
-		}
-	}
-
-	// If no categories found, return empty array
-	if len(serviceCategories) == 0 {
-		return []CategoryInfo{}, nil
-	}
-
-	return serviceCategories, nil
-}
-
-// DeleteIndicator deletes an indicator by ID
-func (s *IndicatorService) DeleteIndicator(ctx context.Context, id int) error {
-	// Check if indicator exists
-	indicator, err := s.indicatorRepo.GetIndicatorByID(ctx, id, true) // Admin view for checking existence
-	if err != nil {
-		return err
-	}
-
-	if indicator == nil {
-		return errors.New("indicator not found")
-	}
-
-	return s.indicatorRepo.DeleteIndicator(ctx, id)
-}
-
 // UpdateIndicator updates an indicator
 func (s *IndicatorService) UpdateIndicator(ctx context.Context, id int, update *model.TechnicalIndicator) (*model.TechnicalIndicator, error) {
 	// Check if indicator exists
@@ -300,7 +239,53 @@ func (s *IndicatorService) UpdateIndicator(ctx context.Context, id int, update *
 	return updatedIndicator, nil
 }
 
-// AddParameter adds a parameter to an indicator with proper error handling
+// DeleteIndicator deletes an indicator by ID
+func (s *IndicatorService) DeleteIndicator(ctx context.Context, id int) error {
+	// Check if indicator exists
+	indicator, err := s.indicatorRepo.GetIndicatorByID(ctx, id, true) // Admin view for checking existence
+	if err != nil {
+		return err
+	}
+
+	if indicator == nil {
+		return errors.New("indicator not found")
+	}
+
+	return s.indicatorRepo.DeleteIndicator(ctx, id)
+}
+
+// GetIndicatorCategories retrieves indicator categories
+func (s *IndicatorService) GetIndicatorCategories(ctx context.Context) ([]CategoryInfo, error) {
+	repoCategories, err := s.indicatorRepo.GetIndicatorCategories(ctx)
+	if err != nil {
+		s.logger.Error("Failed to get indicator categories", zap.Error(err))
+		return nil, err
+	}
+
+	// Convert repository type to service type
+	serviceCategories := make([]CategoryInfo, len(repoCategories))
+	for i, cat := range repoCategories {
+		serviceCategories[i] = CategoryInfo{
+			Category: cat.Category,
+			Count:    cat.Count,
+		}
+	}
+
+	// If no categories found, return empty array
+	if len(serviceCategories) == 0 {
+		return []CategoryInfo{}, nil
+	}
+
+	return serviceCategories, nil
+}
+
+// CategoryInfo represents category data returned by the service
+type CategoryInfo struct {
+	Category string `json:"category"`
+	Count    int64  `json:"count"`
+}
+
+// AddIndicatorParameter adds a parameter to an indicator
 func (s *IndicatorService) AddIndicatorParameter(
 	ctx context.Context,
 	indicatorID int,
@@ -381,7 +366,7 @@ func (s *IndicatorService) AddIndicatorParameter(
 	return newParam, nil
 }
 
-// UpdateParameter updates a parameter with proper error handling
+// UpdateIndicatorParameter updates a parameter
 func (s *IndicatorService) UpdateIndicatorParameter(ctx context.Context, id int, param *model.IndicatorParameter) (*model.IndicatorParameter, error) {
 	if param == nil {
 		return nil, errors.New("parameter data cannot be nil")
@@ -433,131 +418,7 @@ func (s *IndicatorService) UpdateIndicatorParameter(ctx context.Context, id int,
 	return updatedParam, nil
 }
 
-// DeleteParameterEnumValue deletes an enum value by ID
-func (s *IndicatorService) DeleteParameterEnumValue(ctx context.Context, id int) error {
-	return s.indicatorRepo.DeleteParameterEnumValue(ctx, id)
-}
-
-// UpdateParameterEnumValue updates an enum value
-func (s *IndicatorService) UpdateParameterEnumValue(ctx context.Context, id int, enumVal *model.ParameterEnumValue) (*model.ParameterEnumValue, error) {
-	// Update enum value
-	err := s.indicatorRepo.UpdateParameterEnumValue(ctx, id, enumVal)
-	if err != nil {
-		return nil, err
-	}
-
-	// Get the updated enum value
-	// Since there's no direct method to get an enum value by ID, we return the enum value that was passed in
-	// with the ID that was specified
-	result := *enumVal
-	result.ID = id
-
-	return &result, nil
-}
-
-// getParameterByID retrieves a parameter by ID with proper error handling
-func (s *IndicatorService) getIndicatorParameterByID(ctx context.Context, id int) (*model.IndicatorParameter, error) {
-	if id <= 0 {
-		return nil, errors.New("invalid parameter ID")
-	}
-
-	// Query to get parameter by ID
-	query := `
-        SELECT id, indicator_id, parameter_name, parameter_type, is_required, 
-               min_value, max_value, default_value, description, is_public
-        FROM indicator_parameters
-        WHERE id = $1
-    `
-
-	// Use a temporary struct with sql.NullString for nullable string fields
-	type tempParameter struct {
-		ID            int             `db:"id"`
-		IndicatorID   int             `db:"indicator_id"`
-		ParameterName string          `db:"parameter_name"`
-		ParameterType string          `db:"parameter_type"`
-		IsRequired    bool            `db:"is_required"`
-		MinValue      sql.NullFloat64 `db:"min_value"`
-		MaxValue      sql.NullFloat64 `db:"max_value"`
-		DefaultValue  sql.NullString  `db:"default_value"`
-		Description   sql.NullString  `db:"description"`
-		IsPublic      bool            `db:"is_public"`
-	}
-
-	var tempParam tempParameter
-	err := s.db.GetContext(ctx, &tempParam, query, id)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, nil // Parameter not found
-		}
-		s.logger.Error("Database error while getting parameter", zap.Error(err), zap.Int("id", id))
-		return nil, fmt.Errorf("database error: %w", err)
-	}
-
-	// Convert the temporary struct to a model struct
-	param := &model.IndicatorParameter{
-		ID:            tempParam.ID,
-		IndicatorID:   tempParam.IndicatorID,
-		ParameterName: tempParam.ParameterName,
-		ParameterType: tempParam.ParameterType,
-		IsRequired:    tempParam.IsRequired,
-		IsPublic:      tempParam.IsPublic,
-		EnumValues:    []model.ParameterEnumValue{},
-	}
-
-	// Only set string values if they are valid (not NULL)
-	if tempParam.DefaultValue.Valid {
-		param.DefaultValue = tempParam.DefaultValue.String
-	}
-	if tempParam.Description.Valid {
-		param.Description = tempParam.Description.String
-	}
-
-	// Set float values if they are valid
-	if tempParam.MinValue.Valid {
-		minValue := tempParam.MinValue.Float64
-		param.MinValue = &minValue
-	}
-	if tempParam.MaxValue.Valid {
-		maxValue := tempParam.MaxValue.Float64
-		param.MaxValue = &maxValue
-	}
-
-	// Get enum values for this parameter
-	enumValues, err := s.getIndicatorParameterEnumValuesByParameterID(ctx, id)
-	if err != nil {
-		s.logger.Warn("Failed to get enum values for parameter",
-			zap.Error(err),
-			zap.Int("parameter_id", id))
-		// Don't fail completely, just return the parameter without enum values
-	} else {
-		param.EnumValues = enumValues
-	}
-
-	return param, nil
-}
-
-// getEnumValuesByParameterID retrieves enum values for a parameter
-func (s *IndicatorService) getIndicatorParameterEnumValuesByParameterID(ctx context.Context, parameterID int) ([]model.ParameterEnumValue, error) {
-	query := `
-        SELECT id, parameter_id, enum_value, display_name
-        FROM parameter_enum_values
-        WHERE parameter_id = $1
-        ORDER BY id
-    `
-
-	var enumValues []model.ParameterEnumValue
-	err := s.db.SelectContext(ctx, &enumValues, query, parameterID)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return []model.ParameterEnumValue{}, nil
-		}
-		return nil, fmt.Errorf("failed to retrieve enum values: %w", err)
-	}
-
-	return enumValues, nil
-}
-
-// DeleteIndicatorParameter deletes a parameter with proper error handling
+// DeleteIndicatorParameter deletes a parameter
 func (s *IndicatorService) DeleteIndicatorParameter(ctx context.Context, id int) error {
 	if id <= 0 {
 		return errors.New("invalid parameter ID")
@@ -591,13 +452,73 @@ func (s *IndicatorService) DeleteIndicatorParameter(ctx context.Context, id int)
 	return nil
 }
 
+// AddIndicatorParameterEnumValue adds an enum value to a parameter
+func (s *IndicatorService) AddIndicatorParameterEnumValue(
+	ctx context.Context,
+	parameterID int,
+	enumValue string,
+	displayName string,
+) (*model.ParameterEnumValue, error) {
+	// Create enum value object
+	enumCreate := &model.ParameterEnumValueCreate{
+		ParameterID: parameterID,
+		EnumValue:   enumValue,
+		DisplayName: displayName,
+	}
+
+	// Add enum value to database
+	enumID, err := s.indicatorRepo.CreateIndicatorParameterEnumValue(ctx, enumCreate)
+	if err != nil {
+		return nil, err
+	}
+
+	// Return the created enum value
+	return &model.ParameterEnumValue{
+		ID:          enumID,
+		ParameterID: parameterID,
+		EnumValue:   enumValue,
+		DisplayName: displayName,
+	}, nil
+}
+
+// UpdateIndicatorParameterEnumValue updates an enum value
+func (s *IndicatorService) UpdateIndicatorParameterEnumValue(ctx context.Context, id int, enumVal *model.ParameterEnumValue) (*model.ParameterEnumValue, error) {
+	// Update enum value
+	err := s.indicatorRepo.UpdateIndicatorParameterEnumValue(ctx, id, enumVal)
+	if err != nil {
+		return nil, err
+	}
+
+	// Get the updated enum value
+	// Since there's no direct method to get an enum value by ID, we return the enum value that was passed in
+	// with the ID that was specified
+	result := *enumVal
+	result.ID = id
+
+	return &result, nil
+}
+
+// DeleteIndicatorParameterEnumValue deletes an enum value
+func (s *IndicatorService) DeleteIndicatorParameterEnumValue(ctx context.Context, id int) error {
+	return s.indicatorRepo.DeleteIndicatorParameterEnumValue(ctx, id)
+}
+
+// getIndicatorParameterByID retrieves a parameter by ID
+func (s *IndicatorService) getIndicatorParameterByID(ctx context.Context, id int) (*model.IndicatorParameter, error) {
+	if id <= 0 {
+		return nil, errors.New("invalid parameter ID")
+	}
+
+	return s.indicatorRepo.GetIndicatorParameterByID(ctx, id)
+}
+
 // SyncIndicatorsFromBacktestingService syncs indicators from the backtesting service
 func (s *IndicatorService) SyncIndicatorsFromBacktestingService(ctx context.Context) (int, error) {
 	// Get backtesting service URL from environment or use default
 	backtestingServiceURL := os.Getenv("BACKTEST_SERVICE_URL")
 	if backtestingServiceURL == "" {
 		// Default base URL if environment variable not set
-		backtestingServiceURL = "http://backtesting-service:5000" // Corregido: name es "backtesting-service", no "backtest-service"
+		backtestingServiceURL = "http://backtesting-service:5000"
 	}
 
 	// Add the endpoint path

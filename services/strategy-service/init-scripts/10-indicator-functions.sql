@@ -46,6 +46,8 @@ CREATE OR REPLACE FUNCTION get_indicators(
     p_categories VARCHAR[],
     p_active BOOLEAN = NULL,
     p_is_admin BOOLEAN = FALSE,
+    p_sort_by VARCHAR = 'name',
+    p_sort_direction VARCHAR = 'ASC',
     p_limit INT DEFAULT 20,
     p_offset INT DEFAULT 0
 )
@@ -63,6 +65,17 @@ RETURNS TABLE (
     parameters JSONB
 ) AS $$
 BEGIN
+    -- Validate sort field
+    IF p_sort_by NOT IN ('name', 'category', 'created_at', 'updated_at') THEN
+        p_sort_by := 'name';
+    END IF;
+    
+    -- Normalize sort direction
+    p_sort_direction := UPPER(p_sort_direction);
+    IF p_sort_direction NOT IN ('ASC', 'DESC') THEN
+        p_sort_direction := 'ASC';
+    END IF;
+
     RETURN QUERY
     SELECT 
         i.id,
@@ -107,8 +120,15 @@ BEGIN
         (p_search IS NULL OR i.name ILIKE '%' || p_search || '%' OR i.description ILIKE '%' || p_search || '%')
         AND (p_categories IS NULL OR array_length(p_categories, 1) IS NULL OR i.category = ANY(p_categories))
         AND (p_active IS NULL OR i.is_active = p_active)
-    ORDER BY 
-        i.name
+    ORDER BY
+        CASE WHEN p_sort_by = 'name' AND p_sort_direction = 'ASC' THEN i.name END ASC,
+        CASE WHEN p_sort_by = 'name' AND p_sort_direction = 'DESC' THEN i.name END DESC,
+        CASE WHEN p_sort_by = 'category' AND p_sort_direction = 'ASC' THEN i.category END ASC,
+        CASE WHEN p_sort_by = 'category' AND p_sort_direction = 'DESC' THEN i.category END DESC,
+        CASE WHEN p_sort_by = 'created_at' AND p_sort_direction = 'ASC' THEN i.created_at END ASC,
+        CASE WHEN p_sort_by = 'created_at' AND p_sort_direction = 'DESC' THEN i.created_at END DESC,
+        CASE WHEN p_sort_by = 'updated_at' AND p_sort_direction = 'ASC' THEN i.updated_at END ASC,
+        CASE WHEN p_sort_by = 'updated_at' AND p_sort_direction = 'DESC' THEN i.updated_at END DESC
     LIMIT p_limit OFFSET p_offset;
 END;
 $$ LANGUAGE plpgsql;
@@ -116,7 +136,7 @@ $$ LANGUAGE plpgsql;
 -- Update get_indicator_by_id function
 CREATE OR REPLACE FUNCTION get_indicator_by_id(
     p_indicator_id INT,
-    p_is_admin BOOLEAN = FALSE -- New parameter to control visibility
+    p_is_admin BOOLEAN = FALSE
 )
 RETURNS TABLE (
     id INT,

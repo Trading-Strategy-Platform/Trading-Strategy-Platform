@@ -251,8 +251,8 @@ func setupRouter(
 			adminEnumValues.Use(middleware.AuthMiddleware(userClient, logger))
 			adminEnumValues.Use(middleware.RequireRole(userClient, "admin"))
 
-			adminEnumValues.PUT("/:id", indicatorHandler.UpdateParameterEnumValue)    // PUT /api/v1/enum-values/{id}
-			adminEnumValues.DELETE("/:id", indicatorHandler.DeleteParameterEnumValue) // DELETE /api/v1/enum-values/{id}
+			adminEnumValues.PUT("/:id", indicatorHandler.UpdateIndicatorParameterEnumValue)    // PUT /api/v1/enum-values/{id}
+			adminEnumValues.DELETE("/:id", indicatorHandler.DeleteIndicatorParameterEnumValue) // DELETE /api/v1/enum-values/{id}
 		}
 
 		// ==================== STRATEGY ROUTES ====================
