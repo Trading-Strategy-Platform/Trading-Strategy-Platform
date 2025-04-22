@@ -3,6 +3,7 @@ package handler
 import (
 	"net/http"
 	"strconv"
+	"strings"
 
 	"services/strategy-service/internal/service"
 	"services/strategy-service/internal/utils"
@@ -34,7 +35,19 @@ func (h *TagHandler) GetAllTags(c *gin.Context) {
 	// Parse search parameter
 	searchTerm := c.Query("search")
 
-	tags, total, err := h.tagService.GetAllTags(c.Request.Context(), searchTerm, params.Page, params.Limit)
+	// Parse sorting parameters
+	sortBy := c.DefaultQuery("sort_by", "name")
+	sortDirection := c.DefaultQuery("sort_direction", "ASC")
+
+	tags, total, err := h.tagService.GetAllTags(
+		c.Request.Context(),
+		searchTerm,
+		sortBy,
+		sortDirection,
+		params.Page,
+		params.Limit,
+	)
+
 	if err != nil {
 		h.logger.Error("Failed to get tags", zap.Error(err))
 		utils.SendErrorResponse(c, http.StatusInternalServerError, "Failed to fetch tags")
@@ -43,6 +56,52 @@ func (h *TagHandler) GetAllTags(c *gin.Context) {
 
 	// Use standardized pagination response
 	utils.SendPaginatedResponse(c, http.StatusOK, tags, total, params.Page, params.Limit)
+}
+
+// GetTagByID handles retrieving a single tag
+// GET /api/v1/strategy-tags/{id}
+func (h *TagHandler) GetTagByID(c *gin.Context) {
+	// Parse tag ID from URL path
+	idStr := c.Param("id")
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		utils.SendErrorResponse(c, http.StatusBadRequest, "Invalid tag ID")
+		return
+	}
+
+	tag, err := h.tagService.GetTagByID(c.Request.Context(), id)
+	if err != nil {
+		h.logger.Error("Failed to get tag", zap.Error(err), zap.Int("id", id))
+
+		if strings.Contains(err.Error(), "not found") {
+			utils.SendErrorResponse(c, http.StatusNotFound, err.Error())
+		} else {
+			utils.SendErrorResponse(c, http.StatusInternalServerError, "Failed to fetch tag")
+		}
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"data": tag})
+}
+
+// GetPopularTags handles retrieving popular tags
+// GET /api/v1/strategy-tags/popular
+func (h *TagHandler) GetPopularTags(c *gin.Context) {
+	// Parse limit parameter
+	limitStr := c.DefaultQuery("limit", "10")
+	limit, err := strconv.Atoi(limitStr)
+	if err != nil || limit < 1 {
+		limit = 10
+	}
+
+	tags, err := h.tagService.GetPopularTags(c.Request.Context(), limit)
+	if err != nil {
+		h.logger.Error("Failed to get popular tags", zap.Error(err))
+		utils.SendErrorResponse(c, http.StatusInternalServerError, "Failed to fetch popular tags")
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"data": tags})
 }
 
 // CreateTag handles creating a new tag
@@ -60,7 +119,12 @@ func (h *TagHandler) CreateTag(c *gin.Context) {
 	tag, err := h.tagService.CreateTag(c.Request.Context(), request.Name)
 	if err != nil {
 		h.logger.Error("Failed to create tag", zap.Error(err))
-		utils.SendErrorResponse(c, http.StatusBadRequest, err.Error())
+
+		if strings.Contains(err.Error(), "already exists") {
+			utils.SendErrorResponse(c, http.StatusConflict, err.Error())
+		} else {
+			utils.SendErrorResponse(c, http.StatusBadRequest, err.Error())
+		}
 		return
 	}
 
@@ -94,8 +158,10 @@ func (h *TagHandler) UpdateTag(c *gin.Context) {
 		h.logger.Error("Failed to update tag", zap.Error(err), zap.Int("id", id))
 
 		// Return appropriate status code based on error
-		if err.Error() == "tag not found" {
+		if strings.Contains(err.Error(), "not found") {
 			utils.SendErrorResponse(c, http.StatusNotFound, err.Error())
+		} else if strings.Contains(err.Error(), "already exists") {
+			utils.SendErrorResponse(c, http.StatusConflict, err.Error())
 		} else {
 			utils.SendErrorResponse(c, http.StatusBadRequest, err.Error())
 		}
@@ -122,8 +188,10 @@ func (h *TagHandler) DeleteTag(c *gin.Context) {
 		h.logger.Error("Failed to delete tag", zap.Error(err), zap.Int("id", id))
 
 		// Return appropriate status code based on error
-		if err.Error() == "tag not found or is in use" {
-			utils.SendErrorResponse(c, http.StatusBadRequest, "Cannot delete tag because it's in use or doesn't exist")
+		if strings.Contains(err.Error(), "in use") {
+			utils.SendErrorResponse(c, http.StatusConflict, "Cannot delete tag because it's in use")
+		} else if strings.Contains(err.Error(), "not found") {
+			utils.SendErrorResponse(c, http.StatusNotFound, err.Error())
 		} else {
 			utils.SendErrorResponse(c, http.StatusInternalServerError, "Failed to delete tag")
 		}

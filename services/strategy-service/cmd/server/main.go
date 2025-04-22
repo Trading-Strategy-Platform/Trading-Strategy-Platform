@@ -260,16 +260,16 @@ func setupRouter(
 		{
 			strategies.Use(middleware.AuthMiddleware(userClient, logger))
 
-			// Base routes
-			strategies.GET("", strategyHandler.ListUserStrategies) // GET /api/v1/strategies
-			strategies.POST("", strategyHandler.CreateStrategy)    // POST /api/v1/strategies
+			// Base routes with standardized naming to match indicator routes
+			strategies.GET("", strategyHandler.GetAllStrategies) // GET /api/v1/strategies
+			strategies.POST("", strategyHandler.CreateStrategy)  // POST /api/v1/strategies
 
 			// Parameter routes
-			strategies.GET("/:id", strategyHandler.GetStrategy)                        // GET /api/v1/strategies/{id}
+			strategies.GET("/:id", strategyHandler.GetStrategyByID)                    // GET /api/v1/strategies/{id}
 			strategies.PUT("/:id", strategyHandler.UpdateStrategy)                     // PUT /api/v1/strategies/{id}
 			strategies.DELETE("/:id", strategyHandler.DeleteStrategy)                  // DELETE /api/v1/strategies/{id}
 			strategies.GET("/:id/versions", strategyHandler.GetVersions)               // GET /api/v1/strategies/{id}/versions
-			strategies.GET("/:id/versions/:version", strategyHandler.GetVersionById)   // GET /api/v1/strategies/{id}/versions/{version}
+			strategies.GET("/:id/versions/:version", strategyHandler.GetVersionByID)   // GET /api/v1/strategies/{id}/versions/{version}
 			strategies.PUT("/:id/active-version", strategyHandler.UpdateActiveVersion) // PUT /api/v1/strategies/{id}/active-version
 			strategies.POST("/:id/thumbnail", thumbnailHandler.UploadThumbnail)        // POST /api/v1/strategies/{id}/thumbnail
 		}
@@ -277,8 +277,10 @@ func setupRouter(
 		// ==================== TAG ROUTES ====================
 		tags := v1.Group("/strategy-tags")
 		{
-			// Public route - anyone can get tags
-			tags.GET("", tagHandler.GetAllTags) // GET /api/v1/strategy-tags
+			// Public routes - anyone can get tags
+			tags.GET("", tagHandler.GetAllTags)             // GET /api/v1/strategy-tags
+			tags.GET("/:id", tagHandler.GetTagByID)         // GET /api/v1/strategy-tags/{id}
+			tags.GET("/popular", tagHandler.GetPopularTags) // GET /api/v1/strategy-tags/popular
 
 			// Admin-only routes - only admins can modify tags
 			adminTags := tags.Group("")
@@ -294,7 +296,8 @@ func setupRouter(
 		marketplace := v1.Group("/marketplace")
 		{
 			// Public routes
-			marketplace.GET("", marketplaceHandler.ListListings)           // GET /api/v1/marketplace
+			marketplace.GET("", marketplaceHandler.GetAllListings)         // GET /api/v1/marketplace
+			marketplace.GET("/:id", marketplaceHandler.GetListingByID)     // GET /api/v1/marketplace/{id}
 			marketplace.GET("/:id/reviews", marketplaceHandler.GetReviews) // GET /api/v1/marketplace/{id}/reviews
 
 			// Protected marketplace endpoints

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"strings"
 
 	"services/strategy-service/internal/model"
 
@@ -27,10 +28,37 @@ func NewStrategyRepository(db *sqlx.DB, logger *zap.Logger) *StrategyRepository 
 	}
 }
 
-// GetUserStrategies retrieves strategies with proper database-level pagination
-func (r *StrategyRepository) GetUserStrategies(ctx context.Context, userID int, searchTerm string, purchasedOnly bool, tags []int, page, limit int) ([]model.ExtendedStrategy, int, error) {
+// GetAllStrategies retrieves strategies with proper database-level pagination and sorting
+func (r *StrategyRepository) GetAllStrategies(
+	ctx context.Context,
+	userID int,
+	searchTerm string,
+	purchasedOnly bool,
+	tags []int,
+	sortBy string,
+	sortDirection string,
+	page, limit int,
+) ([]model.ExtendedStrategy, int, error) {
 	// Calculate offset
 	offset := (page - 1) * limit
+
+	// Ensure sort direction is normalized
+	sortDirection = strings.ToUpper(sortDirection)
+	if sortDirection != "ASC" && sortDirection != "DESC" {
+		sortDirection = "DESC" // Default to descending
+	}
+
+	// Validate sort field
+	validSortFields := map[string]bool{
+		"name":       true,
+		"created_at": true,
+		"updated_at": true,
+		"version":    true,
+	}
+
+	if !validSortFields[sortBy] {
+		sortBy = "created_at" // Default sort by creation date
+	}
 
 	// Ensure tags is initialized to empty array if nil
 	tagsParam := pq.Array(tags)
@@ -40,7 +68,7 @@ func (r *StrategyRepository) GetUserStrategies(ctx context.Context, userID int, 
 
 	// First, get total count using the count function
 	var totalCount int
-	err := r.db.GetContext(ctx, &totalCount, `SELECT count_my_strategies($1, $2, $3, $4)`,
+	err := r.db.GetContext(ctx, &totalCount, `SELECT count_strategies($1, $2, $3, $4)`,
 		userID,
 		searchTerm,
 		purchasedOnly,
@@ -52,15 +80,17 @@ func (r *StrategyRepository) GetUserStrategies(ctx context.Context, userID int, 
 		return nil, 0, err
 	}
 
-	// Now get the actual paginated data from the function with pagination parameters
+	// Now get the actual paginated and sorted data from the function
 	var strategies []model.ExtendedStrategy
 	err = r.db.SelectContext(ctx, &strategies, `
-		SELECT * FROM get_my_strategies($1, $2, $3, $4, $5, $6)
+		SELECT * FROM get_all_strategies($1, $2, $3, $4, $5, $6, $7, $8)
 	`,
 		userID,
 		searchTerm,
 		purchasedOnly,
 		tagsParam,
+		sortBy,
+		sortDirection,
 		limit,
 		offset,
 	)
@@ -88,9 +118,9 @@ func (r *StrategyRepository) GetUserStrategies(ctx context.Context, userID int, 
 	return strategies, totalCount, nil
 }
 
-// Create adds a new strategy using add_strategy function
-func (r *StrategyRepository) Create(ctx context.Context, strategy *model.StrategyCreate, userID int) (int, error) {
-	query := `SELECT add_strategy($1, $2, $3, $4, $5, $6, $7)`
+// CreateStrategy adds a new strategy using create_strategy function
+func (r *StrategyRepository) CreateStrategy(ctx context.Context, strategy *model.StrategyCreate, userID int) (int, error) {
+	query := `SELECT create_strategy($1, $2, $3, $4, $5, $6, $7)`
 
 	// Convert strategy structure to JSON
 	structureBytes, err := json.Marshal(strategy.Structure)
@@ -120,15 +150,12 @@ func (r *StrategyRepository) Create(ctx context.Context, strategy *model.Strateg
 	return id, nil
 }
 
-// GetByID retrieves a strategy by ID
-func (r *StrategyRepository) GetByID(ctx context.Context, id int) (*model.Strategy, error) {
-	query := `
-		SELECT id, name, user_id, description, thumbnail_url, structure, is_public, is_active, version, created_at, updated_at
-		FROM strategies
-		WHERE id = $1
-	`
+// GetStrategyByID retrieves a strategy by ID
+func (r *StrategyRepository) GetStrategyByID(ctx context.Context, id int) (*model.Strategy, error) {
+	query := `SELECT * FROM get_strategy_by_id($1)`
 
 	var strategy model.Strategy
+	var updatedAt sql.NullTime
 	var structureBytes []byte
 
 	row := r.db.QueryRowContext(ctx, query, id)
@@ -143,7 +170,7 @@ func (r *StrategyRepository) GetByID(ctx context.Context, id int) (*model.Strate
 		&strategy.IsActive,
 		&strategy.Version,
 		&strategy.CreatedAt,
-		&strategy.UpdatedAt,
+		&updatedAt,
 	)
 
 	if err != nil {
@@ -152,6 +179,11 @@ func (r *StrategyRepository) GetByID(ctx context.Context, id int) (*model.Strate
 		}
 		r.logger.Error("Failed to get strategy by ID", zap.Error(err), zap.Int("strategy_id", id))
 		return nil, err
+	}
+
+	// Handle nullable updated_at
+	if updatedAt.Valid {
+		strategy.UpdatedAt = &updatedAt.Time
 	}
 
 	// Unmarshal the strategy structure
@@ -171,8 +203,8 @@ func (r *StrategyRepository) GetByID(ctx context.Context, id int) (*model.Strate
 	return &strategy, nil
 }
 
-// Update updates a strategy using update_strategy function
-func (r *StrategyRepository) Update(ctx context.Context, id int, update *model.StrategyUpdate, userID int) error {
+// UpdateStrategy updates a strategy using update_strategy function
+func (r *StrategyRepository) UpdateStrategy(ctx context.Context, id int, update *model.StrategyUpdate, userID int) error {
 	query := `SELECT update_strategy($1, $2, $3, $4, $5, $6, $7, $8, $9)`
 
 	// Handle nil Structure case
@@ -242,8 +274,8 @@ func (r *StrategyRepository) Update(ctx context.Context, id int, update *model.S
 	return nil
 }
 
-// Delete marks a strategy as inactive using delete_strategy function
-func (r *StrategyRepository) Delete(ctx context.Context, id int, userID int) error {
+// DeleteStrategy marks a strategy as inactive using delete_strategy function
+func (r *StrategyRepository) DeleteStrategy(ctx context.Context, id int, userID int) error {
 	query := `SELECT delete_strategy($1, $2)`
 
 	var success bool

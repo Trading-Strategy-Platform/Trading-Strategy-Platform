@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 
 	"services/strategy-service/internal/model"
 
@@ -26,8 +27,19 @@ func NewMarketplaceRepository(db *sqlx.DB, logger *zap.Logger) *MarketplaceRepos
 	}
 }
 
-// GetAll retrieves marketplace listings with proper database-level pagination
-func (r *MarketplaceRepository) GetAll(ctx context.Context, searchTerm string, minPrice *float64, maxPrice *float64, isFree *bool, tags []int, minRating *float64, sortBy string, page, limit int) ([]model.MarketplaceItem, int, error) {
+// GetAllListings retrieves marketplace listings with proper database-level pagination and sorting
+func (r *MarketplaceRepository) GetAllListings(
+	ctx context.Context,
+	searchTerm string,
+	minPrice *float64,
+	maxPrice *float64,
+	isFree *bool,
+	tags []int,
+	minRating *float64,
+	sortBy string,
+	sortDirection string,
+	page, limit int,
+) ([]model.MarketplaceItem, int, error) {
 	// Calculate offset from page and limit
 	offset := (page - 1) * limit
 
@@ -47,9 +59,24 @@ func (r *MarketplaceRepository) GetAll(ctx context.Context, searchTerm string, m
 		minRatingSQL = *minRating
 	}
 
-	// If sortBy is empty, use default 'popularity'
-	if sortBy == "" {
+	// Validate and normalize sort parameters
+	validSortOptions := map[string]bool{
+		"popularity": true,
+		"rating":     true,
+		"price":      true,
+		"newest":     true,
+		"name":       true,
+	}
+
+	// If sortBy is empty or invalid, use default 'popularity'
+	if sortBy == "" || !validSortOptions[sortBy] {
 		sortBy = "popularity"
+	}
+
+	// Normalize sort direction
+	sortDirection = strings.ToUpper(sortDirection)
+	if sortDirection != "ASC" && sortDirection != "DESC" {
+		sortDirection = "DESC" // Default to descending for most fields
 	}
 
 	// Use a zero-length array if tags is nil
@@ -58,8 +85,8 @@ func (r *MarketplaceRepository) GetAll(ctx context.Context, searchTerm string, m
 		tagsParam = pq.Array([]int{})
 	}
 
-	// First, get total count using count_marketplace_strategies function
-	countQuery := `SELECT count_marketplace_strategies($1, $2, $3, $4, $5, $6)`
+	// First, get total count using count_marketplace_listings function
+	countQuery := `SELECT count_marketplace_listings($1, $2, $3, $4, $5, $6)`
 
 	var total int
 	err := r.db.GetContext(ctx, &total, countQuery,
@@ -76,8 +103,8 @@ func (r *MarketplaceRepository) GetAll(ctx context.Context, searchTerm string, m
 		return nil, 0, err
 	}
 
-	// Now, get paginated data using get_marketplace_strategies function
-	dataQuery := `SELECT * FROM get_marketplace_strategies($1, $2, $3, $4, $5, $6, $7, $8, $9)`
+	// Now, get paginated data using get_all_marketplace_listings function
+	dataQuery := `SELECT * FROM get_all_marketplace_listings($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`
 
 	// Define a struct that matches the SQL function columns exactly
 	type listing struct {
@@ -100,15 +127,16 @@ func (r *MarketplaceRepository) GetAll(ctx context.Context, searchTerm string, m
 	var listings []listing
 
 	err = r.db.SelectContext(ctx, &listings, dataQuery,
-		searchTerm,   // p_search_term
-		minPriceSQL,  // p_min_price
-		maxPriceSQL,  // p_max_price
-		isFree,       // p_is_free
-		tagsParam,    // p_tags
-		minRatingSQL, // p_min_rating
-		sortBy,       // p_sort_by
-		limit,        // p_limit
-		offset,       // p_offset
+		searchTerm,    // p_search_term
+		minPriceSQL,   // p_min_price
+		maxPriceSQL,   // p_max_price
+		isFree,        // p_is_free
+		tagsParam,     // p_tags
+		minRatingSQL,  // p_min_rating
+		sortBy,        // p_sort_by
+		sortDirection, // p_sort_direction
+		limit,         // p_limit
+		offset,        // p_offset
 	)
 
 	if err != nil {
@@ -122,8 +150,8 @@ func (r *MarketplaceRepository) GetAll(ctx context.Context, searchTerm string, m
 		items[i] = model.MarketplaceItem{
 			ID:                 l.ID,
 			StrategyID:         l.StrategyID,
-			Name:               l.Name,         // Include strategy name
-			ThumbnailURL:       l.ThumbnailURL, // Include thumbnail URL
+			Name:               l.Name,
+			ThumbnailURL:       l.ThumbnailURL,
 			UserID:             l.UserID,
 			Price:              l.Price,
 			IsSubscription:     l.IsSubscription,
@@ -148,9 +176,9 @@ func (r *MarketplaceRepository) GetAll(ctx context.Context, searchTerm string, m
 	return items, total, nil
 }
 
-// Create adds a new marketplace listing using add_to_marketplace function
-func (r *MarketplaceRepository) Create(ctx context.Context, listing *model.MarketplaceCreate, userID int) (int, error) {
-	query := `SELECT add_to_marketplace($1, $2, $3, $4, $5, $6, $7)`
+// CreateListing adds a new marketplace listing using create_marketplace_listing function
+func (r *MarketplaceRepository) CreateListing(ctx context.Context, listing *model.MarketplaceCreate, userID int) (int, error) {
+	query := `SELECT create_marketplace_listing($1, $2, $3, $4, $5, $6, $7)`
 
 	var id int
 	err := r.db.QueryRowContext(
@@ -173,31 +201,51 @@ func (r *MarketplaceRepository) Create(ctx context.Context, listing *model.Marke
 	return id, nil
 }
 
-// GetByID retrieves a marketplace listing by ID
-func (r *MarketplaceRepository) GetByID(ctx context.Context, id int) (*model.MarketplaceItem, error) {
-	query := `
-		SELECT id, strategy_id, user_id, price, is_subscription, subscription_period, 
-		       is_active, description_public, created_at, updated_at
-		FROM strategy_marketplace
-		WHERE id = $1
-	`
+// GetListingByID retrieves a marketplace listing by ID
+func (r *MarketplaceRepository) GetListingByID(ctx context.Context, id int) (*model.MarketplaceItem, error) {
+	query := `SELECT * FROM get_marketplace_listing_by_id($1)`
 
 	var item model.MarketplaceItem
-	err := r.db.GetContext(ctx, &item, query, id)
+	var createdAt sql.NullTime
+	var updatedAt sql.NullTime
+
+	err := r.db.QueryRowContext(ctx, query, id).Scan(
+		&item.ID,
+		&item.StrategyID,
+		&item.VersionID,
+		&item.UserID,
+		&item.Price,
+		&item.IsSubscription,
+		&item.SubscriptionPeriod,
+		&item.IsActive,
+		&item.DescriptionPublic,
+		&createdAt,
+		&updatedAt,
+	)
+
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
 		}
-		r.logger.Error("Failed to get marketplace item", zap.Error(err))
+		r.logger.Error("Failed to get marketplace item by ID", zap.Error(err), zap.Int("id", id))
 		return nil, err
+	}
+
+	// Handle nullable times
+	if createdAt.Valid {
+		item.CreatedAt = createdAt.Time
+	}
+
+	if updatedAt.Valid {
+		item.UpdatedAt = &updatedAt.Time
 	}
 
 	return &item, nil
 }
 
-// Delete removes a marketplace listing using remove_from_marketplace function
-func (r *MarketplaceRepository) Delete(ctx context.Context, id int, userID int) error {
-	query := `SELECT remove_from_marketplace($1, $2)`
+// DeleteListing removes a marketplace listing using delete_marketplace_listing function
+func (r *MarketplaceRepository) DeleteListing(ctx context.Context, id int, userID int) error {
+	query := `SELECT delete_marketplace_listing($1, $2)`
 
 	var success bool
 	err := r.db.QueryRowContext(ctx, query, userID, id).Scan(&success)

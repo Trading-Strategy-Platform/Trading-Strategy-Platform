@@ -46,7 +46,7 @@ func NewMarketplaceService(
 	}
 }
 
-// GetAllListings retrieves marketplace listings
+// GetAllListings retrieves marketplace listings with enhanced filtering, sorting, and pagination
 func (s *MarketplaceService) GetAllListings(
 	ctx context.Context,
 	searchTerm string,
@@ -56,6 +56,7 @@ func (s *MarketplaceService) GetAllListings(
 	tags []int,
 	minRating *float64,
 	sortBy string,
+	sortDirection string,
 	page, limit int,
 ) ([]model.MarketplaceItem, int, error) {
 	// Validate pagination
@@ -63,11 +64,23 @@ func (s *MarketplaceService) GetAllListings(
 		page = 1
 	}
 	if limit < 1 || limit > 100 {
-		limit = 10
+		limit = 20
 	}
 
-	// Get listings from repository
-	items, total, err := s.marketplaceRepo.GetAll(ctx, searchTerm, minPrice, maxPrice, isFree, tags, minRating, sortBy, page, limit)
+	// Get listings from repository with all filtering and sorting parameters
+	items, total, err := s.marketplaceRepo.GetAllListings(
+		ctx,
+		searchTerm,
+		minPrice,
+		maxPrice,
+		isFree,
+		tags,
+		minRating,
+		sortBy,
+		sortDirection,
+		page,
+		limit,
+	)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -127,10 +140,10 @@ func (s *MarketplaceService) GetAllListings(
 	return items, total, nil
 }
 
-// CreateListing creates a new marketplace listing using add_to_marketplace function
+// CreateListing creates a new marketplace listing
 func (s *MarketplaceService) CreateListing(ctx context.Context, listing *model.MarketplaceCreate, userID int) (*model.MarketplaceItem, error) {
 	// Check if strategy exists and belongs to the user
-	strategy, err := s.strategyRepo.GetByID(ctx, listing.StrategyID)
+	strategy, err := s.strategyRepo.GetStrategyByID(ctx, listing.StrategyID)
 	if err != nil {
 		return nil, err
 	}
@@ -140,28 +153,91 @@ func (s *MarketplaceService) CreateListing(ctx context.Context, listing *model.M
 	}
 
 	if strategy.UserID != userID {
-		return nil, errors.New("access denied")
+		return nil, errors.New("access denied: you can only list strategies you own")
 	}
 
-	// Create listing using add_to_marketplace function
-	id, err := s.marketplaceRepo.Create(ctx, listing, userID)
+	// Create listing using create_marketplace_listing function
+	id, err := s.marketplaceRepo.CreateListing(ctx, listing, userID)
 	if err != nil {
 		return nil, err
 	}
 
 	// Get created listing
-	createdListing, err := s.marketplaceRepo.GetByID(ctx, id)
+	createdListing, err := s.marketplaceRepo.GetListingByID(ctx, id)
 	if err != nil {
 		return nil, err
+	}
+
+	// Enhance with strategy details
+	createdListing.Name = strategy.Name
+	createdListing.ThumbnailURL = strategy.ThumbnailURL
+
+	// Try to get creator username
+	username, err := s.userClient.GetUserByID(ctx, userID)
+	if err == nil {
+		createdListing.CreatorName = username
+	} else {
+		createdListing.CreatorName = fmt.Sprintf("User %d", userID)
 	}
 
 	return createdListing, nil
 }
 
-// DeleteListing deletes a marketplace listing using remove_from_marketplace function
+// GetListingByID retrieves a marketplace listing by ID with detailed information
+func (s *MarketplaceService) GetListingByID(ctx context.Context, id int) (*model.MarketplaceItem, error) {
+	// Get listing
+	listing, err := s.marketplaceRepo.GetListingByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+
+	if listing == nil {
+		return nil, errors.New("listing not found")
+	}
+
+	// Get strategy details to enhance the listing
+	strategy, err := s.strategyRepo.GetStrategyByID(ctx, listing.StrategyID)
+	if err != nil {
+		s.logger.Warn("Failed to get strategy details for listing",
+			zap.Error(err),
+			zap.Int("strategyID", listing.StrategyID))
+	} else if strategy != nil {
+		listing.Name = strategy.Name
+		listing.ThumbnailURL = strategy.ThumbnailURL
+	}
+
+	// Try to get creator name
+	username, err := s.userClient.GetUserByID(ctx, listing.UserID)
+	if err == nil {
+		listing.CreatorName = username
+	} else {
+		listing.CreatorName = fmt.Sprintf("User %d", listing.UserID)
+	}
+
+	// Get rating information
+	reviews, _, err := s.reviewRepo.GetByMarketplaceID(ctx, id, nil, 1, 1)
+	if err == nil {
+		reviewCount := len(reviews)
+		avgRating := 0.0
+		listing.ReviewsCount = reviewCount
+
+		if reviewCount > 0 {
+			totalRating := 0
+			for _, r := range reviews {
+				totalRating += r.Rating
+			}
+			avgRating = float64(totalRating) / float64(reviewCount)
+			listing.AverageRating = avgRating
+		}
+	}
+
+	return listing, nil
+}
+
+// DeleteListing deletes a marketplace listing
 func (s *MarketplaceService) DeleteListing(ctx context.Context, id int, userID int) error {
 	// Check if listing exists
-	listing, err := s.marketplaceRepo.GetByID(ctx, id)
+	listing, err := s.marketplaceRepo.GetListingByID(ctx, id)
 	if err != nil {
 		return err
 	}
@@ -171,23 +247,27 @@ func (s *MarketplaceService) DeleteListing(ctx context.Context, id int, userID i
 	}
 
 	// Check if strategy belongs to the user
-	strategy, err := s.strategyRepo.GetByID(ctx, listing.StrategyID)
+	strategy, err := s.strategyRepo.GetStrategyByID(ctx, listing.StrategyID)
 	if err != nil {
 		return err
 	}
 
-	if strategy.UserID != userID {
-		return errors.New("access denied")
+	if strategy == nil {
+		return errors.New("strategy not found for this listing")
 	}
 
-	// Delete listing using remove_from_marketplace function
-	return s.marketplaceRepo.Delete(ctx, id, userID)
+	if strategy.UserID != userID {
+		return errors.New("access denied: you can only delete your own listings")
+	}
+
+	// Delete listing
+	return s.marketplaceRepo.DeleteListing(ctx, id, userID)
 }
 
-// PurchaseStrategy purchases a strategy from the marketplace using purchase_strategy function
+// PurchaseStrategy purchases a strategy from the marketplace
 func (s *MarketplaceService) PurchaseStrategy(ctx context.Context, marketplaceID int, userID int) (*model.StrategyPurchase, error) {
 	// Get listing
-	listing, err := s.marketplaceRepo.GetByID(ctx, marketplaceID)
+	listing, err := s.marketplaceRepo.GetListingByID(ctx, marketplaceID)
 	if err != nil {
 		return nil, err
 	}
@@ -201,19 +281,38 @@ func (s *MarketplaceService) PurchaseStrategy(ctx context.Context, marketplaceID
 	}
 
 	// Cannot purchase own strategy
-	strategy, err := s.strategyRepo.GetByID(ctx, listing.StrategyID)
+	strategy, err := s.strategyRepo.GetStrategyByID(ctx, listing.StrategyID)
 	if err != nil {
 		return nil, err
+	}
+
+	if strategy == nil {
+		return nil, errors.New("strategy not found")
 	}
 
 	if strategy.UserID == userID {
-		return nil, errors.New("cannot purchase own strategy")
+		return nil, errors.New("cannot purchase your own strategy")
 	}
 
-	// Create purchase record using purchase_strategy function
+	// Create purchase record
 	purchaseID, err := s.purchaseRepo.Purchase(ctx, marketplaceID, userID)
 	if err != nil {
 		return nil, err
+	}
+
+	// Calculate subscription end date if applicable
+	var subscriptionEnd *time.Time
+	if listing.IsSubscription {
+		endDate := time.Now()
+		switch listing.SubscriptionPeriod {
+		case "monthly":
+			endDate = endDate.AddDate(0, 1, 0)
+		case "quarterly":
+			endDate = endDate.AddDate(0, 3, 0)
+		case "yearly":
+			endDate = endDate.AddDate(1, 0, 0)
+		}
+		subscriptionEnd = &endDate
 	}
 
 	// Return purchase info
@@ -222,17 +321,17 @@ func (s *MarketplaceService) PurchaseStrategy(ctx context.Context, marketplaceID
 		MarketplaceID:   marketplaceID,
 		BuyerID:         userID,
 		PurchasePrice:   listing.Price,
-		SubscriptionEnd: nil, // This would be set by the purchase_strategy function
+		SubscriptionEnd: subscriptionEnd,
 		CreatedAt:       time.Now(),
 	}, nil
 }
 
-// CancelSubscription cancels a subscription using cancel_subscription function
+// CancelSubscription cancels a subscription
 func (s *MarketplaceService) CancelSubscription(ctx context.Context, purchaseID int, userID int) error {
 	return s.purchaseRepo.CancelSubscription(ctx, purchaseID, userID)
 }
 
-// GetReviews retrieves reviews for a marketplace listing using get_strategy_reviews function
+// GetReviews retrieves reviews for a marketplace listing
 func (s *MarketplaceService) GetReviews(
 	ctx context.Context,
 	marketplaceID int,
@@ -241,7 +340,7 @@ func (s *MarketplaceService) GetReviews(
 	limit int,
 ) ([]model.StrategyReview, int, error) {
 	// Check if listing exists
-	listing, err := s.marketplaceRepo.GetByID(ctx, marketplaceID)
+	listing, err := s.marketplaceRepo.GetListingByID(ctx, marketplaceID)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -270,26 +369,37 @@ func (s *MarketplaceService) GetReviews(
 		return nil, 0, err
 	}
 
-	// Add usernames to reviews
-	for i := range reviews {
-		username, err := s.userClient.GetUserByID(ctx, reviews[i].UserID)
+	// Enhance reviews with usernames
+	userIDs := make([]int, 0, len(reviews))
+	for _, r := range reviews {
+		userIDs = append(userIDs, r.UserID)
+	}
+
+	// Try batch fetch of usernames if there are reviews
+	if len(userIDs) > 0 {
+		userDetails, err := s.userClient.BatchGetUsersByIDs(ctx, userIDs)
 		if err != nil {
-			s.logger.Warn("Failed to get reviewer username",
-				zap.Error(err),
-				zap.Int("user_id", reviews[i].UserID))
-			reviews[i].UserName = fmt.Sprintf("User %d", reviews[i].UserID)
+			s.logger.Warn("Failed to batch get user details", zap.Error(err))
+			// Continue, we'll use fallback names
 		} else {
-			reviews[i].UserName = username
+			// Set usernames in reviews
+			for i, review := range reviews {
+				if details, ok := userDetails[review.UserID]; ok {
+					reviews[i].UserName = details.Username
+				} else {
+					reviews[i].UserName = fmt.Sprintf("User %d", review.UserID)
+				}
+			}
 		}
 	}
 
 	return reviews, total, nil
 }
 
-// CreateReview creates a review for a purchased strategy using add_review function
+// CreateReview creates a review for a purchased strategy
 func (s *MarketplaceService) CreateReview(ctx context.Context, review *model.ReviewCreate, userID int) (*model.StrategyReview, error) {
 	// Check if listing exists
-	listing, err := s.marketplaceRepo.GetByID(ctx, review.MarketplaceID)
+	listing, err := s.marketplaceRepo.GetListingByID(ctx, review.MarketplaceID)
 	if err != nil {
 		return nil, err
 	}
@@ -304,7 +414,7 @@ func (s *MarketplaceService) CreateReview(ctx context.Context, review *model.Rev
 		return nil, errors.New("must purchase strategy before reviewing")
 	}
 
-	// Create review using add_review function
+	// Create review
 	reviewID, err := s.reviewRepo.Create(ctx, review, userID)
 	if err != nil {
 		return nil, err
@@ -314,7 +424,7 @@ func (s *MarketplaceService) CreateReview(ctx context.Context, review *model.Rev
 	userName, err := s.userClient.GetUserByID(ctx, userID)
 	if err != nil {
 		s.logger.Warn("Failed to get user name", zap.Error(err))
-		userName = "Anonymous"
+		userName = fmt.Sprintf("User %d", userID)
 	}
 
 	// Return created review
@@ -329,9 +439,19 @@ func (s *MarketplaceService) CreateReview(ctx context.Context, review *model.Rev
 	}, nil
 }
 
-// checkUserHasAccess checks if a user has purchased a strategy
+// updateReview updates a review
+func (s *MarketplaceService) UpdateReview(ctx context.Context, reviewID int, userID int, rating int, comment string) error {
+	return s.reviewRepo.Update(ctx, reviewID, userID, rating, comment)
+}
+
+// DeleteReview deletes a review
+func (s *MarketplaceService) DeleteReview(ctx context.Context, reviewID int, userID int) error {
+	return s.reviewRepo.Delete(ctx, reviewID, userID)
+}
+
+// Helper: checkUserHasAccess checks if a user has purchased a strategy
 func (s *MarketplaceService) checkUserHasAccess(ctx context.Context, strategyID int, userID int) (bool, error) {
-	strategies, _, err := s.strategyRepo.GetUserStrategies(ctx, userID, "", true, nil, 1, 100)
+	strategies, _, err := s.strategyRepo.GetAllStrategies(ctx, userID, "", true, nil, "created_at", "DESC", 1, 100)
 	if err != nil {
 		return false, err
 	}
@@ -343,14 +463,4 @@ func (s *MarketplaceService) checkUserHasAccess(ctx context.Context, strategyID 
 	}
 
 	return false, nil
-}
-
-// UpdateReview updates a review using edit_review function
-func (s *MarketplaceService) UpdateReview(ctx context.Context, reviewID int, userID int, rating int, comment string) error {
-	return s.reviewRepo.Update(ctx, reviewID, userID, rating, comment)
-}
-
-// DeleteReview deletes a review using delete_review function
-func (s *MarketplaceService) DeleteReview(ctx context.Context, reviewID int, userID int) error {
-	return s.reviewRepo.Delete(ctx, reviewID, userID)
 }

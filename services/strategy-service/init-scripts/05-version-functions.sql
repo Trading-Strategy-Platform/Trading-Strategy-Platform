@@ -2,133 +2,136 @@
 -- File: 05-version-functions.sql
 -- Contains functions for version operations
 
--- Get all versions of a strategy that the user has access to
-CREATE OR REPLACE FUNCTION get_accessible_strategy_versions(
+-- Get all versions of a strategy with the active version flag
+CREATE OR REPLACE FUNCTION get_all_strategy_versions(
     p_user_id INT,
     p_strategy_id INT,
+    p_sort_by VARCHAR DEFAULT 'version',
+    p_sort_direction VARCHAR DEFAULT 'DESC',
     p_limit INT DEFAULT 20,
     p_offset INT DEFAULT 0
 )
 RETURNS TABLE (
+    id INT,
+    strategy_id INT,
     version INT,
+    structure JSONB,
     change_notes TEXT,
     created_at TIMESTAMP,
-    is_active_version BOOLEAN
+    is_active BOOLEAN  -- Keep this flag to show which version is active (latest)
 ) AS $$
+DECLARE
+    current_version INT;
 BEGIN
+    -- Get the current version from the strategy
+    SELECT version INTO current_version FROM strategies WHERE id = p_strategy_id;
+    
+    -- Validate sort field
+    IF p_sort_by NOT IN ('version', 'created_at') THEN
+        p_sort_by := 'version'; -- Default sort by version
+    END IF;
+    
+    -- Normalize sort direction
+    IF UPPER(p_sort_direction) NOT IN ('ASC', 'DESC') THEN
+        p_sort_direction := 'DESC'; -- Default descending for versions (newest first)
+    ELSE
+        p_sort_direction := UPPER(p_sort_direction);
+    END IF;
+
     -- For strategy owners, return all versions
     IF EXISTS (SELECT 1 FROM strategies WHERE id = p_strategy_id AND user_id = p_user_id) THEN
         RETURN QUERY
         SELECT 
+            sv.id,
+            sv.strategy_id,
             sv.version,
+            sv.structure,
             sv.change_notes,
             sv.created_at,
-            COALESCE(usv.active_version = sv.version, FALSE) AS is_active_version
+            (sv.version = current_version) AS is_active  -- Compare with current version
         FROM 
             strategy_versions sv
-            LEFT JOIN user_strategy_versions usv ON 
-                usv.user_id = p_user_id AND 
-                usv.strategy_id = p_strategy_id
         WHERE 
             sv.strategy_id = p_strategy_id
             AND sv.is_deleted = FALSE
-        ORDER BY 
-            sv.version DESC
+        ORDER BY
+            CASE WHEN p_sort_by = 'version' AND p_sort_direction = 'DESC' THEN sv.version END DESC,
+            CASE WHEN p_sort_by = 'version' AND p_sort_direction = 'ASC' THEN sv.version END ASC,
+            CASE WHEN p_sort_by = 'created_at' AND p_sort_direction = 'DESC' THEN sv.created_at END DESC,
+            CASE WHEN p_sort_by = 'created_at' AND p_sort_direction = 'ASC' THEN sv.created_at END ASC
         LIMIT p_limit OFFSET p_offset;
     ELSE
         -- For purchasers, return only versions they've purchased
         RETURN QUERY
         SELECT 
+            sv.id,
+            sv.strategy_id,
             sv.version,
+            sv.structure,
             sv.change_notes,
             sv.created_at,
-            COALESCE(usv.active_version = sv.version, FALSE) AS is_active_version
+            (sv.version = current_version) AS is_active  -- Compare with current version
         FROM 
             strategy_versions sv
             JOIN strategy_purchases sp ON sp.strategy_version = sv.version
             JOIN strategy_marketplace sm ON 
                 sp.marketplace_id = sm.id AND 
                 sm.strategy_id = p_strategy_id
-            LEFT JOIN user_strategy_versions usv ON 
-                usv.user_id = p_user_id AND 
-                usv.strategy_id = p_strategy_id
         WHERE 
             sv.strategy_id = p_strategy_id
             AND sv.is_deleted = FALSE
             AND sp.buyer_id = p_user_id
             AND (sp.subscription_end IS NULL OR sp.subscription_end > NOW())
-        ORDER BY 
-            sv.version DESC
+        ORDER BY
+            CASE WHEN p_sort_by = 'version' AND p_sort_direction = 'DESC' THEN sv.version END DESC,
+            CASE WHEN p_sort_by = 'version' AND p_sort_direction = 'ASC' THEN sv.version END ASC,
+            CASE WHEN p_sort_by = 'created_at' AND p_sort_direction = 'DESC' THEN sv.created_at END DESC,
+            CASE WHEN p_sort_by = 'created_at' AND p_sort_direction = 'ASC' THEN sv.created_at END ASC
         LIMIT p_limit OFFSET p_offset;
     END IF;
 END;
 $$ LANGUAGE plpgsql;
 
--- Update strategy active version for a user
-CREATE OR REPLACE FUNCTION update_user_strategy_version(
-    p_user_id INT,
+-- Get a specific version by ID
+CREATE OR REPLACE FUNCTION get_strategy_version_by_id(
     p_strategy_id INT,
     p_version INT
 )
-RETURNS BOOLEAN AS $$
+RETURNS TABLE (
+    id INT,
+    strategy_id INT,
+    version INT,
+    structure JSONB,
+    change_notes TEXT,
+    created_at TIMESTAMP,
+    is_active BOOLEAN  -- Keep this flag
+) AS $$
 DECLARE
-    affected_rows INT;
+    current_version INT;
 BEGIN
-    -- Verify user has access to this strategy version
-    -- Either they own it or purchased it
-    PERFORM 1 
-    FROM strategies s
-    WHERE s.id = p_strategy_id AND s.user_id = p_user_id
-    
-    UNION
-    
-    SELECT 1
-    FROM strategy_purchases p
-    JOIN strategy_marketplace m ON p.marketplace_id = m.id
-    WHERE m.strategy_id = p_strategy_id 
-      AND p.buyer_id = p_user_id
-      AND p.strategy_version = p_version
-      AND (p.subscription_end IS NULL OR p.subscription_end > NOW());
-      
-    IF NOT FOUND THEN
-        RETURN FALSE;
-    END IF;
-    
-    -- Check if record exists
-    PERFORM 1 
-    FROM user_strategy_versions 
-    WHERE user_id = p_user_id AND strategy_id = p_strategy_id;
-    
-    IF FOUND THEN
-        -- Update existing record
-        UPDATE user_strategy_versions
-        SET 
-            active_version = p_version,
-            updated_at = NOW()
-        WHERE 
-            user_id = p_user_id 
-            AND strategy_id = p_strategy_id;
-    ELSE
-        -- Insert new record
-        INSERT INTO user_strategy_versions (
-            user_id,
-            strategy_id,
-            active_version,
-            updated_at
-        )
-        VALUES (
-            p_user_id,
-            p_strategy_id,
-            p_version,
-            NOW()
-        );
-    END IF;
-    
-    RETURN TRUE;
+    -- Get the current version from the strategy
+    SELECT version INTO current_version FROM strategies WHERE id = p_strategy_id;
+
+    RETURN QUERY
+    SELECT 
+        sv.id,
+        sv.strategy_id,
+        sv.version,
+        sv.structure,
+        sv.change_notes,
+        sv.created_at,
+        (sv.version = current_version) AS is_active  -- Compare with current version
+    FROM 
+        strategy_versions sv
+    WHERE 
+        sv.strategy_id = p_strategy_id
+        AND sv.version = p_version
+        AND sv.is_deleted = FALSE;
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE OR REPLACE FUNCTION count_accessible_strategy_versions(
+-- Count strategy versions
+CREATE OR REPLACE FUNCTION count_strategy_versions(
     p_user_id INT,
     p_strategy_id INT
 )

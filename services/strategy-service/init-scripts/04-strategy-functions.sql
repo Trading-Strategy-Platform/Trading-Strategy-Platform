@@ -64,12 +64,14 @@ WHERE
         OR p.subscription_end > NOW()
     );
 
--- Get all my strategies with filtering
-CREATE OR REPLACE FUNCTION get_my_strategies(
+-- Get all my strategies with filtering and sorting
+CREATE OR REPLACE FUNCTION get_all_strategies(
     p_user_id INTEGER,
     p_search_term CHARACTER VARYING DEFAULT NULL,
     p_purchased_only BOOLEAN DEFAULT FALSE,
     p_tags INTEGER[] DEFAULT NULL,
+    p_sort_by VARCHAR DEFAULT 'created_at',
+    p_sort_direction VARCHAR DEFAULT 'DESC',
     p_limit INTEGER DEFAULT 10,
     p_offset INTEGER DEFAULT 0
 )
@@ -95,6 +97,7 @@ DECLARE
     owned_search_condition TEXT := '';
     purchased_search_condition TEXT := '';
     tags_condition TEXT := '';
+    sort_clause TEXT := '';
     query TEXT;
 BEGIN
     -- Build separate search conditions for owned vs purchased strategies
@@ -109,6 +112,31 @@ BEGIN
     -- Build tags condition if tags are provided
     IF p_tags IS NOT NULL AND array_length(p_tags, 1) > 0 THEN
         tags_condition := ' AND EXISTS (SELECT 1 FROM strategy_tag_mappings WHERE strategy_id = s.id AND tag_id = ANY(''' || p_tags::text || '''::int[]))';
+    END IF;
+
+    -- Validate sort field
+    IF p_sort_by NOT IN ('name', 'created_at', 'updated_at', 'version') THEN
+        p_sort_by := 'created_at'; -- Default sort by creation date
+    END IF;
+    
+    -- Normalize sort direction
+    IF UPPER(p_sort_direction) NOT IN ('ASC', 'DESC') THEN
+        p_sort_direction := 'DESC'; -- Default sorting from newest to oldest
+    ELSE
+        p_sort_direction := UPPER(p_sort_direction);
+    END IF;
+    
+    -- Build sort clause
+    sort_clause := ' ORDER BY ';
+    
+    IF p_sort_by = 'name' THEN
+        sort_clause := sort_clause || 'name ' || p_sort_direction;
+    ELSIF p_sort_by = 'updated_at' THEN
+        sort_clause := sort_clause || 'updated_at ' || p_sort_direction || ' NULLS LAST';
+    ELSIF p_sort_by = 'version' THEN
+        sort_clause := sort_clause || 'version ' || p_sort_direction;
+    ELSE -- Default to created_at
+        sort_clause := sort_clause || 'created_at ' || p_sort_direction;
     END IF;
 
     -- Start building the query
@@ -227,11 +255,11 @@ BEGIN
                 tags_condition;
     END IF;
     
-    -- Close the CTE and order the results, add pagination
+    -- Close the CTE and apply sorting and pagination
     query := query || '
         )
-        SELECT * FROM combined_results
-        ORDER BY created_at DESC
+        SELECT * FROM combined_results' ||
+        sort_clause || '
         LIMIT ' || p_limit || ' OFFSET ' || p_offset;
         
     -- Execute the dynamically built query
@@ -240,7 +268,7 @@ END;
 $$ LANGUAGE plpgsql;
 
 -- Add new strategy
-CREATE OR REPLACE FUNCTION add_strategy(
+CREATE OR REPLACE FUNCTION create_strategy(
     p_user_id INT,
     p_name VARCHAR(100),
     p_description TEXT,
@@ -419,7 +447,8 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE OR REPLACE FUNCTION count_my_strategies(
+-- Count strategies with various filters
+CREATE OR REPLACE FUNCTION count_strategies(
     p_user_id INTEGER,
     p_search_term CHARACTER VARYING DEFAULT NULL,
     p_purchased_only BOOLEAN DEFAULT FALSE,
@@ -495,5 +524,43 @@ BEGIN
     EXECUTE query INTO total_count;
     
     RETURN total_count;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Get strategy by ID
+CREATE OR REPLACE FUNCTION get_strategy_by_id(
+    p_strategy_id INT
+)
+RETURNS TABLE (
+    id INT,
+    name VARCHAR(100),
+    user_id INT,
+    description TEXT,
+    thumbnail_url VARCHAR(255),
+    structure JSONB,
+    is_public BOOLEAN,
+    is_active BOOLEAN,
+    version INT,
+    created_at TIMESTAMP,
+    updated_at TIMESTAMP
+) AS $$
+BEGIN
+    RETURN QUERY
+    SELECT 
+        s.id,
+        s.name,
+        s.user_id,
+        s.description,
+        s.thumbnail_url,
+        s.structure,
+        s.is_public,
+        s.is_active,
+        s.version,
+        s.created_at,
+        s.updated_at
+    FROM 
+        strategies s
+    WHERE 
+        s.id = p_strategy_id;
 END;
 $$ LANGUAGE plpgsql;

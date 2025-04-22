@@ -47,7 +47,7 @@ func (h *ThumbnailHandler) UploadThumbnail(c *gin.Context) {
 	}
 
 	// Verify strategy ownership
-	strategy, err := h.strategyService.GetStrategy(c.Request.Context(), strategyID, userID.(int))
+	strategy, err := h.strategyService.GetStrategyByID(c.Request.Context(), strategyID, userID.(int))
 	if err != nil {
 		h.logger.Error("Failed to get strategy", zap.Error(err), zap.Int("strategy_id", strategyID))
 		c.JSON(http.StatusNotFound, gin.H{"error": "Strategy not found"})

@@ -36,9 +36,9 @@ func NewStrategyHandler(strategyService *service.StrategyService, userClient Use
 	}
 }
 
-// ListUserStrategies handles listing strategies for a user
+// GetAllStrategies handles listing strategies for a user
 // GET /api/v1/strategies
-func (h *StrategyHandler) ListUserStrategies(c *gin.Context) {
+func (h *StrategyHandler) GetAllStrategies(c *gin.Context) {
 	userID, exists := c.Get("userID")
 	if !exists {
 		utils.SendErrorResponse(c, http.StatusUnauthorized, "Unauthorized")
@@ -64,12 +64,36 @@ func (h *StrategyHandler) ListUserStrategies(c *gin.Context) {
 		}
 	}
 
-	strategies, total, err := h.strategyService.GetUserStrategies(
+	// Parse sorting parameters
+	sortBy := c.DefaultQuery("sort_by", "created_at")
+	sortDirection := c.DefaultQuery("sort_direction", "DESC")
+
+	// Validate sort field
+	validSortFields := map[string]bool{
+		"name":       true,
+		"created_at": true,
+		"updated_at": true,
+		"version":    true,
+	}
+
+	if !validSortFields[sortBy] {
+		sortBy = "created_at" // Default to creation date
+	}
+
+	// Normalize sort direction
+	sortDirection = strings.ToUpper(sortDirection)
+	if sortDirection != "ASC" && sortDirection != "DESC" {
+		sortDirection = "DESC"
+	}
+
+	strategies, total, err := h.strategyService.GetAllStrategies(
 		c.Request.Context(),
 		userID.(int),
 		searchTerm,
 		purchasedOnly,
 		tagIDs,
+		sortBy,
+		sortDirection,
 		params.Page,
 		params.Limit,
 	)
@@ -102,8 +126,6 @@ func (h *StrategyHandler) CreateStrategy(c *gin.Context) {
 	// Set default IsActive to true
 	request.IsActive = true
 
-	// No structure validation or manipulation at all
-
 	strategy, err := h.strategyService.CreateStrategy(c.Request.Context(), &request, userID.(int))
 	if err != nil {
 		h.logger.Error("Failed to create strategy", zap.Error(err))
@@ -114,9 +136,9 @@ func (h *StrategyHandler) CreateStrategy(c *gin.Context) {
 	c.JSON(http.StatusCreated, gin.H{"data": strategy})
 }
 
-// GetStrategy handles retrieving a strategy by ID
+// GetStrategyByID handles retrieving a strategy by ID
 // GET /api/v1/strategies/{id}
-func (h *StrategyHandler) GetStrategy(c *gin.Context) {
+func (h *StrategyHandler) GetStrategyByID(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.Atoi(idStr)
 	if err != nil {
@@ -130,7 +152,7 @@ func (h *StrategyHandler) GetStrategy(c *gin.Context) {
 		return
 	}
 
-	strategy, err := h.strategyService.GetStrategy(c.Request.Context(), id, userID.(int))
+	strategy, err := h.strategyService.GetStrategyByID(c.Request.Context(), id, userID.(int))
 	if err != nil {
 		h.logger.Error("Failed to get strategy", zap.Error(err), zap.Int("id", id))
 		utils.SendErrorResponse(c, http.StatusNotFound, err.Error())
@@ -176,7 +198,7 @@ func (h *StrategyHandler) UpdateStrategy(c *gin.Context) {
 	}
 
 	// Get the original strategy to compare versions later
-	originalStrategy, err := h.strategyService.GetStrategy(c.Request.Context(), id, userID.(int))
+	originalStrategy, err := h.strategyService.GetStrategyByID(c.Request.Context(), id, userID.(int))
 	if err != nil {
 		h.logger.Error("Failed to get original strategy", zap.Error(err), zap.Int("id", id))
 		utils.SendErrorResponse(c, http.StatusBadRequest, err.Error())
@@ -263,9 +285,9 @@ func (h *StrategyHandler) GetVersions(c *gin.Context) {
 	utils.SendPaginatedResponse(c, http.StatusOK, versions, total, params.Page, params.Limit)
 }
 
-// GetVersionById handles retrieving a specific version of a strategy
+// GetVersionByID handles retrieving a specific version of a strategy
 // GET /api/v1/strategies/{id}/versions/{version}
-func (h *StrategyHandler) GetVersionById(c *gin.Context) {
+func (h *StrategyHandler) GetVersionByID(c *gin.Context) {
 	// Parse strategy ID
 	idStr := c.Param("id")
 	id, err := strconv.Atoi(idStr)
@@ -290,7 +312,7 @@ func (h *StrategyHandler) GetVersionById(c *gin.Context) {
 	}
 
 	// Get the specific version
-	strategyVersion, err := h.strategyService.GetVersionById(c.Request.Context(), id, version, userID.(int))
+	strategyVersion, err := h.strategyService.GetVersionByID(c.Request.Context(), id, version, userID.(int))
 	if err != nil {
 		h.logger.Error("Failed to get strategy version",
 			zap.Error(err),

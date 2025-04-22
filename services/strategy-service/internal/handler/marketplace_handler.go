@@ -27,9 +27,9 @@ func NewMarketplaceHandler(marketplaceService *service.MarketplaceService, logge
 	}
 }
 
-// ListListings handles listing marketplace listings
+// GetAllListings handles listing marketplace listings
 // GET /api/v1/marketplace
-func (h *MarketplaceHandler) ListListings(c *gin.Context) {
+func (h *MarketplaceHandler) GetAllListings(c *gin.Context) {
 	// Parse pagination parameters using the utility function
 	params := utils.ParsePaginationParams(c, 20, 100) // default limit: 20, max limit: 100
 
@@ -84,13 +84,20 @@ func (h *MarketplaceHandler) ListListings(c *gin.Context) {
 	validSortOptions := map[string]bool{
 		"popularity": true,
 		"rating":     true,
-		"price_asc":  true,
-		"price_desc": true,
+		"price":      true,
 		"newest":     true,
+		"name":       true,
 	}
 
 	if !validSortOptions[sortBy] {
 		sortBy = "popularity"
+	}
+
+	// Parse sort_direction parameter
+	sortDirection := c.DefaultQuery("sort_direction", "DESC")
+	sortDirection = strings.ToUpper(sortDirection)
+	if sortDirection != "ASC" && sortDirection != "DESC" {
+		sortDirection = "DESC"
 	}
 
 	listings, total, err := h.marketplaceService.GetAllListings(
@@ -102,6 +109,7 @@ func (h *MarketplaceHandler) ListListings(c *gin.Context) {
 		tags,
 		minRating,
 		sortBy,
+		sortDirection,
 		params.Page,
 		params.Limit,
 	)
@@ -114,6 +122,31 @@ func (h *MarketplaceHandler) ListListings(c *gin.Context) {
 
 	// Use standardized pagination response
 	utils.SendPaginatedResponse(c, http.StatusOK, listings, total, params.Page, params.Limit)
+}
+
+// GetListingByID handles getting a single marketplace listing
+// GET /api/v1/marketplace/{id}
+func (h *MarketplaceHandler) GetListingByID(c *gin.Context) {
+	idStr := c.Param("id")
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		utils.SendErrorResponse(c, http.StatusBadRequest, "Invalid listing ID")
+		return
+	}
+
+	listing, err := h.marketplaceService.GetListingByID(c.Request.Context(), id)
+	if err != nil {
+		h.logger.Error("Failed to get marketplace listing", zap.Error(err), zap.Int("id", id))
+		utils.SendErrorResponse(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	if listing == nil {
+		utils.SendErrorResponse(c, http.StatusNotFound, "Listing not found")
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"data": listing})
 }
 
 // CreateListing handles creating a new marketplace listing

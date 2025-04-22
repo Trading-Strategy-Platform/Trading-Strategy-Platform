@@ -8,6 +8,7 @@ import (
 type MarketplaceItem struct {
 	ID                 int        `json:"id" db:"id"`
 	StrategyID         int        `json:"strategy_id" db:"strategy_id"`
+	VersionID          int        `json:"version_id" db:"version_id"`
 	UserID             int        `json:"user_id" db:"user_id"`
 	Price              float64    `json:"price" db:"price"`
 	IsSubscription     bool       `json:"is_subscription" db:"is_subscription"`
@@ -19,10 +20,10 @@ type MarketplaceItem struct {
 
 	// Additional fields for responses
 	Strategy        *Strategy `json:"strategy,omitempty" db:"-"`
-	Name            string    `json:"name,omitempty" db:"name"`                   // Added strategy name
-	ThumbnailURL    string    `json:"thumbnail_url,omitempty" db:"thumbnail_url"` // Added thumbnail URL
+	Name            string    `json:"name,omitempty" db:"name"`
+	ThumbnailURL    string    `json:"thumbnail_url,omitempty" db:"thumbnail_url"`
 	CreatorName     string    `json:"creator_name,omitempty" db:"-"`
-	CreatorPhotoURL string    `json:"creator_photo_url,omitempty" db:"-"` // Added creator photo URL
+	CreatorPhotoURL string    `json:"creator_photo_url,omitempty" db:"-"`
 	AverageRating   float64   `json:"average_rating,omitempty" db:"-"`
 	ReviewsCount    int       `json:"reviews_count,omitempty" db:"-"`
 	PurchasesCount  int       `json:"purchases_count,omitempty" db:"-"`
