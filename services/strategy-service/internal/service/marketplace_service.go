@@ -21,7 +21,7 @@ type MarketplaceService struct {
 	strategyRepo    *repository.StrategyRepository
 	purchaseRepo    *repository.PurchaseRepository
 	reviewRepo      *repository.ReviewRepository
-	userClient      UserClient
+	userClient      *client.UserClient
 	logger          *zap.Logger
 }
 
@@ -32,7 +32,7 @@ func NewMarketplaceService(
 	strategyRepo *repository.StrategyRepository,
 	purchaseRepo *repository.PurchaseRepository,
 	reviewRepo *repository.ReviewRepository,
-	userClient UserClient,
+	userClient *client.UserClient,
 	logger *zap.Logger,
 ) *MarketplaceService {
 	return &MarketplaceService{
