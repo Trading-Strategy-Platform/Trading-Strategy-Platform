@@ -191,8 +191,8 @@ $$ LANGUAGE plpgsql;
 -- Create new marketplace listing
 CREATE OR REPLACE FUNCTION create_marketplace_listing(
     p_user_id INT,
-    p_strategy_id INT,
-    p_version_id INT,
+    p_strategy_id INT, -- This is actually the strategy_group_id
+    p_version_id INT,  -- This is the version number (not the ID)
     p_price NUMERIC,
     p_is_subscription BOOLEAN,
     p_subscription_period VARCHAR,
@@ -201,14 +201,27 @@ CREATE OR REPLACE FUNCTION create_marketplace_listing(
 RETURNS INT AS $$
 DECLARE
     new_listing_id INT;
+    strategy_exists BOOLEAN;
+    version_id INT;
 BEGIN
-    -- Check if strategy belongs to user
-    PERFORM 1 FROM strategies 
-    WHERE id = p_strategy_id AND user_id = p_user_id;
+    -- Check if strategy belongs to user and get the correct version ID
+    SELECT EXISTS (
+        SELECT 1 
+        FROM strategies s
+        WHERE s.strategy_group_id = p_strategy_id 
+        AND s.user_id = p_user_id
+        AND s.version = p_version_id
+    ) INTO strategy_exists;
     
-    IF NOT FOUND THEN
-        RAISE EXCEPTION 'Strategy does not belong to user';
+    IF NOT strategy_exists THEN
+        RAISE EXCEPTION 'Strategy does not belong to user or version does not exist';
     END IF;
+    
+    -- Get the actual version ID from the version number
+    SELECT s.id INTO version_id
+    FROM strategies s
+    WHERE s.strategy_group_id = p_strategy_id
+    AND s.version = p_version_id;
     
     -- Check if listing already exists
     PERFORM 1 FROM strategy_marketplace

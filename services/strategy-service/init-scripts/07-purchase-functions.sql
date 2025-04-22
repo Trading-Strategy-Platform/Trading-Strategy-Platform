@@ -4,39 +4,43 @@
 
 -- Purchase a strategy
 CREATE OR REPLACE FUNCTION purchase_strategy(
-    p_user_id INT,
+    p_buyer_id INT,
     p_marketplace_id INT
 )
 RETURNS INT AS $$
 DECLARE
     new_purchase_id INT;
     marketplace_record RECORD;
+    strategy_version_id INT;
 BEGIN
     -- Get marketplace listing details
     SELECT 
         m.*, 
         s.user_id AS seller_id,
-        s.name AS strategy_name
+        s.name AS strategy_name,
+        s.id AS version_id,
+        s.strategy_group_id
     INTO marketplace_record
     FROM 
         strategy_marketplace m
-        JOIN strategies s ON m.strategy_id = s.id
+        JOIN strategies s ON m.strategy_id = s.strategy_group_id
     WHERE 
         m.id = p_marketplace_id
-        AND m.is_active = TRUE;
+        AND m.is_active = TRUE
+        AND s.version = m.version_id;  -- Get the specific version being sold
     
     IF NOT FOUND THEN
         RAISE EXCEPTION 'Marketplace listing not found or inactive';
     END IF;
     
     -- Check user is not buying their own strategy
-    IF marketplace_record.seller_id = p_user_id THEN
+    IF marketplace_record.seller_id = p_buyer_id THEN
         RAISE EXCEPTION 'Cannot purchase your own strategy';
     END IF;
     
     -- Check for existing purchase
     PERFORM 1 FROM strategy_purchases
-    WHERE marketplace_id = p_marketplace_id AND buyer_id = p_user_id;
+    WHERE marketplace_id = p_marketplace_id AND buyer_id = p_buyer_id;
     
     IF FOUND THEN
         RAISE EXCEPTION 'Already purchased this strategy';
@@ -46,14 +50,14 @@ BEGIN
     INSERT INTO strategy_purchases (
         marketplace_id,
         buyer_id,
-        strategy_version,
+        strategy_version_id,
         purchase_price,
         subscription_end,
         created_at
     )
     VALUES (
         p_marketplace_id,
-        p_user_id,
+        p_buyer_id,
         marketplace_record.version_id,
         marketplace_record.price,
         CASE 
@@ -70,21 +74,23 @@ BEGIN
     )
     RETURNING id INTO new_purchase_id;
     
-    -- Add user_strategy_versions record for initial version tracking
+    -- Set the purchased version as the buyer's active version
     INSERT INTO user_strategy_versions (
         user_id,
-        strategy_id,
-        active_version,
+        strategy_group_id,
+        active_version_id,
         updated_at
     )
     VALUES (
-        p_user_id,
-        marketplace_record.strategy_id,
+        p_buyer_id,
+        marketplace_record.strategy_group_id,
         marketplace_record.version_id,
         NOW()
     )
-    ON CONFLICT (user_id, strategy_id) DO UPDATE
-    SET active_version = marketplace_record.version_id;
+    ON CONFLICT (user_id, strategy_group_id) DO UPDATE
+    SET 
+        active_version_id = marketplace_record.version_id,
+        updated_at = NOW();
     
     -- Return the purchase ID
     RETURN new_purchase_id;

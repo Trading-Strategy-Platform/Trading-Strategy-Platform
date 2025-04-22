@@ -31,18 +31,8 @@ CREATE TABLE IF NOT EXISTS "strategies" (
   "is_active" boolean NOT NULL DEFAULT true,
   "version" int NOT NULL DEFAULT 1,
   "created_at" timestamp NOT NULL DEFAULT (CURRENT_TIMESTAMP),
-  "updated_at" timestamp
-);
-
--- Strategy Versions
-CREATE TABLE IF NOT EXISTS "strategy_versions" (
-  "id" SERIAL PRIMARY KEY,
-  "strategy_id" int NOT NULL,
-  "version" int NOT NULL,
-  "structure" jsonb NOT NULL,
-  "change_notes" text,
-  "is_deleted" boolean NOT NULL DEFAULT false,
-  "created_at" timestamp NOT NULL DEFAULT (CURRENT_TIMESTAMP)
+  "updated_at" timestamp,
+  "strategy_group_id" int NOT NULL
 );
 
 -- Strategy Tags
@@ -62,9 +52,10 @@ CREATE TABLE IF NOT EXISTS "strategy_tag_mappings" (
 CREATE TABLE IF NOT EXISTS "user_strategy_versions" (
   "id" SERIAL PRIMARY KEY,
   "user_id" int NOT NULL,
-  "strategy_id" int NOT NULL,
-  "active_version" int NOT NULL,
-  "updated_at" timestamp NOT NULL DEFAULT (CURRENT_TIMESTAMP)
+  "strategy_group_id" int NOT NULL,
+  "active_version_id" int NOT NULL,
+  "updated_at" timestamp NOT NULL DEFAULT (CURRENT_TIMESTAMP),
+  UNIQUE(user_id, strategy_group_id)
 );
 
 -- Technical Indicators

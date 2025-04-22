@@ -265,13 +265,12 @@ func setupRouter(
 			strategies.POST("", strategyHandler.CreateStrategy)  // POST /api/v1/strategies
 
 			// Parameter routes
-			strategies.GET("/:id", strategyHandler.GetStrategyByID)                    // GET /api/v1/strategies/{id}
-			strategies.PUT("/:id", strategyHandler.UpdateStrategy)                     // PUT /api/v1/strategies/{id}
-			strategies.DELETE("/:id", strategyHandler.DeleteStrategy)                  // DELETE /api/v1/strategies/{id}
-			strategies.GET("/:id/versions", strategyHandler.GetVersions)               // GET /api/v1/strategies/{id}/versions
-			strategies.GET("/:id/versions/:version", strategyHandler.GetVersionByID)   // GET /api/v1/strategies/{id}/versions/{version}
-			strategies.PUT("/:id/active-version", strategyHandler.UpdateActiveVersion) // PUT /api/v1/strategies/{id}/active-version
-			strategies.POST("/:id/thumbnail", thumbnailHandler.UploadThumbnail)        // POST /api/v1/strategies/{id}/thumbnail
+			strategies.GET("/:id", strategyHandler.GetStrategyByID)                  // GET /api/v1/strategies/{id}
+			strategies.PUT("/:id", strategyHandler.UpdateStrategy)                   // PUT /api/v1/strategies/{id}
+			strategies.DELETE("/:id", strategyHandler.DeleteStrategy)                // DELETE /api/v1/strategies/{id}
+			strategies.GET("/:id/versions", strategyHandler.GetVersions)             // GET /api/v1/strategies/{id}/versions
+			strategies.GET("/:id/versions/:version", strategyHandler.GetVersionByID) // GET /api/v1/strategies/{id}/versions/{version}
+			strategies.POST("/:id/thumbnail", thumbnailHandler.UploadThumbnail)      // POST /api/v1/strategies/{id}/thumbnail
 		}
 
 		// ==================== TAG ROUTES ====================
