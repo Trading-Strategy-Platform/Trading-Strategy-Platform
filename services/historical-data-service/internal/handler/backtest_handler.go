@@ -1,4 +1,3 @@
-// internal/handler/backtest_handler.go
 package handler
 
 import (
@@ -7,6 +6,7 @@ import (
 
 	"services/historical-data-service/internal/model"
 	"services/historical-data-service/internal/service"
+	"services/historical-data-service/internal/utils"
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -31,14 +31,14 @@ func NewBacktestHandler(backtestService *service.BacktestService, logger *zap.Lo
 func (h *BacktestHandler) CreateBacktest(c *gin.Context) {
 	var request model.BacktestRequest
 	if err := c.ShouldBindJSON(&request); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		utils.SendErrorResponse(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
 	// Get user ID and token from context
 	userID, exists := c.Get("userID")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		utils.SendErrorResponse(c, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
 
@@ -58,7 +58,7 @@ func (h *BacktestHandler) CreateBacktest(c *gin.Context) {
 			zap.Error(err),
 			zap.Int("userID", userID.(int)),
 			zap.Int("strategyID", request.StrategyID))
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		utils.SendErrorResponse(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -75,14 +75,14 @@ func (h *BacktestHandler) GetBacktest(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.Atoi(idStr)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid backtest ID"})
+		utils.SendErrorResponse(c, http.StatusBadRequest, "Invalid backtest ID")
 		return
 	}
 
 	// Get user ID from context
 	userID, exists := c.Get("userID")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		utils.SendErrorResponse(c, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
 
@@ -93,24 +93,31 @@ func (h *BacktestHandler) GetBacktest(c *gin.Context) {
 			zap.Error(err),
 			zap.Int("id", id),
 			zap.Int("userID", userID.(int)))
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		utils.SendErrorResponse(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
 	c.JSON(http.StatusOK, backtest)
 }
 
-// ListBacktests handles listing backtests for a user
+// ListBacktests handles listing backtests for a user with filtering, sorting, and pagination
 // GET /api/v1/backtests
 func (h *BacktestHandler) ListBacktests(c *gin.Context) {
-	// Parse query parameters
-	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "10"))
+	// Parse query parameters for filtering
+	searchTerm := c.Query("search")
+	status := c.Query("status")
+
+	// Parse sorting parameters
+	sortBy := c.DefaultQuery("sort_by", "created_at")
+	sortDirection := c.DefaultQuery("sort_direction", "DESC")
+
+	// Parse pagination parameters using the utility function
+	params := utils.ParsePaginationParams(c, 10, 100) // default limit: 10, max limit: 100
 
 	// Get user ID from context
 	userID, exists := c.Get("userID")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		utils.SendErrorResponse(c, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
 
@@ -118,27 +125,24 @@ func (h *BacktestHandler) ListBacktests(c *gin.Context) {
 	backtests, total, err := h.backtestService.ListBacktests(
 		c.Request.Context(),
 		userID.(int),
-		page,
-		limit,
+		searchTerm,
+		status,
+		sortBy,
+		sortDirection,
+		params.Page,
+		params.Limit,
 	)
 
 	if err != nil {
 		h.logger.Error("Failed to list backtests",
 			zap.Error(err),
 			zap.Int("userID", userID.(int)))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve backtests"})
+		utils.SendErrorResponse(c, http.StatusInternalServerError, "Failed to retrieve backtests")
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"backtests": backtests,
-		"meta": gin.H{
-			"total": total,
-			"page":  page,
-			"limit": limit,
-			"pages": (total + limit - 1) / limit,
-		},
-	})
+	// Use standardized pagination response
+	utils.SendPaginatedResponse(c, http.StatusOK, backtests, total, params.Page, params.Limit)
 }
 
 // UpdateBacktestRunStatus handles updating the status of a backtest run
@@ -147,7 +151,7 @@ func (h *BacktestHandler) UpdateBacktestRunStatus(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.Atoi(idStr)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid backtest run ID"})
+		utils.SendErrorResponse(c, http.StatusBadRequest, "Invalid backtest run ID")
 		return
 	}
 
@@ -156,7 +160,7 @@ func (h *BacktestHandler) UpdateBacktestRunStatus(c *gin.Context) {
 	}
 
 	if err := c.ShouldBindJSON(&request); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		utils.SendErrorResponse(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -169,7 +173,7 @@ func (h *BacktestHandler) UpdateBacktestRunStatus(c *gin.Context) {
 	}
 
 	if !validStatuses[request.Status] {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid status. Must be one of: pending, running, completed, failed"})
+		utils.SendErrorResponse(c, http.StatusBadRequest, "Invalid status. Must be one of: pending, running, completed, failed")
 		return
 	}
 
@@ -178,12 +182,12 @@ func (h *BacktestHandler) UpdateBacktestRunStatus(c *gin.Context) {
 		h.logger.Error("Failed to update backtest run status",
 			zap.Error(err),
 			zap.Int("run_id", id))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update status"})
+		utils.SendErrorResponse(c, http.StatusInternalServerError, "Failed to update status")
 		return
 	}
 
 	if !success {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Backtest run not found"})
+		utils.SendErrorResponse(c, http.StatusNotFound, "Backtest run not found")
 		return
 	}
 
@@ -196,13 +200,13 @@ func (h *BacktestHandler) SaveBacktestResults(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.Atoi(idStr)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid backtest run ID"})
+		utils.SendErrorResponse(c, http.StatusBadRequest, "Invalid backtest run ID")
 		return
 	}
 
 	var request model.BacktestResults
 	if err := c.ShouldBindJSON(&request); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		utils.SendErrorResponse(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -211,7 +215,7 @@ func (h *BacktestHandler) SaveBacktestResults(c *gin.Context) {
 		h.logger.Error("Failed to save backtest results",
 			zap.Error(err),
 			zap.Int("run_id", id))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save results"})
+		utils.SendErrorResponse(c, http.StatusInternalServerError, "Failed to save results")
 		return
 	}
 
@@ -227,13 +231,13 @@ func (h *BacktestHandler) AddBacktestTrade(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.Atoi(idStr)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid backtest run ID"})
+		utils.SendErrorResponse(c, http.StatusBadRequest, "Invalid backtest run ID")
 		return
 	}
 
 	var request model.BacktestTrade
 	if err := c.ShouldBindJSON(&request); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		utils.SendErrorResponse(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -245,7 +249,7 @@ func (h *BacktestHandler) AddBacktestTrade(c *gin.Context) {
 		h.logger.Error("Failed to add backtest trade",
 			zap.Error(err),
 			zap.Int("run_id", id))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to add trade"})
+		utils.SendErrorResponse(c, http.StatusInternalServerError, "Failed to add trade")
 		return
 	}
 
@@ -255,32 +259,42 @@ func (h *BacktestHandler) AddBacktestTrade(c *gin.Context) {
 	})
 }
 
-// GetBacktestTrades handles retrieving trades for a backtest run
+// GetBacktestTrades handles retrieving trades for a backtest run with sorting and pagination
 // GET /api/v1/backtest-runs/:id/trades
 func (h *BacktestHandler) GetBacktestTrades(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.Atoi(idStr)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid backtest run ID"})
+		utils.SendErrorResponse(c, http.StatusBadRequest, "Invalid backtest run ID")
 		return
 	}
 
-	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "100"))
+	// Parse sorting parameters
+	sortBy := c.DefaultQuery("sort_by", "entry_time")
+	sortDirection := c.DefaultQuery("sort_direction", "ASC")
 
-	// Calculate offset from page and limit
-	offset := (page - 1) * limit
+	// Parse pagination parameters
+	params := utils.ParsePaginationParams(c, 100, 1000) // default limit: 100, max limit: 1000
 
-	trades, err := h.backtestService.GetBacktestTrades(c.Request.Context(), id, limit, offset)
+	trades, total, err := h.backtestService.GetBacktestTrades(
+		c.Request.Context(),
+		id,
+		sortBy,
+		sortDirection,
+		params.Limit,
+		utils.CalculateOffset(params.Page, params.Limit),
+	)
+
 	if err != nil {
 		h.logger.Error("Failed to get backtest trades",
 			zap.Error(err),
 			zap.Int("run_id", id))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve trades"})
+		utils.SendErrorResponse(c, http.StatusInternalServerError, "Failed to retrieve trades")
 		return
 	}
 
-	c.JSON(http.StatusOK, trades)
+	// Use standardized pagination response
+	utils.SendPaginatedResponse(c, http.StatusOK, trades, total, params.Page, params.Limit)
 }
 
 // DeleteBacktest handles deleting a backtest
@@ -290,14 +304,14 @@ func (h *BacktestHandler) DeleteBacktest(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.Atoi(idStr)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid backtest ID"})
+		utils.SendErrorResponse(c, http.StatusBadRequest, "Invalid backtest ID")
 		return
 	}
 
 	// Get user ID from context
 	userID, exists := c.Get("userID")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		utils.SendErrorResponse(c, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
 
@@ -308,11 +322,65 @@ func (h *BacktestHandler) DeleteBacktest(c *gin.Context) {
 			zap.Error(err),
 			zap.Int("id", id),
 			zap.Int("userID", userID.(int)))
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		utils.SendErrorResponse(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
 	c.Status(http.StatusNoContent)
+}
+
+// GetBacktestRuns handles retrieving all runs for a backtest with sorting and pagination
+// GET /api/v1/backtests/:id/runs
+func (h *BacktestHandler) GetBacktestRuns(c *gin.Context) {
+	// Parse path parameter
+	idStr := c.Param("id")
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		utils.SendErrorResponse(c, http.StatusBadRequest, "Invalid backtest ID")
+		return
+	}
+
+	// Parse sorting parameters
+	sortBy := c.DefaultQuery("sort_by", "created_at")
+	sortDirection := c.DefaultQuery("sort_direction", "DESC")
+
+	// Parse pagination parameters
+	params := utils.ParsePaginationParams(c, 20, 100) // default limit: 20, max limit: 100
+
+	// Get user ID from context
+	userID, exists := c.Get("userID")
+	if !exists {
+		utils.SendErrorResponse(c, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	// First verify that the user owns this backtest
+	backtest, err := h.backtestService.GetBacktest(c.Request.Context(), id, userID.(int))
+	if err != nil || backtest == nil {
+		utils.SendErrorResponse(c, http.StatusForbidden, "Access denied or backtest not found")
+		return
+	}
+
+	// Get backtest runs
+	runs, total, err := h.backtestService.GetBacktestRuns(
+		c.Request.Context(),
+		id,
+		sortBy,
+		sortDirection,
+		params.Page,
+		params.Limit,
+	)
+
+	if err != nil {
+		h.logger.Error("Failed to get backtest runs",
+			zap.Error(err),
+			zap.Int("backtest_id", id))
+		utils.SendErrorResponse(c, http.StatusInternalServerError, "Failed to retrieve backtest runs")
+		return
+	}
+
+	// Use standardized pagination response
+	utils.SendPaginatedResponse(c, http.StatusOK, runs, total, params.Page, params.Limit)
 }
 
 // NotifyBacktestComplete handles notifications about completed backtests
@@ -327,7 +395,7 @@ func (h *BacktestHandler) NotifyBacktestComplete(c *gin.Context) {
 	}
 
 	if err := c.ShouldBindJSON(&request); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		utils.SendErrorResponse(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -341,4 +409,33 @@ func (h *BacktestHandler) NotifyBacktestComplete(c *gin.Context) {
 	// In a real implementation, you might update a message queue or notify the user
 
 	c.JSON(http.StatusOK, gin.H{"message": "Notification received"})
+}
+
+// GetBacktestServiceStatus checks if the backtesting service is healthy
+// GET /api/v1/backtests/service-status
+func (h *BacktestHandler) GetBacktestServiceStatus(c *gin.Context) {
+	// Check if the backtesting service is healthy
+	healthy, err := h.backtestService.CheckBacktestServiceHealth(c.Request.Context())
+	if err != nil {
+		h.logger.Error("Failed to check backtest service health", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"status":  "error",
+			"message": "Failed to check backtest service health",
+			"error":   err.Error(),
+		})
+		return
+	}
+
+	if !healthy {
+		c.JSON(http.StatusServiceUnavailable, gin.H{
+			"status":  "unavailable",
+			"message": "Backtesting service is not available",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"status":  "healthy",
+		"message": "Backtesting service is operational",
+	})
 }

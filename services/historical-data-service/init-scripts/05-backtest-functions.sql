@@ -43,13 +43,36 @@ SELECT
         WHERE br.backtest_id = b.id
     ) AS total_runs
 FROM 
-    backtests b
-ORDER BY 
-    b.created_at DESC;
+    backtests b;
 
--- Function to get backtest summary for a user
-CREATE OR REPLACE FUNCTION get_backtest_summary(
+-- Count backtests function for pagination
+CREATE OR REPLACE FUNCTION count_backtests(
     p_user_id INT,
+    p_search VARCHAR DEFAULT NULL,
+    p_status VARCHAR DEFAULT NULL
+)
+RETURNS BIGINT AS $$
+DECLARE
+    backtest_count BIGINT;
+BEGIN
+    SELECT COUNT(*)
+    INTO backtest_count
+    FROM backtests b
+    WHERE b.user_id = p_user_id
+    AND (p_search IS NULL OR b.name ILIKE '%' || p_search || '%')
+    AND (p_status IS NULL OR b.status = p_status);
+    
+    RETURN backtest_count;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Function to get backtest summary for a user with sorting and pagination
+CREATE OR REPLACE FUNCTION get_backtests(
+    p_user_id INT,
+    p_search VARCHAR DEFAULT NULL,
+    p_status VARCHAR DEFAULT NULL,
+    p_sort_by VARCHAR DEFAULT 'created_at',
+    p_sort_direction VARCHAR DEFAULT 'DESC',
     p_limit INT DEFAULT 10,
     p_offset INT DEFAULT 0
 )
@@ -64,6 +87,17 @@ RETURNS TABLE (
     total_runs BIGINT
 ) AS $$
 BEGIN
+    -- Validate sort field
+    IF p_sort_by NOT IN ('name', 'created_at', 'status', 'strategy_id') THEN
+        p_sort_by := 'created_at';
+    END IF;
+    
+    -- Normalize sort direction
+    p_sort_direction := UPPER(p_sort_direction);
+    IF p_sort_direction NOT IN ('ASC', 'DESC') THEN
+        p_sort_direction := 'DESC';
+    END IF;
+
     RETURN QUERY
     SELECT 
         bs.backtest_id,
@@ -79,15 +113,23 @@ BEGIN
         JOIN backtests b ON bs.backtest_id = b.id
     WHERE 
         b.user_id = p_user_id
+        AND (p_search IS NULL OR b.name ILIKE '%' || p_search || '%')
+        AND (p_status IS NULL OR b.status = p_status)
     ORDER BY 
-        bs.date DESC
-    LIMIT p_limit
-    OFFSET p_offset;
+        CASE WHEN p_sort_by = 'name' AND p_sort_direction = 'ASC' THEN bs.name END ASC,
+        CASE WHEN p_sort_by = 'name' AND p_sort_direction = 'DESC' THEN bs.name END DESC,
+        CASE WHEN p_sort_by = 'created_at' AND p_sort_direction = 'ASC' THEN bs.date END ASC,
+        CASE WHEN p_sort_by = 'created_at' AND p_sort_direction = 'DESC' THEN bs.date END DESC,
+        CASE WHEN p_sort_by = 'status' AND p_sort_direction = 'ASC' THEN bs.status END ASC,
+        CASE WHEN p_sort_by = 'status' AND p_sort_direction = 'DESC' THEN bs.status END DESC,
+        CASE WHEN p_sort_by = 'strategy_id' AND p_sort_direction = 'ASC' THEN bs.strategy_id END ASC,
+        CASE WHEN p_sort_by = 'strategy_id' AND p_sort_direction = 'DESC' THEN bs.strategy_id END DESC
+    LIMIT p_limit OFFSET p_offset;
 END;
 $$ LANGUAGE plpgsql;
 
 -- Function to get backtest details
-CREATE OR REPLACE FUNCTION get_backtest_details(p_backtest_id INT)
+CREATE OR REPLACE FUNCTION get_backtest_by_id(p_backtest_id INT)
 RETURNS TABLE (
     backtest_id INT,
     name TEXT,
@@ -393,9 +435,28 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- Get backtest trades
+-- Function to count backtest trades
+CREATE OR REPLACE FUNCTION count_backtest_trades(
+    p_backtest_run_id INT
+)
+RETURNS BIGINT AS $$
+DECLARE
+    trade_count BIGINT;
+BEGIN
+    SELECT COUNT(*)
+    INTO trade_count
+    FROM backtest_trades
+    WHERE backtest_run_id = p_backtest_run_id;
+    
+    RETURN trade_count;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Get backtest trades with pagination and sorting
 CREATE OR REPLACE FUNCTION get_backtest_trades(
     p_backtest_run_id INT,
+    p_sort_by VARCHAR DEFAULT 'entry_time',
+    p_sort_direction VARCHAR DEFAULT 'ASC',
     p_limit INT DEFAULT 100,
     p_offset INT DEFAULT 0
 )
@@ -414,6 +475,17 @@ RETURNS TABLE (
     exit_reason VARCHAR(50)
 ) AS $$
 BEGIN
+    -- Validate sort field
+    IF p_sort_by NOT IN ('entry_time', 'exit_time', 'position_type', 'profit_loss', 'profit_loss_percent') THEN
+        p_sort_by := 'entry_time';
+    END IF;
+    
+    -- Normalize sort direction
+    p_sort_direction := UPPER(p_sort_direction);
+    IF p_sort_direction NOT IN ('ASC', 'DESC') THEN
+        p_sort_direction := 'ASC';
+    END IF;
+
     RETURN QUERY
     SELECT 
         t.id,
@@ -434,9 +506,17 @@ BEGIN
     WHERE 
         t.backtest_run_id = p_backtest_run_id
     ORDER BY 
-        t.entry_time
-    LIMIT p_limit
-    OFFSET p_offset;
+        CASE WHEN p_sort_by = 'entry_time' AND p_sort_direction = 'ASC' THEN t.entry_time END ASC,
+        CASE WHEN p_sort_by = 'entry_time' AND p_sort_direction = 'DESC' THEN t.entry_time END DESC,
+        CASE WHEN p_sort_by = 'exit_time' AND p_sort_direction = 'ASC' THEN t.exit_time END ASC,
+        CASE WHEN p_sort_by = 'exit_time' AND p_sort_direction = 'DESC' THEN t.exit_time END DESC,
+        CASE WHEN p_sort_by = 'position_type' AND p_sort_direction = 'ASC' THEN t.position_type END ASC,
+        CASE WHEN p_sort_by = 'position_type' AND p_sort_direction = 'DESC' THEN t.position_type END DESC,
+        CASE WHEN p_sort_by = 'profit_loss' AND p_sort_direction = 'ASC' THEN t.profit_loss END ASC,
+        CASE WHEN p_sort_by = 'profit_loss' AND p_sort_direction = 'DESC' THEN t.profit_loss END DESC,
+        CASE WHEN p_sort_by = 'profit_loss_percent' AND p_sort_direction = 'ASC' THEN t.profit_loss_percent END ASC,
+        CASE WHEN p_sort_by = 'profit_loss_percent' AND p_sort_direction = 'DESC' THEN t.profit_loss_percent END DESC
+    LIMIT p_limit OFFSET p_offset;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -463,5 +543,78 @@ BEGIN
     
     GET DIAGNOSTICS affected_rows = ROW_COUNT;
     RETURN affected_rows > 0;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Count backtest runs for a specific backtest
+CREATE OR REPLACE FUNCTION count_backtest_runs(
+    p_backtest_id INT
+)
+RETURNS BIGINT AS $$
+DECLARE
+    run_count BIGINT;
+BEGIN
+    SELECT COUNT(*)
+    INTO run_count
+    FROM backtest_runs
+    WHERE backtest_id = p_backtest_id;
+    
+    RETURN run_count;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Get backtest runs with pagination and sorting
+CREATE OR REPLACE FUNCTION get_backtest_runs(
+    p_backtest_id INT,
+    p_sort_by VARCHAR DEFAULT 'created_at',
+    p_sort_direction VARCHAR DEFAULT 'DESC',
+    p_limit INT DEFAULT 100,
+    p_offset INT DEFAULT 0
+)
+RETURNS TABLE (
+    id INT,
+    backtest_id INT,
+    symbol_id INT,
+    symbol VARCHAR(20),
+    status VARCHAR(20),
+    created_at TIMESTAMPTZ,
+    completed_at TIMESTAMPTZ
+) AS $$
+BEGIN
+    -- Validate sort field
+    IF p_sort_by NOT IN ('id', 'status', 'created_at', 'completed_at') THEN
+        p_sort_by := 'created_at';
+    END IF;
+    
+    -- Normalize sort direction
+    p_sort_direction := UPPER(p_sort_direction);
+    IF p_sort_direction NOT IN ('ASC', 'DESC') THEN
+        p_sort_direction := 'DESC';
+    END IF;
+
+    RETURN QUERY
+    SELECT 
+        br.id,
+        br.backtest_id,
+        br.symbol_id,
+        s.symbol,
+        br.status,
+        br.created_at,
+        br.completed_at
+    FROM 
+        backtest_runs br
+        JOIN symbols s ON br.symbol_id = s.id
+    WHERE 
+        br.backtest_id = p_backtest_id
+    ORDER BY 
+        CASE WHEN p_sort_by = 'id' AND p_sort_direction = 'ASC' THEN br.id END ASC,
+        CASE WHEN p_sort_by = 'id' AND p_sort_direction = 'DESC' THEN br.id END DESC,
+        CASE WHEN p_sort_by = 'status' AND p_sort_direction = 'ASC' THEN br.status END ASC,
+        CASE WHEN p_sort_by = 'status' AND p_sort_direction = 'DESC' THEN br.status END DESC,
+        CASE WHEN p_sort_by = 'created_at' AND p_sort_direction = 'ASC' THEN br.created_at END ASC,
+        CASE WHEN p_sort_by = 'created_at' AND p_sort_direction = 'DESC' THEN br.created_at END DESC,
+        CASE WHEN p_sort_by = 'completed_at' AND p_sort_direction = 'ASC' THEN br.completed_at END ASC,
+        CASE WHEN p_sort_by = 'completed_at' AND p_sort_direction = 'DESC' THEN br.completed_at END DESC
+    LIMIT p_limit OFFSET p_offset;
 END;
 $$ LANGUAGE plpgsql;

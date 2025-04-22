@@ -54,32 +54,3 @@ func (h *BacktestHandler) ValidateStrategy(c *gin.Context) {
 		"message": message,
 	})
 }
-
-// GetBacktestServiceStatus checks the health of the backtesting service
-// GET /api/v1/backtests/service-status
-func (h *BacktestHandler) GetBacktestServiceStatus(c *gin.Context) {
-	// Check if the backtesting service is healthy
-	healthy, err := h.backtestService.CheckBacktestServiceHealth(c.Request.Context())
-	if err != nil {
-		h.logger.Error("Failed to check backtest service health", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"status":  "error",
-			"message": "Failed to check backtest service health",
-			"error":   err.Error(),
-		})
-		return
-	}
-
-	if !healthy {
-		c.JSON(http.StatusServiceUnavailable, gin.H{
-			"status":  "unavailable",
-			"message": "Backtesting service is not available",
-		})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"status":  "healthy",
-		"message": "Backtesting service is operational",
-	})
-}

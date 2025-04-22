@@ -67,12 +67,12 @@ func (r *BacktestRepository) CreateBacktest(
 	return backtestID, nil
 }
 
-// GetBacktest retrieves a backtest by ID using get_backtest_details function
+// GetBacktest retrieves a backtest by ID using get_backtest_by_id function
 func (r *BacktestRepository) GetBacktest(
 	ctx context.Context,
 	backtestID int,
 ) (*model.BacktestDetails, error) {
-	query := `SELECT * FROM get_backtest_details($1)`
+	query := `SELECT * FROM get_backtest_by_id($1)`
 
 	var backtest model.BacktestDetails
 	err := r.db.GetContext(ctx, &backtest, query, backtestID)
@@ -84,39 +84,55 @@ func (r *BacktestRepository) GetBacktest(
 	return &backtest, nil
 }
 
-// GetBacktestsByUser retrieves backtests for a user using get_backtest_summary function
-func (r *BacktestRepository) GetBacktestsByUser(
+// CountBacktests counts the total number of backtests for a user with filtering
+func (r *BacktestRepository) CountBacktests(
 	ctx context.Context,
 	userID int,
-	limit int,
-	offset int,
-) ([]model.BacktestSummary, error) {
-	query := `SELECT * FROM get_backtest_summary($1, $2, $3)`
-
-	var backtests []model.BacktestSummary
-	err := r.db.SelectContext(ctx, &backtests, query, userID, limit, offset)
-	if err != nil {
-		r.logger.Error("Failed to get backtest summary",
-			zap.Error(err),
-			zap.Int("userID", userID))
-		return nil, err
-	}
-
-	return backtests, nil
-}
-
-// CountUserBacktests counts the total number of backtests for a user
-func (r *BacktestRepository) CountUserBacktests(ctx context.Context, userID int) (int, error) {
-	query := `SELECT COUNT(*) FROM backtests WHERE user_id = $1`
+	searchTerm string,
+	status string,
+) (int, error) {
+	query := `SELECT count_backtests($1, $2, $3)`
 
 	var count int
-	err := r.db.GetContext(ctx, &count, query, userID)
+	err := r.db.GetContext(ctx, &count, query, userID, searchTerm, status)
 	if err != nil {
-		r.logger.Error("Failed to count user backtests", zap.Error(err), zap.Int("userID", userID))
+		r.logger.Error("Failed to count user backtests",
+			zap.Error(err),
+			zap.Int("userID", userID),
+			zap.String("searchTerm", searchTerm),
+			zap.String("status", status))
 		return 0, err
 	}
 
 	return count, nil
+}
+
+// GetBacktestsByUser retrieves backtests for a user using get_backtests function with sorting and pagination
+func (r *BacktestRepository) GetBacktestsByUser(
+	ctx context.Context,
+	userID int,
+	searchTerm string,
+	status string,
+	sortBy string,
+	sortDirection string,
+	limit int,
+	offset int,
+) ([]model.BacktestSummary, error) {
+	query := `SELECT * FROM get_backtests($1, $2, $3, $4, $5, $6, $7)`
+
+	var backtests []model.BacktestSummary
+	err := r.db.SelectContext(ctx, &backtests, query,
+		userID, searchTerm, status, sortBy, sortDirection, limit, offset)
+	if err != nil {
+		r.logger.Error("Failed to get backtest summary",
+			zap.Error(err),
+			zap.Int("userID", userID),
+			zap.String("sortBy", sortBy),
+			zap.String("sortDirection", sortDirection))
+		return nil, err
+	}
+
+	return backtests, nil
 }
 
 // UpdateBacktestRunStatus updates the status of a backtest run using update_backtest_run_status function
@@ -174,6 +190,23 @@ func (r *BacktestRepository) SaveBacktestResults(
 	return resultID, nil
 }
 
+// CountBacktestTrades counts the number of trades for a backtest run
+func (r *BacktestRepository) CountBacktestTrades(
+	ctx context.Context,
+	runID int,
+) (int, error) {
+	query := `SELECT count_backtest_trades($1)`
+
+	var count int
+	err := r.db.GetContext(ctx, &count, query, runID)
+	if err != nil {
+		r.logger.Error("Failed to count backtest trades", zap.Error(err), zap.Int("runID", runID))
+		return 0, err
+	}
+
+	return count, nil
+}
+
 // AddBacktestTrade adds a trade to a backtest run using add_backtest_trade function
 func (r *BacktestRepository) AddBacktestTrade(
 	ctx context.Context,
@@ -207,21 +240,25 @@ func (r *BacktestRepository) AddBacktestTrade(
 	return tradeID, nil
 }
 
-// GetBacktestTrades retrieves trades for a backtest run using get_backtest_trades function
+// GetBacktestTrades retrieves trades for a backtest run using get_backtest_trades function with sorting and pagination
 func (r *BacktestRepository) GetBacktestTrades(
 	ctx context.Context,
 	runID int,
+	sortBy string,
+	sortDirection string,
 	limit int,
 	offset int,
 ) ([]model.BacktestTrade, error) {
-	query := `SELECT * FROM get_backtest_trades($1, $2, $3)`
+	query := `SELECT * FROM get_backtest_trades($1, $2, $3, $4, $5)`
 
 	var trades []model.BacktestTrade
-	err := r.db.SelectContext(ctx, &trades, query, runID, limit, offset)
+	err := r.db.SelectContext(ctx, &trades, query, runID, sortBy, sortDirection, limit, offset)
 	if err != nil {
 		r.logger.Error("Failed to get backtest trades",
 			zap.Error(err),
-			zap.Int("runID", runID))
+			zap.Int("runID", runID),
+			zap.String("sortBy", sortBy),
+			zap.String("sortDirection", sortDirection))
 		return nil, err
 	}
 
@@ -269,6 +306,65 @@ func (r *BacktestRepository) GetBacktestUserID(
 		return 0, err
 	}
 	return userID, nil
+}
+
+// CountBacktestRuns counts the number of runs for a backtest
+func (r *BacktestRepository) CountBacktestRuns(
+	ctx context.Context,
+	backtestID int,
+) (int, error) {
+	query := `SELECT count_backtest_runs($1)`
+
+	var count int
+	err := r.db.GetContext(ctx, &count, query, backtestID)
+	if err != nil {
+		r.logger.Error("Failed to count backtest runs", zap.Error(err), zap.Int("backtestID", backtestID))
+		return 0, err
+	}
+
+	return count, nil
+}
+
+// GetBacktestRuns retrieves all runs for a backtest with sorting and pagination
+func (r *BacktestRepository) GetBacktestRuns(
+	ctx context.Context,
+	backtestID int,
+	sortBy string,
+	sortDirection string,
+	limit int,
+	offset int,
+) ([]struct {
+	ID          int        `db:"id"`
+	BacktestID  int        `db:"backtest_id"`
+	SymbolID    int        `db:"symbol_id"`
+	Symbol      string     `db:"symbol"`
+	Status      string     `db:"status"`
+	CreatedAt   time.Time  `db:"created_at"`
+	CompletedAt *time.Time `db:"completed_at"`
+}, error) {
+	query := `SELECT * FROM get_backtest_runs($1, $2, $3, $4, $5)`
+
+	var runs []struct {
+		ID          int        `db:"id"`
+		BacktestID  int        `db:"backtest_id"`
+		SymbolID    int        `db:"symbol_id"`
+		Symbol      string     `db:"symbol"`
+		Status      string     `db:"status"`
+		CreatedAt   time.Time  `db:"created_at"`
+		CompletedAt *time.Time `db:"completed_at"`
+	}
+
+	err := r.db.SelectContext(ctx, &runs, query, backtestID, sortBy, sortDirection, limit, offset)
+	if err != nil {
+		r.logger.Error("Failed to get backtest runs",
+			zap.Error(err),
+			zap.Int("backtestID", backtestID),
+			zap.String("sortBy", sortBy),
+			zap.String("sortDirection", sortDirection))
+		return nil, err
+	}
+
+	return runs, nil
 }
 
 // GetBacktestRunIDBySymbol finds the run ID for a specific backtest and symbol
