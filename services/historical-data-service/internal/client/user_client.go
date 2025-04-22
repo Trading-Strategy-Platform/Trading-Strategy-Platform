@@ -31,13 +31,13 @@ func NewUserClient(baseURL string, logger *zap.Logger) *UserClient {
 	}
 }
 
-// ValidateToken validates a user's token with the User Service
-func (c *UserClient) ValidateToken(ctx context.Context, token string) (int, error) {
+// ValidateToken validates a user's token with the User Service and returns the user ID and role
+func (c *UserClient) ValidateToken(ctx context.Context, token string) (int, string, error) {
 	url := fmt.Sprintf("%s/api/v1/auth/validate", c.baseURL)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return 0, err
+		return 0, "", err
 	}
 
 	// Add the token to be validated
@@ -47,13 +47,13 @@ func (c *UserClient) ValidateToken(ctx context.Context, token string) (int, erro
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		c.logger.Error("Failed to validate token with User Service", zap.Error(err))
-		return 0, err
+		return 0, "", err
 	}
 	defer resp.Body.Close()
 
 	// Check response status
 	if resp.StatusCode == http.StatusUnauthorized {
-		return 0, fmt.Errorf("invalid token")
+		return 0, "", fmt.Errorf("invalid token")
 	}
 
 	if resp.StatusCode != http.StatusOK {
@@ -61,127 +61,61 @@ func (c *UserClient) ValidateToken(ctx context.Context, token string) (int, erro
 		c.logger.Error("User service returned unexpected status",
 			zap.Int("status_code", resp.StatusCode),
 			zap.String("body", string(bodyBytes)))
-		return 0, fmt.Errorf("user service returned status code %d", resp.StatusCode)
+		return 0, "", fmt.Errorf("user service returned status code %d", resp.StatusCode)
 	}
 
 	var response struct {
-		Valid  bool `json:"valid"`
-		UserID int  `json:"user_id"`
+		Valid  bool   `json:"valid"`
+		UserID int    `json:"user_id"`
+		Role   string `json:"role"`
 	}
 
 	err = json.NewDecoder(resp.Body).Decode(&response)
 	if err != nil {
 		c.logger.Error("Failed to decode validation response", zap.Error(err))
-		return 0, err
+		return 0, "", err
 	}
 
 	if !response.Valid {
-		return 0, fmt.Errorf("invalid token")
+		return 0, "", fmt.Errorf("invalid token")
 	}
 
-	return response.UserID, nil
+	return response.UserID, response.Role, nil
 }
 
 // CheckUserRole checks if a user has a specific role
+// This function is kept for backward compatibility but now uses token validation
 func (c *UserClient) CheckUserRole(ctx context.Context, userID int, role string, token string) (bool, error) {
-	url := fmt.Sprintf("%s/api/v1/admin/users/%d/roles", c.baseURL, userID)
+	c.logger.Warn("CheckUserRole is deprecated - using token validation instead")
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return false, err
-	}
-
-	// Add service authentication header
-	req.Header.Set("X-Service-Key", "historical-service-key")
-
-	// Add Authorization header if token is provided
 	if token != "" {
-		req.Header.Set("Authorization", "Bearer "+token)
+		// Use token validation to check role
+		_, userRole, err := c.ValidateToken(ctx, token)
+		if err != nil {
+			// Fallback for development - user ID 1 is always admin
+			if userID == 1 && (role == "admin" || role == "user") {
+				c.logger.Warn("Using fallback role check", zap.Int("userID", userID))
+				return true, nil
+			}
+
+			// All other users have the 'user' role by default
+			if role == "user" {
+				return true, nil
+			}
+
+			return false, nil
+		}
+
+		return userRole == role, nil
 	}
 
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		c.logger.Error("Failed to check user role with User Service", zap.Error(err))
-
-		// Fallback for development - user ID 1 is always admin
-		if userID == 1 && (role == "admin" || role == "user") {
-			c.logger.Warn("Using fallback role check", zap.Int("userID", userID))
-			return true, nil
-		}
-
-		// All other users have the 'user' role by default
-		if role == "user" {
-			return true, nil
-		}
-
-		return false, nil
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusUnauthorized {
-		c.logger.Warn("User roles endpoint error",
-			zap.Int("statusCode", resp.StatusCode),
-			zap.Int("userID", userID),
-			zap.String("role", role))
-
-		// Fallback for development
-		if userID == 1 && (role == "admin" || role == "user") {
-			return true, nil
-		}
-
-		if role == "user" {
-			return true, nil
-		}
-
-		return false, nil
+	// Fallback for development without token
+	if userID == 1 && (role == "admin" || role == "user") {
+		return true, nil
 	}
 
-	if resp.StatusCode != http.StatusOK {
-		bodyBytes, _ := io.ReadAll(resp.Body)
-		c.logger.Error("User service returned error status",
-			zap.Int("statusCode", resp.StatusCode),
-			zap.String("response", string(bodyBytes)))
-
-		// Fallback for development
-		if userID == 1 && (role == "admin" || role == "user") {
-			return true, nil
-		}
-
-		if role == "user" {
-			return true, nil
-		}
-
-		return false, nil
-	}
-
-	var response struct {
-		Roles []string `json:"roles"`
-	}
-
-	bodyBytes, _ := io.ReadAll(resp.Body)
-	err = json.Unmarshal(bodyBytes, &response)
-	if err != nil {
-		c.logger.Error("Failed to decode roles response",
-			zap.Error(err),
-			zap.String("responseBody", string(bodyBytes)))
-
-		// Fallback for development
-		if userID == 1 && (role == "admin" || role == "user") {
-			return true, nil
-		}
-
-		if role == "user" {
-			return true, nil
-		}
-
-		return false, nil
-	}
-
-	// Check if the required role is in the user's roles
-	for _, userRole := range response.Roles {
-		if userRole == role {
-			return true, nil
-		}
+	if role == "user" {
+		return true, nil
 	}
 
 	return false, nil

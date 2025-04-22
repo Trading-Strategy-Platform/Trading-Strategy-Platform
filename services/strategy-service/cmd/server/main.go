@@ -221,7 +221,7 @@ func setupRouter(
 			// 2. Admin-only routes for managing indicators
 			adminIndicators := indicators.Group("")
 			adminIndicators.Use(middleware.AuthMiddleware(userClient, logger))
-			adminIndicators.Use(middleware.RequireRole(userClient, "admin"))
+			adminIndicators.Use(middleware.RequireRole("admin")) // No longer passing userClient
 
 			adminIndicators.POST("", indicatorHandler.CreateIndicator)                      // POST /api/v1/indicators
 			adminIndicators.PUT("/:id", indicatorHandler.UpdateIndicator)                   // PUT /api/v1/indicators/{id}
@@ -236,7 +236,7 @@ func setupRouter(
 			// Admin-only routes for managing parameters
 			adminParameters := parameters.Group("")
 			adminParameters.Use(middleware.AuthMiddleware(userClient, logger))
-			adminParameters.Use(middleware.RequireRole(userClient, "admin"))
+			adminParameters.Use(middleware.RequireRole("admin"))
 
 			adminParameters.PUT("/:id", indicatorHandler.UpdateIndicatorParameter)           // PUT /api/v1/parameters/{id}
 			adminParameters.DELETE("/:id", indicatorHandler.DeleteIndicatorParameter)        // DELETE /api/v1/parameters/{id}
@@ -249,7 +249,7 @@ func setupRouter(
 			// Admin-only routes for managing enum values
 			adminEnumValues := enumValues.Group("")
 			adminEnumValues.Use(middleware.AuthMiddleware(userClient, logger))
-			adminEnumValues.Use(middleware.RequireRole(userClient, "admin"))
+			adminEnumValues.Use(middleware.RequireRole("admin"))
 
 			adminEnumValues.PUT("/:id", indicatorHandler.UpdateIndicatorParameterEnumValue)    // PUT /api/v1/enum-values/{id}
 			adminEnumValues.DELETE("/:id", indicatorHandler.DeleteIndicatorParameterEnumValue) // DELETE /api/v1/enum-values/{id}
@@ -284,7 +284,7 @@ func setupRouter(
 			// Admin-only routes - only admins can modify tags
 			adminTags := tags.Group("")
 			adminTags.Use(middleware.AuthMiddleware(userClient, logger))
-			adminTags.Use(middleware.RequireRole(userClient, "admin"))
+			adminTags.Use(middleware.RequireRole("admin"))
 
 			adminTags.POST("", tagHandler.CreateTag)       // POST /api/v1/strategy-tags
 			adminTags.PUT("/:id", tagHandler.UpdateTag)    // PUT /api/v1/strategy-tags/{id}

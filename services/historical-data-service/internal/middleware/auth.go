@@ -39,8 +39,8 @@ func AuthMiddleware(userClient *client.UserClient, logger *zap.Logger) gin.Handl
 			return
 		}
 
-		// Validate token with User Service
-		validatedUserID, err := userClient.ValidateToken(c.Request.Context(), token)
+		// Validate token with User Service - this now returns both userID and role
+		validatedUserID, userRole, err := userClient.ValidateToken(c.Request.Context(), token)
 		if err != nil {
 			logger.Debug("Invalid token", zap.Error(err))
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid or expired token"})
@@ -58,8 +58,9 @@ func AuthMiddleware(userClient *client.UserClient, logger *zap.Logger) gin.Handl
 			return
 		}
 
-		// Set user ID and token in context
+		// Set user ID, role, and token in context
 		c.Set("userID", userId)
+		c.Set("userRole", userRole)
 		c.Set("token", token)
 		c.Next()
 	}
@@ -68,33 +69,22 @@ func AuthMiddleware(userClient *client.UserClient, logger *zap.Logger) gin.Handl
 // RequireRole checks if the user has the specified role
 func RequireRole(userClient *client.UserClient, requiredRole string) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		userID, exists := c.Get("userID")
+		_, exists := c.Get("userID")
 		if !exists {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
 			c.Abort()
 			return
 		}
 
-		// Get the authorization token from the request
-		token, _ := c.Get("token")
-		tokenStr, _ := token.(string)
-
-		// Check if user has the required role
-		hasRole, err := userClient.CheckUserRole(c.Request.Context(), userID.(int), requiredRole, tokenStr)
-		if err != nil {
-			// FALLBACK FOR DEVELOPMENT ONLY
-			// If there's an error checking roles, check if this is user ID 1 (admin)
-			if userID.(int) == 1 && (requiredRole == "admin" || requiredRole == "user") {
-				c.Next()
-				return
-			}
-
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to verify user role"})
-			c.Abort()
-			return
+		// Get the user role from the context instead of making an API call
+		userRole, exists := c.Get("userRole")
+		if !exists {
+			// Default to 'user' if not found
+			userRole = "user"
 		}
 
-		if !hasRole {
+		// Check if user has the required role
+		if userRole.(string) != requiredRole {
 			c.JSON(http.StatusForbidden, gin.H{"error": "Insufficient permissions"})
 			c.Abort()
 			return

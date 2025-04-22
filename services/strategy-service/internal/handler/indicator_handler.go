@@ -33,26 +33,12 @@ func NewIndicatorHandler(indicatorService *service.IndicatorService, userClient 
 
 // checkIsAdmin checks if the current user has admin role
 func (h *IndicatorHandler) checkIsAdmin(c *gin.Context) bool {
-	userID, exists := c.Get("userID")
+	userRole, exists := c.Get("userRole")
 	if !exists {
 		return false
 	}
 
-	// Get the token from the Authorization header
-	authHeader := c.GetHeader("Authorization")
-	token := ""
-	if len(authHeader) > 7 && strings.HasPrefix(authHeader, "Bearer ") {
-		token = authHeader[7:]
-	}
-
-	// Check if user has admin role
-	isAdmin, err := h.userClient.CheckUserRole(c.Request.Context(), userID.(int), "admin", token)
-	if err != nil {
-		h.logger.Warn("Failed to check user role", zap.Error(err), zap.Int("user_id", userID.(int)))
-		return false
-	}
-
-	return isAdmin
+	return userRole.(string) == "admin"
 }
 
 // GetAllIndicators handles retrieving all indicators with filtering options
