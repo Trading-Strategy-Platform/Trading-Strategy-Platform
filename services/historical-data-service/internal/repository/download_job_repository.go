@@ -64,7 +64,7 @@ func (r *DownloadJobRepository) CreateDownloadJob(
 
 // GetDownloadJob gets a market data download job by ID
 func (r *DownloadJobRepository) GetDownloadJob(ctx context.Context, jobID int) (*model.MarketDataDownloadJob, error) {
-	query := `SELECT * FROM market_data_download_jobs WHERE id = $1`
+	query := `SELECT * FROM get_download_job_by_id($1)`
 
 	var job model.MarketDataDownloadJob
 	err := r.db.GetContext(ctx, &job, query, jobID)
@@ -119,25 +119,115 @@ func (r *DownloadJobRepository) UpdateDownloadJobStatus(
 	return success, nil
 }
 
-// GetActiveDownloadJobs gets all active market data download jobs
-func (r *DownloadJobRepository) GetActiveDownloadJobs(ctx context.Context, source string) ([]model.MarketDataDownloadJob, error) {
-	// Using direct SQL with explicit column names to avoid ambiguity
-	query := `
-		SELECT j.id, j.symbol_id, j.symbol, j.source, j.timeframe, j.start_date, j.end_date, 
-		       j.status, j.progress, j.total_candles, j.processed_candles, j.retries, j.error,
-		       j.created_at, j.updated_at, j.last_processed_time
-		FROM market_data_download_jobs j
-		WHERE j.status IN ('pending', 'in_progress')
-		AND (CAST($1 AS VARCHAR) IS NULL OR j.source = $1)
-		ORDER BY j.created_at DESC
-	`
+// CountActiveDownloadJobs counts active market data download jobs for pagination
+func (r *DownloadJobRepository) CountActiveDownloadJobs(ctx context.Context, source string) (int, error) {
+	query := `SELECT count_active_download_jobs($1)`
+
+	var count int
+	err := r.db.GetContext(ctx, &count, query, source)
+	if err != nil {
+		r.logger.Error("Failed to count active market data download jobs",
+			zap.Error(err),
+			zap.String("source", source))
+		return 0, err
+	}
+
+	return count, nil
+}
+
+// GetActiveDownloadJobs gets all active market data download jobs with pagination and sorting
+func (r *DownloadJobRepository) GetActiveDownloadJobs(
+	ctx context.Context,
+	source string,
+	sortBy string,
+	sortDirection string,
+	limit int,
+	offset int,
+) ([]model.MarketDataDownloadJob, error) {
+	query := `SELECT * FROM get_active_download_jobs($1, $2, $3, $4, $5)`
 
 	var jobs []model.MarketDataDownloadJob
-	err := r.db.SelectContext(ctx, &jobs, query, source)
+	err := r.db.SelectContext(
+		ctx,
+		&jobs,
+		query,
+		source,
+		sortBy,
+		sortDirection,
+		limit,
+		offset,
+	)
+
 	if err != nil {
 		r.logger.Error("Failed to get active market data download jobs",
 			zap.Error(err),
-			zap.String("source", source))
+			zap.String("source", source),
+			zap.String("sortBy", sortBy),
+			zap.String("sortDirection", sortDirection))
+		return nil, err
+	}
+
+	return jobs, nil
+}
+
+// CountDownloadJobsByStatus counts download jobs by status for pagination
+func (r *DownloadJobRepository) CountDownloadJobsByStatus(
+	ctx context.Context,
+	status string,
+	source string,
+	symbol string,
+) (int, error) {
+	query := `SELECT count_download_jobs_by_status($1, $2, $3)`
+
+	var count int
+	err := r.db.GetContext(ctx, &count, query, status, source, symbol)
+	if err != nil {
+		r.logger.Error("Failed to count download jobs by status",
+			zap.Error(err),
+			zap.String("status", status),
+			zap.String("source", source),
+			zap.String("symbol", symbol))
+		return 0, err
+	}
+
+	return count, nil
+}
+
+// GetDownloadJobsByStatus gets download jobs by status with pagination and sorting
+func (r *DownloadJobRepository) GetDownloadJobsByStatus(
+	ctx context.Context,
+	status string,
+	source string,
+	symbol string,
+	sortBy string,
+	sortDirection string,
+	limit int,
+	offset int,
+) ([]model.MarketDataDownloadJob, error) {
+	query := `SELECT * FROM get_download_jobs_by_status($1, $2, $3, $4, $5, $6, $7)`
+
+	var jobs []model.MarketDataDownloadJob
+	err := r.db.SelectContext(
+		ctx,
+		&jobs,
+		query,
+		status,
+		source,
+		symbol,
+		sortBy,
+		sortDirection,
+		limit,
+		offset,
+	)
+
+	if err != nil {
+		r.logger.Error("Failed to get download jobs by status",
+			zap.Error(err),
+			zap.String("status", status),
+			zap.String("source", source),
+			zap.String("symbol", symbol),
+			zap.String("sortBy", sortBy),
+			zap.String("sortDirection", sortDirection))
 		return nil, err
 	}
 
@@ -145,112 +235,53 @@ func (r *DownloadJobRepository) GetActiveDownloadJobs(ctx context.Context, sourc
 }
 
 // GetJobsSummary gets a summary of download jobs by status
-func (r *DownloadJobRepository) GetJobsSummary(ctx context.Context) (map[string]interface{}, error) {
-	// Get counts of jobs by status
-	statusQuery := `
-		SELECT 
-			j.status, 
-			COUNT(*) as count,
-			SUM(CASE WHEN j.created_at > NOW() - INTERVAL '24 hours' THEN 1 ELSE 0 END) as last_24h
-		FROM market_data_download_jobs j
-		GROUP BY j.status
-	`
+func (r *DownloadJobRepository) GetJobsSummary(ctx context.Context) ([]struct {
+	Status  string `db:"status"`
+	Count   int64  `db:"count"`
+	Last24h int64  `db:"last_24h"`
+}, error) {
+	query := `SELECT * FROM get_download_jobs_summary()`
 
-	type statusCount struct {
+	var summary []struct {
 		Status  string `db:"status"`
-		Count   int    `db:"count"`
-		Last24h int    `db:"last_24h"`
+		Count   int64  `db:"count"`
+		Last24h int64  `db:"last_24h"`
 	}
-
-	var counts []statusCount
-	err := r.db.SelectContext(ctx, &counts, statusQuery)
+	err := r.db.SelectContext(ctx, &summary, query)
 	if err != nil {
-		r.logger.Error("Failed to get job status counts", zap.Error(err))
+		r.logger.Error("Failed to get jobs summary", zap.Error(err))
 		return nil, err
 	}
 
-	// Get recent jobs
-	recentQuery := `
-		SELECT * FROM market_data_download_jobs
-		ORDER BY created_at DESC
-		LIMIT 10
-	`
-
-	var recentJobs []model.MarketDataDownloadJob
-	err = r.db.SelectContext(ctx, &recentJobs, recentQuery)
-	if err != nil {
-		r.logger.Error("Failed to get recent jobs", zap.Error(err))
-		return nil, err
-	}
-
-	// Get counts by source
-	sourceQuery := `
-		SELECT 
-			j.source, 
-			COUNT(*) as count
-		FROM market_data_download_jobs j
-		GROUP BY j.source
-	`
-
-	type sourceCount struct {
-		Source string `db:"source"`
-		Count  int    `db:"count"`
-	}
-
-	var sourceCounts []sourceCount
-	err = r.db.SelectContext(ctx, &sourceCounts, sourceQuery)
-	if err != nil {
-		r.logger.Error("Failed to get job source counts", zap.Error(err))
-		return nil, err
-	}
-
-	// Format the data for the response
-	statusCounts := make(map[string]map[string]int)
-	for _, c := range counts {
-		statusCounts[c.Status] = map[string]int{
-			"total":    c.Count,
-			"last_24h": c.Last24h,
-		}
-	}
-
-	sourcesMap := make(map[string]int)
-	for _, c := range sourceCounts {
-		sourcesMap[c.Source] = c.Count
-	}
-
-	return map[string]interface{}{
-		"status_counts": statusCounts,
-		"sources":       sourcesMap,
-		"recent_jobs":   recentJobs,
-	}, nil
+	return summary, nil
 }
 
-// GetAvailableTimeframes gets all timeframes that have data for a symbol
-func (r *DownloadJobRepository) GetAvailableTimeframes(ctx context.Context, symbolID int) ([]string, error) {
-	query := `
-		SELECT DISTINCT timeframe::text 
-		FROM (
-			SELECT '1m'::timeframe_type as timeframe 
-			WHERE EXISTS (SELECT 1 FROM candles WHERE symbol_id = $1)
-			UNION SELECT '5m'::timeframe_type WHERE true
-			UNION SELECT '15m'::timeframe_type WHERE true
-			UNION SELECT '30m'::timeframe_type WHERE true
-			UNION SELECT '1h'::timeframe_type WHERE true
-			UNION SELECT '4h'::timeframe_type WHERE true
-			UNION SELECT '1d'::timeframe_type WHERE true
-			UNION SELECT '1w'::timeframe_type WHERE true
-		) tf
-	`
+// CancelDownload cancels a download job
+func (r *DownloadJobRepository) CancelDownload(
+	ctx context.Context,
+	jobID int,
+	force bool,
+) (bool, error) {
+	query := `SELECT cancel_download_job($1, $2)`
 
-	var timeframes []string
-	err := r.db.SelectContext(ctx, &timeframes, query, symbolID)
-	return timeframes, err
+	var success bool
+	err := r.db.GetContext(ctx, &success, query, jobID, force)
+	if err != nil {
+		r.logger.Error("Failed to cancel download job",
+			zap.Error(err),
+			zap.Int("jobID", jobID),
+			zap.Bool("force", force))
+		return false, err
+	}
+
+	return success, nil
 }
 
-// GetCandleCount gets the number of candles for a symbol and timeframe
+// GetCandleCount gets the number of candles for a symbol
 func (r *DownloadJobRepository) GetCandleCount(ctx context.Context, symbolID int) (int, error) {
+	query := `SELECT get_symbol_candle_count($1)`
+
 	var count int
-	query := `SELECT COUNT(*) FROM candles WHERE symbol_id = $1`
 	err := r.db.GetContext(ctx, &count, query, symbolID)
 	if err != nil {
 		r.logger.Error("Failed to get candle count",

@@ -4,12 +4,12 @@ import (
 	"context"
 	"fmt"
 	"math"
-	"sort"
 	"time"
 
 	"services/historical-data-service/internal/client"
 	"services/historical-data-service/internal/model"
 	"services/historical-data-service/internal/repository"
+	"services/historical-data-service/internal/utils"
 
 	"go.uber.org/zap"
 )
@@ -17,6 +17,7 @@ import (
 // MarketDataDownloadService handles market data download operations
 type MarketDataDownloadService struct {
 	downloadRepo   *repository.DownloadJobRepository
+	inventoryRepo  *repository.InventoryRepository
 	symbolRepo     *repository.SymbolRepository
 	marketDataRepo *repository.MarketDataRepository
 	logger         *zap.Logger
@@ -25,12 +26,14 @@ type MarketDataDownloadService struct {
 // NewMarketDataDownloadService creates a new market data download service
 func NewMarketDataDownloadService(
 	downloadRepo *repository.DownloadJobRepository,
+	inventoryRepo *repository.InventoryRepository,
 	symbolRepo *repository.SymbolRepository,
 	marketDataRepo *repository.MarketDataRepository,
 	logger *zap.Logger,
 ) *MarketDataDownloadService {
 	return &MarketDataDownloadService{
 		downloadRepo:   downloadRepo,
+		inventoryRepo:  inventoryRepo,
 		symbolRepo:     symbolRepo,
 		marketDataRepo: marketDataRepo,
 		logger:         logger,
@@ -284,171 +287,135 @@ func (s *MarketDataDownloadService) GetDownloadStatus(ctx context.Context, jobID
 	}, nil
 }
 
-// GetActiveDownloads gets all active download jobs
-func (s *MarketDataDownloadService) GetActiveDownloads(ctx context.Context, source string) ([]model.MarketDataDownloadJob, error) {
-	return s.downloadRepo.GetActiveDownloadJobs(ctx, source)
+// GetActiveDownloads gets all active download jobs with pagination and sorting
+func (s *MarketDataDownloadService) GetActiveDownloads(
+	ctx context.Context,
+	source string,
+	sortBy string,
+	sortDirection string,
+	page int,
+	limit int,
+) ([]model.MarketDataDownloadJob, int, error) {
+	// Normalize sort parameters
+	if sortBy == "" {
+		sortBy = "created_at"
+	}
+
+	sortDirection = utils.NormalizeSortDirection(sortDirection)
+	offset := utils.CalculateOffset(page, limit)
+
+	// Get total count for pagination
+	totalCount, err := s.downloadRepo.CountActiveDownloadJobs(ctx, source)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	// Get active jobs with sorting and pagination
+	jobs, err := s.downloadRepo.GetActiveDownloadJobs(
+		ctx,
+		source,
+		sortBy,
+		sortDirection,
+		limit,
+		offset,
+	)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	return jobs, totalCount, nil
 }
 
 // CancelDownload cancels a download job
 func (s *MarketDataDownloadService) CancelDownload(ctx context.Context, jobID int, force bool) (bool, error) {
-	job, err := s.downloadRepo.GetDownloadJob(ctx, jobID)
-	if err != nil {
-		return false, err
-	}
-
-	if job == nil {
-		return false, nil
-	}
-
-	// Any job with 0 processed candles should be eligible for cancellation regardless of status
-	shouldCancel := force ||
-		job.Status == "pending" ||
-		job.Status == "in_progress" ||
-		(job.Status == "partial" && job.ProcessedCandles == 0)
-
-	if !shouldCancel {
-		return false, fmt.Errorf("job is already %s and has processed candles", job.Status)
-	}
-
-	s.logger.Info("Cancelling market data download job",
-		zap.Int("jobID", jobID),
-		zap.String("symbol", job.Symbol),
-		zap.String("current_status", job.Status),
-		zap.Int("processed_candles", job.ProcessedCandles),
-		zap.Bool("force", force))
-
-	success, err := s.downloadRepo.UpdateDownloadJobStatus(
-		ctx,
-		jobID,
-		"cancelled",
-		job.Progress,
-		job.ProcessedCandles,
-		job.TotalCandles,
-		job.Retries,
-		"Cancelled by user",
-	)
-	if err != nil {
-		return false, err
-	}
-
-	return success, nil
+	return s.downloadRepo.CancelDownload(ctx, jobID, force)
 }
 
 // GetJobsSummary gets a summary of all download jobs
 func (s *MarketDataDownloadService) GetJobsSummary(ctx context.Context) (map[string]interface{}, error) {
-	return s.downloadRepo.GetJobsSummary(ctx)
-}
-
-// GetDataInventory gets a summary of all available market data
-func (s *MarketDataDownloadService) GetDataInventory(ctx context.Context, assetType, exchange string) ([]map[string]interface{}, error) {
-	// Add debug logging
-	s.logger.Debug("Getting data inventory",
-		zap.String("assetType", assetType),
-		zap.String("exchange", exchange))
-
-	// Create a timeout context to prevent hanging operations
-	timeoutCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-
-	// Get all symbols, with optional filtering by assetType and exchange
-	symbols, err := s.symbolRepo.GetSymbolsByFilter(timeoutCtx, "", assetType, exchange)
+	summary, err := s.downloadRepo.GetJobsSummary(ctx)
 	if err != nil {
-		s.logger.Error("Failed to get symbols", zap.Error(err))
 		return nil, err
 	}
 
-	s.logger.Info("Found symbols for inventory", zap.Int("count", len(symbols)))
-	if len(symbols) == 0 {
-		// No symbols found, return empty array instead of null
-		return []map[string]interface{}{}, nil
-	}
+	// Format summary data for the API response
+	result := make(map[string]interface{})
+	statusCounts := make(map[string]map[string]int64)
 
-	// Prioritize symbols with data_available=true
-	sort.Slice(symbols, func(i, j int) bool {
-		return symbols[i].DataAvailable && !symbols[j].DataAvailable
-	})
-
-	// Limit to 100 symbols to prevent timeout
-	maxSymbols := 100
-	if len(symbols) > maxSymbols {
-		s.logger.Info("Limiting symbol processing to prevent timeout",
-			zap.Int("totalSymbols", len(symbols)),
-			zap.Int("processLimit", maxSymbols))
-		symbols = symbols[:maxSymbols]
-	}
-
-	var inventory []map[string]interface{}
-
-	// Process each symbol
-	for _, symbol := range symbols {
-		// Check for timeout
-		if timeoutCtx.Err() != nil {
-			s.logger.Warn("Timeout reached while processing symbols",
-				zap.Int("processedSymbols", len(inventory)))
-			break
-		}
-
-		// Get candle count for this symbol
-		baseCount, err := s.downloadRepo.GetCandleCount(timeoutCtx, symbol.ID)
-		if err != nil {
-			s.logger.Error("Failed to get candle count",
-				zap.Error(err),
-				zap.Int("symbolID", symbol.ID))
-			continue
-		}
-
-		// If we have candles for this symbol
-		if baseCount > 0 {
-			s.logger.Info("Found candles for symbol",
-				zap.String("symbol", symbol.Symbol),
-				zap.Int("symbolID", symbol.ID),
-				zap.Int("baseCount", baseCount))
-
-			// Update the data availability flag if needed
-			if !symbol.DataAvailable {
-				success, err := s.symbolRepo.UpdateDataAvailability(timeoutCtx, symbol.ID, true)
-				if err != nil || !success {
-					s.logger.Error("Failed to update data availability flag",
-						zap.Error(err),
-						zap.Int("symbolID", symbol.ID))
-				} else {
-					s.logger.Info("Updated data availability flag for symbol",
-						zap.String("symbol", symbol.Symbol))
-				}
-			}
-
-			// Get overall date range using the repository method instead of direct DB access
-			minDate, maxDate, err := s.marketDataRepo.GetDateRange(timeoutCtx, symbol.ID)
-			if err != nil || minDate.IsZero() || maxDate.IsZero() {
-				s.logger.Error("Failed to get date range",
-					zap.Error(err),
-					zap.Int("symbolID", symbol.ID))
-				continue
-			}
-
-			// Add to inventory without timeframes
-			inventory = append(inventory, map[string]interface{}{
-				"symbol_id":     symbol.ID,
-				"symbol":        symbol.Symbol,
-				"name":          symbol.Name,
-				"asset_type":    symbol.AssetType,
-				"exchange":      symbol.Exchange,
-				"candle_count":  baseCount,
-				"earliest_date": minDate,
-				"latest_date":   maxDate,
-			})
+	for _, s := range summary {
+		statusCounts[s.Status] = map[string]int64{
+			"total":    s.Count,
+			"last_24h": s.Last24h,
 		}
 	}
 
-	s.logger.Info("Completed data inventory generation",
-		zap.Int("symbolsWithData", len(inventory)))
+	result["status_counts"] = statusCounts
 
-	// Return empty array instead of null if no symbols with data found
-	if len(inventory) == 0 {
-		return []map[string]interface{}{}, nil
+	// Get recent jobs for the summary
+	recentJobs, err := s.downloadRepo.GetDownloadJobsByStatus(
+		ctx,
+		"", // all statuses
+		"", // all sources
+		"", // all symbols
+		"created_at",
+		"DESC",
+		10, // limit to recent 10
+		0,  // no offset
+	)
+
+	if err == nil && len(recentJobs) > 0 {
+		result["recent_jobs"] = recentJobs
 	}
 
-	return inventory, nil
+	// Get source counts
+	sources := make(map[string]int)
+	for _, job := range summary {
+		if sources[job.Status] == 0 {
+			sources[job.Status] = int(job.Count)
+		}
+	}
+	result["sources"] = sources
+
+	return result, nil
+}
+
+// GetDataInventory gets a summary of all available market data with pagination
+func (s *MarketDataDownloadService) GetDataInventory(
+	ctx context.Context,
+	assetType string,
+	exchange string,
+	page int,
+	limit int,
+) ([]model.DataInventoryItem, int, error) {
+	// Set defaults
+	if limit <= 0 {
+		limit = 100
+	}
+	if page <= 0 {
+		page = 1
+	}
+
+	offset := utils.CalculateOffset(page, limit)
+
+	// Get total count for pagination
+	totalCount, err := s.inventoryRepo.CountDataInventory(ctx, assetType, exchange)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	// Get inventory items with pagination
+	inventory, err := s.inventoryRepo.GetDataInventory(
+		ctx,
+		assetType,
+		exchange,
+		limit,
+		offset,
+	)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	return inventory, totalCount, nil
 }
 
 // processDownload processes a download job for market data

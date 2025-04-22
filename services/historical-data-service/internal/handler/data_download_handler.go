@@ -7,6 +7,7 @@ import (
 
 	"services/historical-data-service/internal/model"
 	"services/historical-data-service/internal/service"
+	"services/historical-data-service/internal/utils"
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -31,7 +32,7 @@ func NewDataDownloadHandler(downloadService *service.MarketDataDownloadService, 
 func (h *DataDownloadHandler) GetAvailableSymbols(c *gin.Context) {
 	source := c.Param("source")
 	if source == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Source is required"})
+		utils.SendErrorResponse(c, http.StatusBadRequest, "Source is required")
 		return
 	}
 
@@ -40,7 +41,7 @@ func (h *DataDownloadHandler) GetAvailableSymbols(c *gin.Context) {
 		h.logger.Error("Failed to get available symbols",
 			zap.Error(err),
 			zap.String("source", source))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get symbols from source"})
+		utils.SendErrorResponse(c, http.StatusInternalServerError, "Failed to get symbols from source")
 		return
 	}
 
@@ -59,7 +60,7 @@ func (h *DataDownloadHandler) CheckSymbolStatus(c *gin.Context) {
 			zap.Error(err),
 			zap.String("symbol", symbol),
 			zap.String("timeframe", timeframe))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to check symbol status"})
+		utils.SendErrorResponse(c, http.StatusInternalServerError, "Failed to check symbol status")
 		return
 	}
 
@@ -71,13 +72,13 @@ func (h *DataDownloadHandler) CheckSymbolStatus(c *gin.Context) {
 func (h *DataDownloadHandler) InitiateDataDownload(c *gin.Context) {
 	var request model.MarketDataDownloadRequest
 	if err := c.ShouldBindJSON(&request); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		utils.SendErrorResponse(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
 	// Validate the request
 	if request.EndDate.Before(request.StartDate) {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "End date must be after start date"})
+		utils.SendErrorResponse(c, http.StatusBadRequest, "End date must be after start date")
 		return
 	}
 
@@ -88,7 +89,7 @@ func (h *DataDownloadHandler) InitiateDataDownload(c *gin.Context) {
 			zap.String("symbol", request.Symbol),
 			zap.String("source", request.Source),
 			zap.String("timeframe", request.Timeframe))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to start data download"})
+		utils.SendErrorResponse(c, http.StatusInternalServerError, "Failed to start data download")
 		return
 	}
 
@@ -104,37 +105,52 @@ func (h *DataDownloadHandler) GetDownloadStatus(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.Atoi(idStr)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid job ID"})
+		utils.SendErrorResponse(c, http.StatusBadRequest, "Invalid job ID")
 		return
 	}
 
 	status, err := h.downloadService.GetDownloadStatus(c.Request.Context(), id)
 	if err != nil {
 		h.logger.Error("Failed to get download status", zap.Error(err), zap.Int("jobID", id))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get download status"})
+		utils.SendErrorResponse(c, http.StatusInternalServerError, "Failed to get download status")
 		return
 	}
 
 	if status == nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Download job not found"})
+		utils.SendErrorResponse(c, http.StatusNotFound, "Download job not found")
 		return
 	}
 
 	c.JSON(http.StatusOK, status)
 }
 
-// GetActiveDownloads handles retrieving all active download jobs
+// GetActiveDownloads handles retrieving all active download jobs with pagination and sorting
 // GET /api/v1/market-data/downloads/active
 func (h *DataDownloadHandler) GetActiveDownloads(c *gin.Context) {
 	source := c.Query("source")
-	jobs, err := h.downloadService.GetActiveDownloads(c.Request.Context(), source)
+
+	// Parse pagination and sorting parameters
+	sortBy := c.DefaultQuery("sort_by", "created_at")
+	sortDirection := c.DefaultQuery("sort_direction", "DESC")
+	params := utils.ParsePaginationParams(c, 10, 100) // default limit: 10, max limit: 100
+
+	jobs, total, err := h.downloadService.GetActiveDownloads(
+		c.Request.Context(),
+		source,
+		sortBy,
+		sortDirection,
+		params.Page,
+		params.Limit,
+	)
+
 	if err != nil {
 		h.logger.Error("Failed to get active downloads", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get active downloads"})
+		utils.SendErrorResponse(c, http.StatusInternalServerError, "Failed to get active downloads")
 		return
 	}
 
-	c.JSON(http.StatusOK, jobs)
+	// Use standardized pagination response
+	utils.SendPaginatedResponse(c, http.StatusOK, jobs, total, params.Page, params.Limit)
 }
 
 // CancelDownload handles cancelling a download job
@@ -143,7 +159,7 @@ func (h *DataDownloadHandler) CancelDownload(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.Atoi(idStr)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid job ID"})
+		utils.SendErrorResponse(c, http.StatusBadRequest, "Invalid job ID")
 		return
 	}
 
@@ -154,12 +170,12 @@ func (h *DataDownloadHandler) CancelDownload(c *gin.Context) {
 	job, err := h.downloadService.GetDownloadStatus(c.Request.Context(), id)
 	if err != nil {
 		h.logger.Error("Failed to get download job", zap.Error(err), zap.Int("jobID", id))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve download job"})
+		utils.SendErrorResponse(c, http.StatusInternalServerError, "Failed to retrieve download job")
 		return
 	}
 
 	if job == nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Download job not found"})
+		utils.SendErrorResponse(c, http.StatusNotFound, "Download job not found")
 		return
 	}
 
@@ -180,12 +196,12 @@ func (h *DataDownloadHandler) CancelDownload(c *gin.Context) {
 	success, err := h.downloadService.CancelDownload(c.Request.Context(), id, force)
 	if err != nil {
 		h.logger.Error("Failed to cancel download", zap.Error(err), zap.Int("jobID", id))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to cancel download"})
+		utils.SendErrorResponse(c, http.StatusInternalServerError, "Failed to cancel download")
 		return
 	}
 
 	if !success {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Download job not found or cannot be cancelled"})
+		utils.SendErrorResponse(c, http.StatusNotFound, "Download job not found or cannot be cancelled")
 		return
 	}
 
@@ -215,35 +231,48 @@ func (h *DataDownloadHandler) GetJobsSummary(c *gin.Context) {
 	summary, err := h.downloadService.GetJobsSummary(c.Request.Context())
 	if err != nil {
 		h.logger.Error("Failed to get jobs summary", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get jobs summary"})
+		utils.SendErrorResponse(c, http.StatusInternalServerError, "Failed to get jobs summary")
 		return
 	}
 
 	c.JSON(http.StatusOK, summary)
 }
 
-// GetDataInventory handles retrieving data inventory information
+// GetDataInventory handles retrieving data inventory information with pagination
 // GET /api/v1/market-data/inventory
 func (h *DataDownloadHandler) GetDataInventory(c *gin.Context) {
 	assetType := c.DefaultQuery("asset_type", "")
 	exchange := c.DefaultQuery("exchange", "")
 
+	// Parse pagination parameters
+	params := utils.ParsePaginationParams(c, 20, 100) // default limit: 20, max limit: 100
+
 	// Add more detailed logging
 	h.logger.Info("GetDataInventory request received",
 		zap.String("assetType", assetType),
-		zap.String("exchange", exchange))
+		zap.String("exchange", exchange),
+		zap.Int("page", params.Page),
+		zap.Int("limit", params.Limit))
 
-	inventory, err := h.downloadService.GetDataInventory(c.Request.Context(), assetType, exchange)
+	inventory, total, err := h.downloadService.GetDataInventory(
+		c.Request.Context(),
+		assetType,
+		exchange,
+		params.Page,
+		params.Limit,
+	)
+
 	if err != nil {
 		h.logger.Error("Failed to get data inventory", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get data inventory"})
+		utils.SendErrorResponse(c, http.StatusInternalServerError, "Failed to get data inventory")
 		return
 	}
 
 	// Add debug info about result
 	h.logger.Info("Inventory result",
-		zap.Any("inventoryLength", len(inventory)),
-		zap.Any("inventoryIsNil", inventory == nil))
+		zap.Int("inventoryLength", len(inventory)),
+		zap.Int("totalCount", total))
 
-	c.JSON(http.StatusOK, inventory)
+	// Use standardized pagination response
+	utils.SendPaginatedResponse(c, http.StatusOK, inventory, total, params.Page, params.Limit)
 }

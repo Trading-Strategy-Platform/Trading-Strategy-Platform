@@ -70,3 +70,16 @@ type SymbolDataStatus struct {
 	AvailableData []DateRange `json:"available_data"`
 	MissingData   []DateRange `json:"missing_data"`
 }
+
+// DataInventoryItem represents an item in the data inventory
+type DataInventoryItem struct {
+	SymbolID            int       `db:"symbol_id" json:"symbol_id"`
+	Symbol              string    `db:"symbol" json:"symbol"`
+	Name                string    `db:"name" json:"name"`
+	AssetType           string    `db:"asset_type" json:"asset_type"`
+	Exchange            string    `db:"exchange" json:"exchange"`
+	CandleCount         int64     `db:"candle_count" json:"candle_count"`
+	EarliestDate        time.Time `db:"earliest_date" json:"earliest_date"`
+	LatestDate          time.Time `db:"latest_date" json:"latest_date"`
+	AvailableTimeframes []string  `db:"available_timeframes" json:"available_timeframes"`
+}

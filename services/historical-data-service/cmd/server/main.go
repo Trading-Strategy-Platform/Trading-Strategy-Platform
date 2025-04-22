@@ -49,7 +49,8 @@ func main() {
 	backtestRepo := repository.NewBacktestRepository(db, logger)
 	symbolRepo := repository.NewSymbolRepository(db, logger)
 	timeframeRepo := repository.NewTimeframeRepository(db, logger)
-	downloadJobRepo := repository.NewDownloadJobRepository(db, logger) // renamed from binanceRepo
+	downloadJobRepo := repository.NewDownloadJobRepository(db, logger)
+	inventoryRepo := repository.NewInventoryRepository(db, logger) // New repository
 
 	// Initialize clients
 	userClient := client.NewUserClient(cfg.UserService.URL, logger)
@@ -65,8 +66,9 @@ func main() {
 	)
 	symbolService := service.NewSymbolService(symbolRepo, logger)
 	timeframeService := service.NewTimeframeService(timeframeRepo, logger)
-	dataDownloadService := service.NewMarketDataDownloadService( // renamed from binanceService
+	dataDownloadService := service.NewMarketDataDownloadService(
 		downloadJobRepo,
+		inventoryRepo, // Added inventory repository
 		symbolRepo,
 		marketDataRepo,
 		logger,
@@ -77,7 +79,7 @@ func main() {
 	backtestHandler := handler.NewBacktestHandler(backtestService, logger)
 	symbolHandler := handler.NewSymbolHandler(symbolService, logger)
 	timeframeHandler := handler.NewTimeframeHandler(timeframeService, logger)
-	dataDownloadHandler := handler.NewDataDownloadHandler(dataDownloadService, logger) // renamed from binanceHandler
+	dataDownloadHandler := handler.NewDataDownloadHandler(dataDownloadService, logger)
 
 	// Set up HTTP server with Gin
 	router := setupRouter(
@@ -85,7 +87,7 @@ func main() {
 		backtestHandler,
 		symbolHandler,
 		timeframeHandler,
-		dataDownloadHandler, // renamed from binanceHandler
+		dataDownloadHandler,
 		userClient,
 		logger,
 		cfg,
@@ -177,6 +179,7 @@ func connectToDB(dbConfig config.DatabaseConfig) (*sqlx.DB, error) {
 	return db, nil
 }
 
+// setupRouter function remains the same
 func setupRouter(
 	marketDataHandler *handler.MarketDataHandler,
 	backtestHandler *handler.BacktestHandler,
