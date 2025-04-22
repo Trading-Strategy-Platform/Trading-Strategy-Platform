@@ -17,12 +17,12 @@ CREATE UNIQUE INDEX ON "strategy_reviews" ("marketplace_id", "user_id");
 CREATE UNIQUE INDEX ON "user_strategy_versions" ("user_id", "strategy_group_id");
 
 -- Add Foreign Keys
-ALTER TABLE "strategy_tag_mappings" ADD FOREIGN KEY ("strategy_id") REFERENCES "strategies" ("strategy_group_id") ON DELETE CASCADE;
-ALTER TABLE "strategy_tag_mappings" ADD FOREIGN KEY ("tag_id") REFERENCES "strategy_tags" ("id") ON DELETE CASCADE;
-ALTER TABLE "user_strategy_versions" ADD FOREIGN KEY ("strategy_group_id") REFERENCES "strategies" ("strategy_group_id") ON DELETE CASCADE;
+ALTER TABLE "strategies" ADD FOREIGN KEY ("strategy_group_id") REFERENCES "strategy_groups" ("id") ON DELETE CASCADE;
+ALTER TABLE "strategy_tag_mappings" ADD FOREIGN KEY ("strategy_id") REFERENCES "strategy_groups" ("id") ON DELETE CASCADE;
+ALTER TABLE "user_strategy_versions" ADD FOREIGN KEY ("strategy_group_id") REFERENCES "strategy_groups" ("id") ON DELETE CASCADE;
 ALTER TABLE "user_strategy_versions" ADD FOREIGN KEY ("active_version_id") REFERENCES "strategies" ("id") ON DELETE CASCADE;
 ALTER TABLE "indicator_parameters" ADD FOREIGN KEY ("indicator_id") REFERENCES "indicators" ("id") ON DELETE CASCADE;
 ALTER TABLE "parameter_enum_values" ADD FOREIGN KEY ("parameter_id") REFERENCES "indicator_parameters" ("id") ON DELETE CASCADE;
-ALTER TABLE "strategy_marketplace" ADD FOREIGN KEY ("strategy_id") REFERENCES "strategies" ("strategy_group_id") ON DELETE CASCADE;
+ALTER TABLE "strategy_marketplace" ADD FOREIGN KEY ("strategy_id") REFERENCES "strategy_groups" ("id") ON DELETE CASCADE;
 ALTER TABLE "strategy_purchases" ADD FOREIGN KEY ("marketplace_id") REFERENCES "strategy_marketplace" ("id") ON DELETE CASCADE;
 ALTER TABLE "strategy_reviews" ADD FOREIGN KEY ("marketplace_id") REFERENCES "strategy_marketplace" ("id") ON DELETE CASCADE;

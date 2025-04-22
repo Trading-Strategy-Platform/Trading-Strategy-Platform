@@ -39,10 +39,31 @@ func main() {
 	}
 	defer logger.Sync()
 
-	// Connect to database
-	db, err := connectToDB(cfg.Database)
-	if err != nil {
-		logger.Fatal("Failed to connect to database", zap.Error(err))
+	// Connect to database with retries
+	var db *sqlx.DB
+	maxRetries := 10
+	retryInterval := 3 * time.Second
+
+	for i := 0; i < maxRetries; i++ {
+		logger.Info("Attempting to connect to database", zap.Int("attempt", i+1), zap.Int("max_attempts", maxRetries))
+		db, err = connectToDB(cfg.Database)
+		if err == nil {
+			logger.Info("Successfully connected to database")
+			break
+		}
+
+		logger.Warn("Failed to connect to database, retrying...",
+			zap.Error(err),
+			zap.Duration("retry_after", retryInterval),
+			zap.Int("attempt", i+1))
+
+		if i < maxRetries-1 {
+			time.Sleep(retryInterval)
+		}
+	}
+
+	if db == nil {
+		logger.Fatal("Failed to connect to database after multiple attempts", zap.Error(err))
 	}
 	defer db.Close()
 
@@ -106,6 +127,7 @@ func main() {
 		preferenceService,
 		profileService,
 		logger,
+		cfg, // Add config parameter
 	)
 
 	srv := &http.Server{
@@ -206,6 +228,7 @@ func setupRouter(
 	preferenceService *service.PreferenceService,
 	profileService *service.ProfileService,
 	logger *zap.Logger,
+	cfg *config.Config, // Added config parameter
 ) *gin.Engine {
 	router := gin.New()
 
@@ -304,14 +327,13 @@ func setupRouter(
 		service := v1.Group("/service")
 		{
 			// Protected with service key
-			service.Use(middleware.ServiceAuthMiddleware(cfg.ServiceKey, logger))
+			service.Use(middleware.ServiceAuthMiddleware(cfg.Media.ServiceKey, logger))
 
 			serviceHandler := handler.NewServiceHandler(userService, logger)
 
 			// User profile data (only for getting data NOT in the token)
 			service.GET("/users/batch", serviceHandler.BatchGetUsers)
 			service.GET("/users/:id", serviceHandler.GetUserByID)
-
 		}
 	}
 

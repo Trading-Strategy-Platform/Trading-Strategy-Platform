@@ -1,3 +1,4 @@
+// services/strategy-service/internal/middleware/auth.go
 package middleware
 
 import (
@@ -77,7 +78,8 @@ func AuthMiddleware(userClient UserClient, logger *zap.Logger) gin.HandlerFunc {
 // RequireRole checks if the user has the specified role
 func RequireRole(requiredRole string) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		userID, exists := c.Get("userID")
+		// Check if the user is authenticated
+		_, exists := c.Get("userID")
 		if !exists {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
 			c.Abort()

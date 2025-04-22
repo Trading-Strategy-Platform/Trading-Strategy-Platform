@@ -58,7 +58,7 @@ SELECT
 FROM 
     strategy_purchases p
     JOIN strategy_marketplace m ON p.marketplace_id = m.id
-    JOIN strategies s ON s.id = p.strategy_version_id
+    JOIN strategies s ON s.id = p.strategy_version
 WHERE 
     s.is_active = TRUE 
     AND (
@@ -212,7 +212,7 @@ BEGIN
         FROM 
             strategy_purchases p
             JOIN strategy_marketplace m ON p.marketplace_id = m.id
-            JOIN strategies s ON p.strategy_version_id = s.id
+            JOIN strategies s ON p.strategy_version = s.id
         WHERE 
             p.buyer_id = ' || p_user_id || '
             AND s.is_active = TRUE 
@@ -252,7 +252,7 @@ BEGIN
             FROM 
                 strategy_purchases p
                 JOIN strategy_marketplace m ON p.marketplace_id = m.id
-                JOIN strategies s ON p.strategy_version_id = s.id
+                JOIN strategies s ON p.strategy_version = s.id
             WHERE 
                 p.buyer_id = ' || p_user_id || '
                 AND s.is_active = TRUE 
@@ -287,8 +287,14 @@ CREATE OR REPLACE FUNCTION create_strategy(
 RETURNS INT AS $$
 DECLARE
     new_strategy_id INT;
+    new_group_id INT;
     tag_id INT;
 BEGIN
+    -- First create a new strategy group
+    INSERT INTO strategy_groups (created_at)
+    VALUES (NOW())
+    RETURNING id INTO new_group_id;
+    
     -- Insert strategy
     INSERT INTO strategies (
         name, 
@@ -314,14 +320,9 @@ BEGIN
         1, 
         NOW(), 
         NOW(),
-        0
+        new_group_id
     )
     RETURNING id INTO new_strategy_id;
-    
-    -- Update strategy_group_id to be the same as ID
-    UPDATE strategies 
-    SET strategy_group_id = new_strategy_id
-    WHERE id = new_strategy_id;
     
     -- Set as user's active version
     INSERT INTO user_strategy_versions (
@@ -332,7 +333,7 @@ BEGIN
     )
     VALUES (
         p_user_id,
-        new_strategy_id,
+        new_group_id,
         new_strategy_id,
         NOW()
     );
@@ -341,7 +342,7 @@ BEGIN
     IF p_tag_ids IS NOT NULL THEN
         FOREACH tag_id IN ARRAY p_tag_ids LOOP
             INSERT INTO strategy_tag_mappings (strategy_id, tag_id)
-            VALUES (new_strategy_id, tag_id);
+            VALUES (new_group_id, tag_id);
         END LOOP;
     END IF;
     
@@ -526,7 +527,7 @@ BEGIN
         SELECT s.id
         FROM strategy_purchases p
         JOIN strategy_marketplace m ON p.marketplace_id = m.id
-        JOIN strategies s ON p.strategy_version_id = s.id
+        JOIN strategies s ON p.strategy_version = s.id
         WHERE p.buyer_id = ' || p_user_id || '
             AND s.is_active = TRUE 
             AND (p.subscription_end IS NULL OR p.subscription_end > NOW())' ||
@@ -539,7 +540,7 @@ BEGIN
             SELECT s.id
             FROM strategy_purchases p
             JOIN strategy_marketplace m ON p.marketplace_id = m.id
-            JOIN strategies s ON p.strategy_version_id = s.id
+            JOIN strategies s ON p.strategy_version = s.id
             WHERE p.buyer_id = ' || p_user_id || '
                 AND s.is_active = TRUE 
                 AND p.subscription_end IS NOT NULL
@@ -609,7 +610,7 @@ BEGIN
                 FROM strategy_purchases p
                 JOIN strategy_marketplace m ON p.marketplace_id = m.id
                 WHERE p.buyer_id = p_user_id
-                AND p.strategy_version_id = s.id
+                AND p.strategy_version = s.id
                 AND (s.id = p_strategy_id OR s.strategy_group_id = p_strategy_id)
                 AND (p.subscription_end IS NULL OR p.subscription_end > NOW())
             )
@@ -666,7 +667,7 @@ BEGIN
         SELECT 1 
         FROM strategy_purchases p
         JOIN strategy_marketplace m ON p.marketplace_id = m.id
-        JOIN strategies s ON p.strategy_version_id = s.id
+        JOIN strategies s ON p.strategy_version = s.id
         WHERE p.buyer_id = p_user_id
         AND s.strategy_group_id = p_strategy_group_id
         AND (p.subscription_end IS NULL OR p.subscription_end > NOW())
@@ -708,7 +709,7 @@ BEGIN
                     FROM strategy_purchases p
                     JOIN strategy_marketplace m ON p.marketplace_id = m.id
                     WHERE p.buyer_id = p_user_id
-                    AND p.strategy_version_id = s.id
+                    AND p.strategy_version = s.id
                     AND (p.subscription_end IS NULL OR p.subscription_end > NOW())
                 )
             )
@@ -750,7 +751,7 @@ BEGIN
         SELECT 1 
         FROM strategy_purchases p
         JOIN strategy_marketplace m ON p.marketplace_id = m.id
-        JOIN strategies s ON p.strategy_version_id = s.id
+        JOIN strategies s ON p.strategy_version = s.id
         WHERE p.buyer_id = p_user_id
         AND s.strategy_group_id = p_strategy_group_id
         AND (p.subscription_end IS NULL OR p.subscription_end > NOW())
@@ -766,7 +767,7 @@ BEGIN
         -- Purchaser only sees their purchased version
         SELECT COUNT(*) INTO version_count
         FROM strategies s
-        JOIN strategy_purchases p ON p.strategy_version_id = s.id
+        JOIN strategy_purchases p ON p.strategy_version = s.id
         JOIN strategy_marketplace m ON p.marketplace_id = m.id
         WHERE s.strategy_group_id = p_strategy_group_id
         AND s.is_active = TRUE
@@ -821,7 +822,7 @@ BEGIN
         SELECT 1 FROM strategy_purchases p
         JOIN strategy_marketplace m ON p.marketplace_id = m.id
         WHERE p.buyer_id = p_user_id
-        AND p.strategy_version_id = p_version_id
+        AND p.strategy_version = p_version_id
         AND (p.subscription_end IS NULL OR p.subscription_end > NOW())
     ) THEN
         RETURN FALSE;

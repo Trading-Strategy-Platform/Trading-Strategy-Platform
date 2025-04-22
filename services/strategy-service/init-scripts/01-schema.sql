@@ -19,6 +19,12 @@ CREATE TYPE "timeframe_type" AS ENUM (
   '1w'
 );
 
+-- Strategy Groups
+CREATE TABLE IF NOT EXISTS "strategy_groups" (
+  "id" SERIAL PRIMARY KEY,
+  "created_at" timestamp NOT NULL DEFAULT (CURRENT_TIMESTAMP)
+);
+
 -- Strategies
 CREATE TABLE IF NOT EXISTS "strategies" (
   "id" SERIAL PRIMARY KEY,
