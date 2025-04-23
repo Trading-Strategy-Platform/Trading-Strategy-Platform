@@ -1,12 +1,39 @@
+const fs = require('fs');
 const { Tail } = require('tail');
 const { logger } = require('./logger');
 const { getKafkaProducer, determineTopic } = require('./config');
 
 const AUDIT_LOG_PATH = '/var/log/nginx/audit_events.log';
+const MAX_RETRY_COUNT = 30;
+const RETRY_INTERVAL = 5000; // 5 seconds
 
-// Main function to start watching logs
+// Function to check if log file exists
+async function checkLogFileExists(retryCount = 0) {
+    try {
+        await fs.promises.access(AUDIT_LOG_PATH, fs.constants.R_OK);
+        logger.info(`Log file ${AUDIT_LOG_PATH} is accessible`);
+        return true;
+    } catch (error) {
+        if (retryCount >= MAX_RETRY_COUNT) {
+            logger.error(`Log file ${AUDIT_LOG_PATH} not found after ${MAX_RETRY_COUNT} retries`);
+            return false;
+        }
+        
+        logger.info(`Waiting for log file ${AUDIT_LOG_PATH} to be created (attempt ${retryCount + 1}/${MAX_RETRY_COUNT})...`);
+        await new Promise(resolve => setTimeout(resolve, RETRY_INTERVAL));
+        return checkLogFileExists(retryCount + 1);
+    }
+}
+
+// Main function to start watching
 async function startWatching() {
     try {
+        // Check log file exists or wait for it to be created
+        const logFileExists = await checkLogFileExists();
+        if (!logFileExists) {
+            throw new Error(`Log file ${AUDIT_LOG_PATH} not accessible after maximum retries`);
+        }
+        
         // Initialize Kafka producer
         const producer = await getKafkaProducer();
         logger.info('Connected to Kafka');

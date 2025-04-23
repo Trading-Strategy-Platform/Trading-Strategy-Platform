@@ -70,7 +70,7 @@ services:
       - "8443:443"  # For HTTPS when configured
     volumes:
       - ./services/api-gateway/nginx/conf/nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./services/api-gateway/nginx/conf/conf.d:/etc/nginx/conf.d:ro
+      - ./services/api-gateway/nginx/conf/conf.d/services.conf:/etc/nginx/conf.d/services.conf:ro
       - ./services/api-gateway/nginx/conf/proxy_params:/etc/nginx/proxy_params:ro
       - ./services/api-gateway/nginx/ssl:/etc/nginx/ssl:ro
       - ./services/api-gateway/nginx/logs:/var/log/nginx
@@ -82,19 +82,13 @@ services:
       - historical-service-network
       - media-service-network
       - backtest-service-network
-    restart: unless-stopped
+    restart: on-failure
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost/health"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 10s
-    depends_on:
-      - user-service
-      - strategy-service
-      - historical-service
-      - media-service
-      - backtest-service
   
   # KAFKA INTEGRATION SERVICE
   kafka-integration:
@@ -111,10 +105,11 @@ services:
       - NODE_ENV=production
       - KAFKA_BROKERS=kafka:9092
       - LOG_LEVEL=info
+      - KAFKAJS_NO_PARTITIONER_WARNING=1
     networks:
       - kafka-network
       - api-gateway-network
-    restart: unless-stopped
+    restart: on-failure
     healthcheck:
       test: ["CMD", "node", "/app/src/healthcheck.js"]
       interval: 30s
